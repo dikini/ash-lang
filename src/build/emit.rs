@@ -291,6 +291,7 @@ main () = {
         let image = super::super::image::encode_effect_for_build(
             core,
             provenance,
+            &[],
             "x86_64-unknown-linux-gnu",
             &mut construction,
         )
@@ -476,7 +477,7 @@ fn render_native_payloads(output: &mut impl fmt::Write) -> fmt::Result {
 const NATIVE_HOST_MAIN: &str = concat!(
     "];\n",
     "fn main() -> std::process::ExitCode {\n",
-    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES, Some(native_bridges::TUPLE_STORAGE)) {\n",
+    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES, QUOTE_GUARDS, Some(native_bridges::TUPLE_STORAGE)) {\n",
     "        Ok(value) => { println!(\"{value}\"); std::process::ExitCode::SUCCESS }\n",
     "        Err(error) => { eprintln!(\"{error}\"); std::process::ExitCode::FAILURE }\n",
     "    }\n",
@@ -618,6 +619,10 @@ fn tuple_drop_fields(storage: &mut ash::eval::NativeTupleStorage) {
             "    ash::build::PrivateNativeLibrary {{ image_library: {}, module: {}, ordinal: {}, members: native_bridges::MEMBERS_{slot} }},",
             library.image_library, library.module, library.ordinal
         )?;
+    }
+    output.write_str("];\nconst QUOTE_GUARDS: &[u32] = &[\n")?;
+    for coordinate in &build.quote_guards {
+        writeln!(output, "    {coordinate},")?;
     }
     output.write_str(NATIVE_HOST_MAIN)
 }

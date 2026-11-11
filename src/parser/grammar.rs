@@ -5022,7 +5022,7 @@ mod tests {
             super::super::MacroOutputPosition::StagedDeclarations,
             &mut parse_budget,
         )
-        .expect("the boundary quote is parsed before admission refuses it");
+        .expect("the boundary quote parses before composed admission checks its owner");
         assert!(
             parsed
                 .tree
@@ -5033,7 +5033,12 @@ mod tests {
         let (result, used) = admit(100_000);
         assert!(matches!(
             result,
-            Err(super::super::MacroParseFailure::Invalid)
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: super::super::STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
         ));
         assert!(used > parse_budget.consumed());
         assert!(matches!(
@@ -5047,7 +5052,12 @@ mod tests {
             let (result, consumed) = admit(used);
             assert!(matches!(
                 result,
-                Err(super::super::MacroParseFailure::Invalid)
+                Err(super::super::MacroParseFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: super::super::STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
             ));
             assert_eq!(consumed, used);
         }
@@ -5099,6 +5109,7 @@ mod tests {
                         let protected = MacroOutputNode::ForwardedExpression(
                             SurfaceExpressionCapture {
                                 contains_protected_type: false,
+                                quote_sites: Default::default(),
                                 expression: SurfaceExpr {
                                     kind: SurfaceExprKind::Integer(value.clone()),
                                     span: origin.primary(),

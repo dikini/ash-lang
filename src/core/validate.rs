@@ -3143,6 +3143,7 @@ pub(crate) struct ValidatedMacroEntry {
     pub(crate) binder: BinderId,
     pub(crate) syntax_module: ModuleId,
     pub(crate) ops: crate::types::EffectId,
+    pub(crate) quote_sites: std::sync::Arc<[crate::syntax::PreparedQuoteSite]>,
 }
 
 #[derive(Clone, Copy)]
@@ -3179,6 +3180,7 @@ pub(crate) fn validate_effect_macro_modules_linked_with_work(
         binder,
         syntax_module,
         ops,
+        quote_sites: std::sync::Arc::from([]),
     })
 }
 

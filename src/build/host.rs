@@ -347,14 +347,22 @@ pub fn prepare_program(
                 None,
             )
         } else if let Some((core, provenance)) = program.effect_build_input() {
-            let image =
-                image::encode_effect_for_build(core, provenance, &configuration.target, &mut work)
-                    .map_err(|error| {
-                        BuildFailure(match error {
-                            image::NativeImageFailure::Image(error) => Failure::Image(error),
-                            image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
-                        })
-                    })?;
+            let guards = program
+                .effect_build_quote_guards()
+                .ok_or(BuildFailure(Failure::UnsupportedProgram))?;
+            let image = image::encode_effect_for_build(
+                core,
+                provenance,
+                guards,
+                &configuration.target,
+                &mut work,
+            )
+            .map_err(|error| {
+                BuildFailure(match error {
+                    image::NativeImageFailure::Image(error) => Failure::Image(error),
+                    image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
+                })
+            })?;
             let emission = emit::native_host(&image, &super::runtime_fingerprint(), &mut work)
                 .map_err(|error| BuildFailure(Failure::Emission(error)))?;
             (emission.rust_source, Some(emission.payloads))

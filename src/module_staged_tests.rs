@@ -66,6 +66,37 @@ fn graph_at(entry: &Path, mode: BodyMode, limit: usize) -> Result<HeaderGraph, G
 }
 
 #[test]
+fn fixed_escape_failure_drops_its_root_without_publishing_the_module() {
+    use crate::{
+        driver::{PipelineFailure, compile_staged_graph_for_test},
+        eval::machine_test_hooks as hooks,
+    };
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/design/macros/fixtures/escapes/atomic.ash");
+    let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    hooks::reset();
+    let failure = compile_staged_graph_for_test(&mut graph)
+        .expect_err("the later diverging escape must refuse the whole invocation");
+    let Some(PipelineFailure::SyntaxRuntime(diagnostic)) = failure.pipeline_failure() else {
+        panic!("expected the actual transformer failure: {failure:?}");
+    };
+    assert_eq!(
+        diagnostic.cause().reason_code(),
+        "runtime.resource-capacity"
+    );
+    assert!(graph.pending.is_empty());
+    assert!(graph.loaded.is_empty());
+    assert!(graph.completed.is_none());
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+    assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+    assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+    assert!(hooks::ACTIVE_ROOT_RECORDS.get() > 0);
+    hooks::reset();
+}
+
+#[test]
 fn g1_real_matcher_paths_on_a_512k_stack() {
     const CHILD: &str = "ASH_G1_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -1674,6 +1705,79 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
         hooks::reset();
         eprintln!("host graph budget: {path}, pre-spent=17, exact/short/retry");
     }
+
+    // Measure the first real quote completion on the unchanged roundtrip graph.
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/design/macros/fixtures/escapes/quote_roundtrip.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    hooks::reset();
+    let program = compile_staged_graph_for_test(&mut measured).unwrap();
+    let first_quote = hooks::FIRST_QUOTE_COMPLETION_WORK.get().unwrap();
+    let total = measured.syntax_budget.consumed();
+    assert!(first_quote > header_work + 17 && total > first_quote);
+    assert!(hooks::QUOTE_REACHES.get() > 0 && hooks::QUOTE_COMPLETIONS.get() > 0);
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    for (limit, completes) in [(first_quote - 1, false), (first_quote, true)] {
+        let mut graph = graph_at(&entry, BodyMode::Header, limit).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work);
+        graph.syntax_budget.charge_units(17).unwrap();
+        hooks::reset();
+        let failure = compile_staged_graph_for_test(&mut graph)
+            .expect_err("a partial graph cannot publish the invocation");
+        assert!(hooks::QUOTE_REACHES.get() > 0);
+        assert_eq!(hooks::QUOTE_COMPLETIONS.get() > 0, completes);
+        assert_eq!(
+            hooks::FIRST_QUOTE_COMPLETION_WORK.get(),
+            completes.then_some(first_quote)
+        );
+        let Some(crate::driver::PipelineFailure::SyntaxRuntime(failure)) =
+            failure.pipeline_failure()
+        else {
+            panic!("expected the real quote host's syntax work refusal: {failure:?}");
+        };
+        assert_eq!(
+            failure.cause().reason_code(),
+            "internal.resource.syntax-work"
+        );
+        assert!(graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none());
+    }
+
+    // The final relocation also borrows this ledger. A refusal there must
+    // return its consumed state to the graph instead of leaving a fresh budget.
+    let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+    short.syntax_budget.charge_units(17).unwrap();
+    hooks::reset();
+    let failure = compile_staged_graph_for_test(&mut short)
+        .expect_err("one short at the final quote work cannot publish a program");
+    assert!(short.completed.is_some());
+    assert!(hooks::QUOTE_COMPLETIONS.get() > 0);
+    assert!(short.syntax_budget.consumed() > first_quote);
+    assert!(short.syntax_budget.consumed() < total);
+    let Some(crate::driver::PipelineFailure::Syntax(failure)) = failure.pipeline_failure() else {
+        panic!("expected final quote syntax work refusal: {failure:?}");
+    };
+    assert_eq!(
+        failure.resource,
+        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+    );
+
+    for label in ["exact", "retry"] {
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work);
+        graph.syntax_budget.charge_units(17).unwrap();
+        hooks::reset();
+        let program = compile_staged_graph_for_test(&mut graph).unwrap();
+        assert_eq!(hooks::FIRST_QUOTE_COMPLETION_WORK.get(), Some(first_quote));
+        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+        assert_eq!(execute(&program).unwrap().value_display(), "42", "{label}");
+    }
+    hooks::reset();
+    eprintln!(
+        "quote graph budget: header={header_work}, pre-spent=17, first={first_quote}, total={total}; exact/short/retry"
+    );
 }
 
 #[test]
@@ -2183,7 +2287,7 @@ fn graph_shape(
                         (
                             names[&edge.target].clone(),
                             edge.import_span.range(),
-                            edge.region_service,
+                            edge.is_compiler_private(),
                         )
                     })
                     .collect(),

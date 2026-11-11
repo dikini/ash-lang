@@ -79,8 +79,8 @@ fn emitted_fixture() -> &'static EmittedFixture {
         fs::remove_file(sources.0.join("entry.ash")).unwrap();
         let (core, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
-        let build =
-            image::encode_effect_for_build(core, provenance, NATIVE_TARGET, &mut work).unwrap();
+        let build = image::encode_effect_for_build(core, provenance, &[], NATIVE_TARGET, &mut work)
+            .unwrap();
         assert_eq!(*compiled.compilation_work(), compilation_work);
         assert_eq!(build.libraries.len(), 1);
         assert_eq!(build.bridges.len(), 2);
@@ -185,6 +185,7 @@ fn run(
         &fixture.image,
         expected,
         &[library],
+        &[],
         None,
     )
 }
@@ -271,6 +272,7 @@ fn native_image_framing_runtime_and_independent_facts_refuse_before_callback() {
                 &bytes,
                 fixture.expected,
                 &[library],
+                &[],
                 None
             )
             .is_err()
@@ -287,8 +289,15 @@ fn native_image_framing_runtime_and_independent_facts_refuse_before_callback() {
     };
     CALLBACKS.set(0);
     assert!(
-        __run_private_effect_image(&runtime, &fixture.image, fixture.expected, &[library], None)
-            .is_err()
+        __run_private_effect_image(
+            &runtime,
+            &fixture.image,
+            fixture.expected,
+            &[library],
+            &[],
+            None
+        )
+        .is_err()
     );
     assert_eq!(CALLBACKS.get(), 0);
     let mut expected = fixture.expected.to_vec();
@@ -315,8 +324,8 @@ fn changed_original_native_declarations_refuse_the_canonical_fact_payload() {
         .unwrap();
         let (core, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
-        let build =
-            image::encode_effect_for_build(core, provenance, NATIVE_TARGET, &mut work).unwrap();
+        let build = image::encode_effect_for_build(core, provenance, &[], NATIVE_TARGET, &mut work)
+            .unwrap();
         let bytes = build.image.encode_bytes(&mut work).unwrap();
         CALLBACKS.set(0);
         let selected = members();
@@ -332,6 +341,7 @@ fn changed_original_native_declarations_refuse_the_canonical_fact_payload() {
                 &bytes,
                 fixture.expected,
                 &[library],
+                &[],
                 None
             )
             .is_err()

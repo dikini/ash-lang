@@ -10,6 +10,9 @@ std::thread_local! {
     pub(crate) static ACTIVE_ROOT_DROPS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static ACTIVE_ROOT_RECORDS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static SYNTAX_REQUESTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static QUOTE_REACHES: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static QUOTE_COMPLETIONS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static FIRST_QUOTE_COMPLETION_WORK: Cell<Option<usize>> = const { Cell::new(None) };
     pub(crate) static TRANSFER_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static TRANSFER_FAILURES: Cell<usize> = const { Cell::new(0) };
     pub(crate) static TRANSFER_GROUPS_COMPLETED: Cell<usize> = const { Cell::new(0) };
@@ -29,6 +32,9 @@ pub(crate) fn reset() {
     ACTIVE_ROOT_DROPS.set(0);
     ACTIVE_ROOT_RECORDS.set(0);
     SYNTAX_REQUESTS.set(0);
+    QUOTE_REACHES.set(0);
+    QUOTE_COMPLETIONS.set(0);
+    FIRST_QUOTE_COMPLETION_WORK.set(None);
     TRANSFER_ATTEMPTS.set(0);
     TRANSFER_FAILURES.set(0);
     TRANSFER_GROUPS_COMPLETED.set(0);

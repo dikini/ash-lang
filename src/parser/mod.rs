@@ -17,13 +17,17 @@ pub use event::Event;
 #[cfg(test)]
 pub(crate) use project::G1_CAPTURE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
+#[cfg(test)]
+pub(crate) use project::project_declaration_expansions;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
 pub(crate) use project::project_module_header;
 #[cfg(test)]
 pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
-pub(crate) use project::{DeclarationExpansionFailure, project_declaration_expansions};
+pub(crate) use project::{
+    DeclarationExpansionFailure, QuoteProjection, project_declaration_expansions_with_quotes,
+};
 pub use project::{ProjectionError, project_module};
 
 use crate::{
@@ -678,13 +682,52 @@ pub(crate) fn parse_declaration_template_admission(
     placeholders: &[crate::surface::SurfaceName],
     budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
-    let parsed = parse_macro_tree_inner(
+    parse_declaration_template_admission_inner(
         source,
         invocation,
         output,
         contexts,
         placeholders,
         MacroOutputPosition::StagedDeclarations,
+        budget,
+    )
+}
+
+pub(crate) fn parse_quote_declaration_template_admission(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    budget: &mut SyntaxBudget,
+) -> Result<(), MacroParseFailure> {
+    parse_declaration_template_admission_inner(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        MacroOutputPosition::QuoteTemplateAdmission,
+        budget,
+    )
+}
+
+fn parse_declaration_template_admission_inner(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    position: MacroOutputPosition,
+    budget: &mut SyntaxBudget,
+) -> Result<(), MacroParseFailure> {
+    let parsed = parse_macro_tree_inner(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        position,
         budget,
     )?;
     project::validate_declaration_template(source, invocation, &parsed, contexts, budget).map_err(
@@ -781,6 +824,7 @@ pub(crate) fn parse_macro_expression_budgeted(
         frame,
         0,
         budget,
+        None,
     )
     .map_err(|failure| match failure {
         project::DeclarationExpansionFailure::Syntax {
@@ -794,6 +838,68 @@ pub(crate) fn parse_macro_expression_budgeted(
             resource,
         )) => macro_resource_failure(resource),
         project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+    })
+}
+
+// Reproject real output tokens with the admitted quote owner and graph counter.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_macro_expression_with_quotes(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+    next_ordinal: &mut usize,
+    introduction: usize,
+) -> Result<crate::syntax::ExpandedExpression, MacroParseFailure> {
+    let quotes = std::cell::RefCell::new(QuoteProjection {
+        introduction,
+        next_ordinal: *next_ordinal,
+        sites: Vec::new(),
+    });
+    let result = (|| {
+        let parsed = parse_macro_tree_with_expression_scratch(
+            source,
+            invocation,
+            output,
+            contexts,
+            &[],
+            MacroOutputPosition::Expression,
+            false,
+            true,
+            budget,
+        )?;
+        project::project_macro_expression_budgeted(
+            source,
+            invocation,
+            None,
+            &parsed,
+            contexts,
+            Some(frame),
+            0,
+            budget,
+            Some(&quotes),
+        )
+        .map_err(|failure| match failure {
+            project::DeclarationExpansionFailure::Syntax {
+                diagnostics,
+                resource,
+            } => MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            },
+            project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) => macro_resource_failure(resource),
+            project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+        })
+    })();
+    let quotes = quotes.into_inner();
+    *next_ordinal = quotes.next_ordinal;
+    result.map(|expression| crate::syntax::ExpandedExpression {
+        expression,
+        quote_sites: quotes.sites,
     })
 }
 
@@ -827,6 +933,7 @@ pub(crate) fn parse_macro_expression_fragment(
         Some(frame),
         1,
         budget,
+        None,
     )
     .map_err(|failure| match failure {
         project::DeclarationExpansionFailure::Syntax {
@@ -853,6 +960,7 @@ pub(crate) fn parse_macro_expression_fragment(
         expression,
         contents: contents.into(),
         contains_protected_type,
+        quote_sites: Default::default(),
     })
 }
 
@@ -1009,11 +1117,16 @@ enum MacroOutputPosition {
     Pattern,
     Declarations,
     StagedDeclarations,
+    // Same admission grammar, with actual placeholder comparisons charged.
+    QuoteTemplateAdmission,
 }
 
 impl MacroOutputPosition {
     fn is_declarations(self) -> bool {
-        matches!(self, Self::Declarations | Self::StagedDeclarations)
+        matches!(
+            self,
+            Self::Declarations | Self::StagedDeclarations | Self::QuoteTemplateAdmission
+        )
     }
 }
 
@@ -1111,7 +1224,10 @@ fn parse_macro_tree_with_expression_scratch(
     let fragment_scratch = type_output || pattern_scratch || expression_scratch;
     let budgeted = type_output
         || expression_scratch
-        || matches!(position, MacroOutputPosition::StagedDeclarations);
+        || matches!(
+            position,
+            MacroOutputPosition::StagedDeclarations | MacroOutputPosition::QuoteTemplateAdmission
+        );
     if budgeted {
         charge_staged_output_with_expression_scratch(
             &output,
@@ -1204,7 +1320,21 @@ fn parse_macro_tree_with_expression_scratch(
                 TokenKind::Wildcard
             }
             MacroOutputNode::Identifier(identifier, origin) => {
-                if placeholders.iter().any(|name| name == &identifier) {
+                let mut admission_identifier = false;
+                for name in placeholders {
+                    if matches!(position, MacroOutputPosition::QuoteTemplateAdmission) {
+                        budget
+                            .charge_units(
+                                name.text.len().min(identifier.text.len()).saturating_add(1),
+                            )
+                            .map_err(macro_resource_failure)?;
+                    }
+                    if name == &identifier {
+                        admission_identifier = true;
+                        break;
+                    }
+                }
+                if admission_identifier {
                     admission_identifiers.insert(tokens.len());
                 }
                 original_nodes.insert(
@@ -1262,7 +1392,9 @@ fn parse_macro_tree_with_expression_scratch(
                 pieces.extend(children.into_iter().rev());
                 open
             }
-            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+                return Err(MacroParseFailure::Invalid);
+            }
         };
         tokens.push(crate::lexer::Token { kind, span: anchor });
     }
@@ -1277,7 +1409,7 @@ fn parse_macro_tree_with_expression_scratch(
                 | MacroOutputNode::Identifier(_, origin)
                 | MacroOutputNode::Token(_, _, origin)
                 | MacroOutputNode::Group(_, _, origin) => origin,
-                MacroOutputNode::Splice(_) => unreachable!(),
+                MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => unreachable!(),
             };
             (*index, origin.primary())
         })
@@ -1347,9 +1479,9 @@ fn parse_macro_tree_with_expression_scratch(
                 parser.error_at_current(ParseReason::UnexpectedToken);
             }
         }
-        MacroOutputPosition::Declarations | MacroOutputPosition::StagedDeclarations => {
-            grammar::module_body(&mut parser)
-        }
+        MacroOutputPosition::Declarations
+        | MacroOutputPosition::StagedDeclarations
+        | MacroOutputPosition::QuoteTemplateAdmission => grammar::module_body(&mut parser),
     }
     if !parser.diagnostics.is_empty() || parser.resource_failure.is_some() {
         *budget = parser.syntax_budget.clone();
@@ -1568,7 +1700,7 @@ fn charge_staged_output_with_expression_scratch(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Splice(_) => {
+            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         }

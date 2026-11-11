@@ -75,6 +75,30 @@ internal uses remain connected. Free caller references keep their context.
 Expanding a copy does not change another copy. Runtime evaluation follows the
 resulting ordinary program; duplication does not imply single evaluation.
 
+## Quotation and template escapes
+
+A checked ordinary helper used during syntax expansion can construct an
+`ExpressionFragment` with `syntax { expression }`. Its braces delimit the
+quoted expression. Inside that quote, `$name` inserts the fragment held by an
+ordinary Ash variable, and `${ expression }` evaluates an inner expression
+that produces a fragment. These expressions use ordinary lexical scope and
+ordinary checking; a primitive value is not implicitly converted to syntax.
+A quotation requires an active compile-time syntax host when it is evaluated.
+Reaching one during ordinary runtime execution fails rather than publishing an
+internal fragment representation.
+
+A declaration template can contain `${ expression }` or a multiline escaped
+block. The escaped code runs during expansion and its `ExpressionFragment`
+result is inserted as protected syntax for ordinary admission and checking.
+An escaped expression fragment in a type position is rejected by syntax
+admission. A procedural expression transformer can return the token and group
+view of a quoted capture for reparsing; the tokens retain their syntax contexts
+and origins. Direct forwarding of a protected quoted expression remains under
+development. The currently connected path covers escaped code that does not
+read matcher captures. The complete capture, repetition and generator forms in
+[CP-0034](../docs/proposals/CP-0034-top-level-declaration-macros.md) remain
+under development.
+
 ## Names and hygiene
 
 Names retain compiler-issued lexical and syntax contexts as well as spelling

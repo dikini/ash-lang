@@ -52,6 +52,8 @@ pub struct SurfaceSyntaxDeclaration {
     pub implementation: SurfaceSyntaxImplementation,
     /// The template's original structured syntax, retained for instantiation.
     pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
+    /// Whether the template contains quote or escape syntax, for budget routing.
+    pub(crate) contains_quote_or_escape: bool,
     /// The complete declaration span.
     pub span: Span,
 }
@@ -562,12 +564,39 @@ pub struct SurfaceIdentifierCapture {
     pub(crate) origin: crate::syntax::MacroOrigin,
 }
 
+/// Quote-site identities owned by one protected expression.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) enum CapturedQuoteSites {
+    #[default]
+    Empty,
+    /// Unissued sites belonging to this capture's own immutable expression.
+    Owned(Vec<crate::syntax::SurfaceQuoteSite>),
+    /// A generic deep copy cannot carry its original callee identities.
+    Lost,
+}
+
 /// An expression and its immutable, protected syntax contents.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct SurfaceExpressionCapture {
     pub(crate) expression: SurfaceExpr,
     pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
     pub(crate) contains_protected_type: bool,
+    pub(crate) quote_sites: CapturedQuoteSites,
+}
+
+impl Clone for SurfaceExpressionCapture {
+    fn clone(&self) -> Self {
+        let quote_sites = match &self.quote_sites {
+            CapturedQuoteSites::Empty => CapturedQuoteSites::Empty,
+            CapturedQuoteSites::Owned(_) | CapturedQuoteSites::Lost => CapturedQuoteSites::Lost,
+        };
+        Self {
+            expression: self.expression.clone(),
+            contents: Arc::clone(&self.contents),
+            contains_protected_type: self.contains_protected_type,
+            quote_sites,
+        }
+    }
 }
 
 /// A type and its immutable, protected syntax contents.

@@ -75,6 +75,22 @@ fn malformed_unused_quote_reports_the_missing_operand_in_its_definition() {
 }
 
 #[test]
+fn fixed_wrong_category_reaches_output_syntax_admission() {
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/design/macros/fixtures/escapes/wrong_category.ash");
+    let failure = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("an expression fragment cannot occupy a type position");
+    let Some(LoadGraphError::Syntax(output)) = failure.graph_failure() else {
+        panic!("the actual escaped output must reach syntax admission: {failure:?}");
+    };
+    assert!(Path::new(output.source.display_path()).ends_with("wrong_category.ash"));
+    assert!(!output.parser.is_empty());
+}
+
+#[test]
 fn expression_quotes_parse_as_primaries_without_resolving_holes() {
     let (source, tree) =
         parse_source("probe : Unit -> Unit\nprobe () = consume(syntax { $fragment + 1 })\n");
