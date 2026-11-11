@@ -2727,7 +2727,7 @@ struct DeclarationFrame<'a> {
     expression_pattern: bool,
     pattern_accounting: bool,
     owns_staging_frame: bool,
-    deferred: std::collections::VecDeque<PendingDeclarationOutput>,
+    deferred: std::collections::VecDeque<DeclarationFrame<'a>>,
 }
 
 impl DeclarationFrame<'_> {
@@ -2800,7 +2800,7 @@ fn charge_derive_name(
 // Construct the original subject once, then invoke each listed derive in its
 // authored order. Their outputs remain queued until the whole list succeeds.
 #[allow(clippy::too_many_arguments)]
-fn prepare_deriving_outputs(
+fn prepare_deriving_outputs<'a>(
     source: &SourceFile,
     subject: &ConcreteNode,
     clause: &ConcreteNode,
@@ -2812,7 +2812,7 @@ fn prepare_deriving_outputs(
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
     transformer: &mut Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<std::collections::VecDeque<PendingDeclarationOutput>, DeclarationExpansionFailure> {
+) -> Result<std::collections::VecDeque<DeclarationFrame<'a>>, DeclarationExpansionFailure> {
     let contents = if source_projection_tokens(tokens) {
         charge_declaration_contents(source, subject, tokens, budget)?;
         capture_source_declaration_contents(source, subject, tokens)?
@@ -2844,18 +2844,14 @@ fn prepare_deriving_outputs(
         None => target.span.into(),
         _ => return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into()),
     };
+    // Pay both list walks before counting or selecting any listed name.
+    budget.charge_units(clause.children.len().saturating_mul(2))?;
     let listed = direct_tokens(clause, tokens)
         .skip(2)
         .filter(|token| matches!(token.kind, TokenKind::Identifier(_)))
         .count();
     // Pay the retained queue, iteration and the later removal of each entry.
-    budget.charge_units(
-        clause
-            .children
-            .len()
-            .saturating_add(listed.saturating_mul(3))
-            .saturating_add(1),
-    )?;
+    budget.charge_units(listed.saturating_mul(3).saturating_add(1))?;
     let mut outputs = std::collections::VecDeque::with_capacity(listed);
     for token in direct_tokens(clause, tokens)
         .skip(2)
@@ -2910,7 +2906,7 @@ fn prepare_deriving_outputs(
             captures,
             span,
         };
-        outputs.push_back(prepare_staged_output(
+        let output = prepare_staged_output(
             invocation,
             false,
             true,
@@ -2921,7 +2917,8 @@ fn prepare_deriving_outputs(
             staging_frames,
             transformer,
             budget,
-        )?);
+        )?;
+        outputs.push_back(admit_staged_output(output, source, staging_frames, budget)?);
     }
     Ok(outputs)
 }
@@ -3084,10 +3081,10 @@ fn prepare_staged_output(
     })
 }
 
-fn activate_staged_output<'a>(
+fn admit_staged_output<'a>(
     pending: PendingDeclarationOutput,
     source: &SourceFile,
-    staging_frames: &mut Vec<std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<DeclarationFrame<'a>, DeclarationExpansionFailure> {
     let PendingDeclarationOutput {
@@ -3101,7 +3098,12 @@ fn activate_staged_output<'a>(
         actual_expression,
         transformer_output,
     } = pending;
-    staging_frames.push(std::sync::Arc::clone(&frame));
+    // Admission sees the current expansion frame, but does not enter it on
+    // the traversal stack until this output is selected for descent.
+    budget.charge_units(staging_frames.len().saturating_mul(2).saturating_add(2))?;
+    let mut admission_frames = Vec::with_capacity(staging_frames.len().saturating_add(1));
+    admission_frames.extend(staging_frames.iter().cloned());
+    admission_frames.push(std::sync::Arc::clone(&frame));
     let parsed = match super::parse_macro_tree_with_expression_scratch(
         source,
         anchor,
@@ -3123,11 +3125,11 @@ fn activate_staged_output<'a>(
                     .primary
                     .diagnostic_location()
                     .map_or(0, |location| location.frames.len());
-                charge_frame_additions(staging_frames.len(), existing, budget)?;
+                charge_frame_additions(admission_frames.len(), existing, budget)?;
                 diagnostic
                     .diagnostic
                     .primary
-                    .inherit_frames(&staging_frames);
+                    .inherit_frames(&admission_frames);
             }
             return Err(DeclarationExpansionFailure::Syntax {
                 diagnostics,
@@ -3163,6 +3165,30 @@ fn activate_staged_output<'a>(
         owns_staging_frame: true,
         deferred: std::collections::VecDeque::new(),
     })
+}
+
+fn enter_staged_frame(
+    frame: &DeclarationFrame<'_>,
+    staging_frames: &mut Vec<std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let expansion = frame.frame.as_ref().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
+    if staging_frames.len() == staging_frames.capacity() {
+        budget.charge_units(
+            staging_frames
+                .capacity()
+                .saturating_mul(2)
+                .saturating_add(staging_frames.len())
+                .saturating_add(1),
+        )?;
+        staging_frames.reserve(1);
+    } else {
+        budget.charge()?;
+    }
+    staging_frames.push(std::sync::Arc::clone(expansion));
+    Ok(())
 }
 
 /// Collect handwritten and generated declarations into one complete module.
@@ -3250,8 +3276,8 @@ pub(crate) fn project_declaration_expansions_with_quotes(
             .last_mut()
             .and_then(|frame| frame.deferred.pop_front())
         {
-            let next = activate_staged_output(output, source, &mut staging_frames, budget)?;
-            pending.push(next);
+            enter_staged_frame(&output, &mut staging_frames, budget)?;
+            pending.push(output);
             continue;
         }
         let depth = pending.len();
@@ -3491,7 +3517,8 @@ pub(crate) fn project_declaration_expansions_with_quotes(
             &mut transformer,
             budget,
         )?;
-        let next = activate_staged_output(output, source, &mut staging_frames, budget)?;
+        let next = admit_staged_output(output, source, &staging_frames, budget)?;
+        enter_staged_frame(&next, &mut staging_frames, budget)?;
         pending.push(next);
     }
     *owners = staged_owners;

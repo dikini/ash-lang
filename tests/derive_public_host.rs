@@ -53,3 +53,46 @@ fn fixed_mixed_expansions_report_the_first_authored_rejection() {
         assert!(rejection.teardown().is_none(), "{name}");
     }
 }
+
+#[test]
+fn checked_import_output_is_refused_before_a_later_derive_runs() {
+    for name in ["single.ash", "ordered.ash"] {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/derive-import")
+            .join(name);
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("a checked transformer cannot publish an import");
+        assert!(failure.is_source_rejection(), "{name}: {failure:?}");
+        assert!(
+            failure.reason_code().starts_with("parse."),
+            "{name}: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_derive_lists_preserve_authored_and_nested_failure_order() {
+    for (name, message) in [
+        ("ordered_first.ash", "first derive rejected"),
+        ("ordered_second.ash", "second derive rejected"),
+        ("generated_failure.ash", "first derive rejected"),
+        ("generated_order.ash", "second derive rejected"),
+    ] {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/derives")
+            .join(name);
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the selected derive rejects");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("{name}: expected an authored rejection, got {failure:?}");
+        };
+        assert_eq!(rejection.message(), message, "{name}");
+        assert!(rejection.teardown().is_none(), "{name}");
+    }
+}
