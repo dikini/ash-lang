@@ -71,6 +71,217 @@ fn i07_type_captures_reach_the_ordinary_driver() {
 }
 
 #[test]
+fn introduced_signature_uses_its_definition_context_nominal() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub type Layer<A> = Layer(A)\n\
+         pub syntax declaration: (emit) $name:ident => {\n\
+             pub $name : Layer<(Int, Int)> -> Int\n\
+             $name _ = 42\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         emit answer\n\
+         main : Unit -> Int\n\
+         main () = 42\n",
+    );
+
+    let program = compile_path(fixture.configuration())
+        .expect("the introduced type uses the syntax owner's nominal");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn captured_generic_parameters_keep_their_existing_precedence() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "type Layer<A> = Layer(A)\n\
+         pub syntax declaration: (implicit) $name:ident for $T:type => {\n\
+             pub $name : $T -> $T\n\
+             $name value = value\n\
+         }\n\
+         pub syntax declaration: (explicit) $name:ident using $P:ident for $T:type => {\n\
+             pub $name<$P> : $T -> $T\n\
+             $name value = value\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax implicit, syntax explicit)\n\
+         implicit first for A\n\
+         explicit second using Layer for Layer\n\
+         main : Unit -> Int\n\
+         main () = first(second(42))\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("captured implicit and explicit binders remain available");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn interface_method_discovers_owner_nominal_before_free_parameters() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "type Layer<A> = Layer(A)\n\
+         pub syntax declaration: (emit) $name:ident using $param:ident for $T:type => {\n\
+             pub interface $name<$param> {\n\
+                 inspect : Layer<Int> -> $T\n\
+             }\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         emit Check using A for A\n\
+         main : Unit -> Int\n\
+         main () = 42\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("the method retains its private definition-context nominal");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn implementation_head_and_prerequisite_discover_owner_nominals() {
+    let fixture = Fixture::new();
+    for (template, invocation, prerequisites) in [
+        (
+            "impl $I<Layer<Int>> {\ncheck _ = true\n}",
+            "emit Check for Other",
+            "",
+        ),
+        (
+            "impl $I<Int> where $J<Layer<Int>> {\ncheck _ = true\n}",
+            "emit Check for Other",
+            "interface Other<A> {\nother : A -> Bool\n}\n",
+        ),
+    ] {
+        fixture.write(
+            "forms.ash",
+            &format!(
+                "type Layer<A> = Layer(A)\n\
+                 pub syntax declaration: (emit) $I:ident for $J:ident => {{\n\
+                     {template}\n\
+                 }}\n"
+            ),
+        );
+        fixture.write(
+            "entry.ash",
+            &format!(
+                "import forms (syntax emit)\n\
+                 interface Check<A> {{\ncheck : A -> Bool\n}}\n\
+                 {prerequisites}{invocation}\n\
+                 main : Unit -> Int\n\
+                 main () = 42\n"
+            ),
+        );
+        let program = compile_path(fixture.configuration())
+            .expect("the implementation uses the definition-context nominal");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
+fn owner_nominal_access_and_caller_shadowing_remain_distinct() {
+    let fixture = Fixture::new();
+    let template = "pub syntax declaration: (emit) $name:ident => {\n\
+                        pub $name : Layer<Int> -> Int\n\
+                        $name _ = 42\n\
+                    }\n";
+    fixture.write(
+        "forms.ash",
+        "type Layer<A> = Layer(A)\n\
+         make : Unit -> Layer<Int>\n\
+         make () = Layer(42)\n\
+         pub syntax declaration: (emit) $name:ident with $run:ident => {\n\
+             pub $name : Layer<Int> -> Int\n\
+             $name (Layer(value)) = value\n\
+             pub $run : Unit -> Int\n\
+             $run () = $name(make(()))\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         type Layer<A> = Decoy(Bool)\n\
+         emit answer with run_answer\n\
+         main : Unit -> Int\n\
+         main () = run_answer(())\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("the syntax owner's private nominal survives caller shadowing");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    fixture.write(
+        "forms.ash",
+        &format!("type Layer<A> = Layer(A)\n{template}"),
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (Layer, syntax emit)\nemit answer\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    assert_eq!(
+        compile_path(fixture.configuration())
+            .unwrap_err()
+            .reason_code(),
+        "resolve.unavailable-export"
+    );
+
+    fixture.write(
+        "forms.ash",
+        &format!("pub opaque type Layer<A> = Layer(A)\n{template}"),
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (Layer, syntax emit)\n\
+         emit answer\n\
+         main : Unit -> Int\n\
+         main () = match Layer(1) {\nLayer(x) => x\n}\n",
+    );
+    assert_eq!(
+        compile_path(fixture.configuration())
+            .unwrap_err()
+            .reason_code(),
+        "resolve.opaque-constructor"
+    );
+}
+
+#[test]
+fn generated_unused_and_mixed_role_parameters_keep_their_refusals() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\nemit answer\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    for (body, reason) in [
+        (
+            "pub $name<A> : Int -> Int\n$name value = value",
+            "resolve.unused-type-parameter",
+        ),
+        (
+            "pub $name : (Unit -> Unit ! {| R}) -> R\n$name _ = 42",
+            "resolve.type-kind",
+        ),
+    ] {
+        fixture.write(
+            "forms.ash",
+            &format!("pub syntax declaration: (emit) $name:ident => {{\n{body}\n}}\n"),
+        );
+        assert_eq!(
+            compile_path(fixture.configuration())
+                .unwrap_err()
+                .reason_code(),
+            reason
+        );
+    }
+}
+
+#[test]
 fn imported_templates_forward_and_duplicate_a_type_capture() {
     let fixture = Fixture::new();
     fixture.write(
@@ -137,7 +348,6 @@ fn i07_missing_type_is_reported_at_the_invocation() {
 }
 
 #[test]
-#[ignore = "blocked by the separately tracked definition-context nominal typing failure"]
 fn imported_generated_type_combines_applications_grouping_and_capture_depth() {
     let fixture = Fixture::new();
     let generated = format!("{}$T{}", "Layer<(".repeat(40), ")>".repeat(40));

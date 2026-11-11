@@ -333,6 +333,8 @@ or one complete braced declaration. Repetitions may be nested. The compiler
 reports an ambiguous matcher, missing template driver, unequal driver lengths,
 empty one-or-more matcher, or trailing separator at the relevant source; JSON
 diagnostics retain the invocation and definition relationships where applicable.
+An introduced signature can use a nominal visible to its defining module
+without importing the nominal into the caller.
 Generator clauses and escapes within repetitions are not yet supported. The
 [declaration syntax specification](../../spec/syntax-expansion.md#imported-declaration-syntax)
 describes the current boundary.

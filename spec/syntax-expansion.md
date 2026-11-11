@@ -180,6 +180,11 @@ first resolves the alias in its own context, then selects the member through
 that module's public exports. Existing identities survive targeted renames and
 facades. See [visibility and opacity](name-resolution.md#public-private-and-opaque-declarations).
 
+An unqualified literal type in a generated signature may name a nominal
+accessible to the defining module without importing its spelling into the
+caller. It retains that nominal's identity and kind; this use does not expose
+its constructors to the caller.
+
 A generated method reference retains its selected method identity, but does
 not import the defining module's implementation evidence into the caller.
 Ordinary caller and lexical evidence selection applies. Handler and
