@@ -162,6 +162,9 @@ expansion gives its literal introduced identifiers the selected definition
 context and one shared fresh introduction. An introduced binder does not
 capture an unrelated same-spelled caller reference. A captured identifier used
 as a binder can bind same-context captured references in its proper body.
+An explicit type parameter in an expanded declaration binds references with
+its retained context over that declaration's ordinary type-parameter scope,
+including effect-row tails. The written parameter order and kinds are unchanged.
 
 Syntax lookup uses the leading identifier's retained syntax context. A
 captured invocation retains the caller's imports; a literal invocation in a

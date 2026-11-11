@@ -18,6 +18,16 @@ fn declaration_fixture(name: &str) -> RunConfiguration {
     }
 }
 
+fn type_parameter_fixture(case: &str, name: &str) -> RunConfiguration {
+    RunConfiguration {
+        entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/type-parameter-contexts")
+            .join(case)
+            .join(name),
+        roots: ModuleRoots::empty(),
+    }
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -48,6 +58,58 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn introduced_explicit_global_parameter_reaches_the_ordinary_driver() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub syntax declaration: (emit) $name:ident => {\n\
+             pub $name<A> : A -> A\n\
+             $name value = value\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         emit identity\n\
+         main : Unit -> Int\n\
+         main () = identity 42\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("the introduced explicit parameter binds its same-context references");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn introduced_explicit_parameters_reach_their_declaration_consumers() {
+    for case in [
+        "interface",
+        "higher",
+        "implementation",
+        "nominal_data",
+        "nominal_newtype",
+        "effect",
+        "operational",
+    ] {
+        for name in ["entry.ash", "control.ash"] {
+            let program = compile_path(type_parameter_fixture(case, name))
+                .unwrap_or_else(|error| panic!("{case}/{name} should compile: {error:?}"));
+            assert_eq!(
+                execute(&program).unwrap().value_display(),
+                "42",
+                "{case}/{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn introduced_explicit_parameter_does_not_capture_a_caller_type() {
+    let failure = compile_path(type_parameter_fixture("noncapture", "entry.ash"))
+        .expect_err("a caller type name must not bind to an introduced parameter");
+    assert_eq!(failure.reason_code(), "resolve.unknown-type");
 }
 
 #[test]
