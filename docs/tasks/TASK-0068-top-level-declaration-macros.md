@@ -134,16 +134,43 @@ checkpoint is V7.
 
 ### Downstream diagnostic and global origin repairs
 
-The current candidate addresses the separately authorized
+PR [#300](https://github.com/dikini/ash-lang/pull/300) retained the separately authorized
 [#263](https://github.com/dikini/ash-lang/issues/263) and
-[#287](https://github.com/dikini/ash-lang/issues/287) boundaries. An unknown
+[#287](https://github.com/dikini/ash-lang/issues/287) repairs at
+`0b25aa896a210a7f2347bdf545f313acc6f60557`. An unknown
 matcher capture now reaches ordinary syntax diagnostics with its source span
 and spelling. A literal global introduced by a declaration template retains
 its invocation and definition origin through ordinary binder allocation. The
-original public-driver graphs and their focused controls are exercised; the
-candidate still requires independent review, retaining verification, and
-issue acceptance. The separately authorized #277 repair and the remaining
-original integrated gates are outside this candidate.
+original public-driver graphs and focused controls passed; independent review,
+retention and issue acceptance readback completed.
+
+### Downstream definition-context nominal classification
+
+**Delivered in the candidate:** The separately authorized
+[#277](https://github.com/dikini/ash-lang/issues/277) repair authenticates an
+introduced unqualified type reference using its existing definition context
+before retaining an otherwise implicit free parameter. The original graph
+without a caller import and its three controls compile, independently validate
+and execute to 42. The original 40-application and 46-tuple capture graph also
+executes to 42; one additional tuple retains the structural-depth refusal.
+The retained nominal identity, parameter kind and hidden summary fact remain
+available without exposing constructors. Explicit parameters and row tails
+keep their existing discovery rules.
+
+**Remaining:** The original integrated macro gates and the separate introduced
+generic-binder failure in [#301](https://github.com/dikini/ash-lang/issues/301)
+remain open. The latter was reproduced independently on the prior compiler;
+its handwritten generic control succeeds. The fixed I09 generic derive, I17
+main generator and original I22 categories and nested graphs stop earlier at
+their existing projection or parsing boundaries, so those runs do not establish
+whether they encounter #301 after those boundaries are resolved.
+
+**Awaiting:** Independent candidate review and QA, retaining verification,
+and the author acceptance record with independent readback.
+
+**Owner:** The developer owns the candidate and acceptance update; independent
+QA and review own their checks; the orchestrator owns retaining integration
+and final acceptance confirmation.
 
 **Delivered:** Thirteen earlier reviewed squash deliveries establish D1/S1,
 partial declaration selection/matching/admission, type/pattern capture producers,
@@ -925,12 +952,13 @@ independent QA and Sol own their respective checks. The orchestrator tracks
 these separate downstream issues:
 [#263](https://github.com/dikini/ash-lang/issues/263),
 [#265](https://github.com/dikini/ash-lang/issues/265),
-[#272](https://github.com/dikini/ash-lang/issues/272) and
+[#272](https://github.com/dikini/ash-lang/issues/272),
 [#274](https://github.com/dikini/ash-lang/issues/274) and
-[#277](https://github.com/dikini/ash-lang/issues/277). The diagnostic-origin
-delivery above closed #265, #272 and #274 after retained evidence and independent
-readback. Dependent original criteria remain open.
-Verify live status for #263 and #277 before reporting their progress.
+[#277](https://github.com/dikini/ash-lang/issues/277), plus the separate
+introduced generic-binder issue [#301](https://github.com/dikini/ash-lang/issues/301).
+The diagnostic-origin deliveries above closed #263, #265, #272, #274 and #287
+after retained evidence and independent readback. Dependent original criteria
+remain open. Verify live issue status before reporting progress.
 
 The plan preserves the fixed inputs, supplemental early cases and original full
 graphs. Component or handwritten-control results do not replace their connected

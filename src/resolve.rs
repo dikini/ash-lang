@@ -23248,6 +23248,254 @@ mod tests {
     }
 
     #[test]
+    fn contextual_free_type_cache_and_fallback_are_prepaid() {
+        let source = SourceFile::new("contextual-free.ash", "Layer").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let annotation = SurfaceType {
+            diagnostic: None,
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
+                text: "Layer".to_owned(),
+                span,
+                introduction: 1,
+                introduced_at: Some(span),
+                written: false,
+                diagnostic: None,
+            })),
+            span,
+        };
+        let candidate = NominalTypeId::new(ModuleId::new(1), 0);
+        let attempt = |limit, cached, declared: bool| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(limit));
+            if cached {
+                resolver
+                    .syntax_nominals
+                    .insert(("Layer".to_owned(), 1), candidate);
+            }
+            let declared = if declared {
+                HashSet::from(["Layer"])
+            } else {
+                HashSet::new()
+            };
+            let mut seen = HashMap::new();
+            let mut output = Vec::new();
+            let result = resolver.collect_free_type_names(
+                &annotation,
+                &declared,
+                &mut seen,
+                &mut output,
+                true,
+            );
+            (result, resolver.type_work.used(), output.len())
+        };
+
+        // One node plus copy, hash and equal-key comparison for five bytes.
+        let cache_work = 1 + 3 * "Layer".len() + 1;
+        let (short, _, retained) = attempt(cache_work - 1, true, false);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(retained, 0);
+        let (exact, used, retained) = attempt(cache_work, true, false);
+        assert!(exact.is_ok());
+        assert_eq!((used, retained), (cache_work, 0));
+        let (retry, _, retained) = attempt(cache_work, true, false);
+        assert!(retry.is_ok());
+        assert_eq!(retained, 0);
+
+        // An explicitly declared spelling wins before the contextual lookup.
+        let (explicit, used, retained) = attempt(1, true, true);
+        assert!(explicit.is_ok());
+        assert_eq!((used, retained), (1, 1));
+
+        // Missing syntax inputs leave an introduced name genuinely free.
+        let fallback_work = cache_work + 1;
+        let (short, _, retained) = attempt(fallback_work - 1, false, false);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(retained, 0);
+        let (fallback, used, retained) = attempt(fallback_work, false, false);
+        assert!(fallback.is_ok());
+        assert_eq!((used, retained), (fallback_work, 1));
+    }
+
+    #[test]
+    fn contextual_free_type_retention_preserves_authority_and_work_limits() {
+        fn unused_transformer(
+            _: &crate::syntax::SelectedSyntax,
+            _: &[crate::surface::SurfaceSyntaxCapture],
+            _: crate::source::Span,
+            _: &SurfaceName,
+            _: usize,
+            _: &[Option<usize>],
+            _: &Arc<crate::syntax::ExpansionFrame>,
+            _: &mut InterfaceConstraintBudget,
+            _: Option<crate::syntax::QuoteExpansionLoan<'_>>,
+        ) -> Result<(crate::syntax::ExpandedExpression, usize), crate::source::Span> {
+            unreachable!("free type discovery does not invoke a transformer")
+        }
+
+        let fixture = ImportBudgetFixture::create(
+            "import dependency (Layer)\nmain : Unit -> Int\nmain () = 42\n",
+            "pub type Layer<A> = Layer(A)\n",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| {
+                owner
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .any(|n| n.spelling == "Layer")
+            })
+            .unwrap();
+        let owner = &checked[owner_index];
+        let nominal = owner
+            .registry()
+            .nominals()
+            .iter()
+            .find(|n| n.spelling == "Layer")
+            .unwrap()
+            .id;
+        assert_eq!(
+            owner.registry().nominal_parameters(nominal).unwrap()[0].kind,
+            Kind::Type
+        );
+        let terms = checked
+            .iter()
+            .map(|owner| crate::syntax::SyntaxOwnerBindings::empty(owner.module()))
+            .collect::<Vec<_>>();
+        let frame = Arc::new(crate::syntax::ExpansionFrame {
+            invocation: entry.surface().span,
+            definition: owner.span(),
+        });
+        let combined = crate::syntax::MacroOrigin::combined(
+            vec![crate::syntax::MacroOrigin::Source(owner.span())],
+            Arc::clone(&frame),
+        )
+        .unwrap();
+        let annotation = |name: &str| SurfaceType {
+            diagnostic: None,
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
+                text: name.to_owned(),
+                span: owner.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: Some(Box::new(crate::syntax::DiagnosticLocation {
+                    primary: combined.clone(),
+                    related: vec![combined.clone(); 4],
+                    frames: vec![Arc::clone(&frame); 3],
+                    token_cause: false,
+                    captured_expression: false,
+                })),
+            })),
+            span: owner.span(),
+        };
+        let attempt = |limit, name: &str, malformed: bool, prefill: bool| {
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    owner: Some(if malformed {
+                        checked.len()
+                    } else {
+                        owner_index
+                    }),
+                    declaration: owner.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(limit));
+            if prefill {
+                let mut index = 0;
+                loop {
+                    resolver
+                        .syntax_nominals
+                        .insert((format!("ExistingNominal{index:04}"), 2), nominal);
+                    index += 1;
+                    if resolver.syntax_nominals.len() == resolver.syntax_nominals.capacity() {
+                        break;
+                    }
+                }
+            }
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &terms,
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let ty = annotation(name);
+            let mut seen = HashMap::new();
+            let mut output = Vec::new();
+            let result = resolver.collect_free_type_names(
+                &ty,
+                &HashSet::new(),
+                &mut seen,
+                &mut output,
+                true,
+            );
+            let installed = resolver.syntax_nominals.get(&(name.to_owned(), 1)).copied();
+            let access = resolver.imported.nominal(nominal).map(|fact| fact.access);
+            (
+                result,
+                resolver.type_work.used(),
+                output.len(),
+                installed,
+                access,
+            )
+        };
+
+        for prefill in [false, true] {
+            let (measured, work, retained, installed, access) =
+                attempt(TYPE_WORK_LIMIT, "Layer", false, prefill);
+            assert!(measured.is_ok());
+            assert_eq!(
+                (retained, installed, access),
+                (0, Some(nominal), Some(ImportedTypeAccess::Hidden))
+            );
+            let (short, _, retained, installed, access) =
+                attempt(work - 1, "Layer", false, prefill);
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!((retained, installed, access), (0, None, None));
+            let (exact, used, retained, installed, access) = attempt(work, "Layer", false, prefill);
+            assert!(exact.is_ok());
+            assert_eq!(
+                (used, retained, installed, access),
+                (work, 0, Some(nominal), Some(ImportedTypeAccess::Hidden))
+            );
+            let (retry, _, _, installed, _) = attempt(work, "Layer", false, prefill);
+            assert!(retry.is_ok());
+            assert_eq!(installed, Some(nominal));
+        }
+
+        let (free, _, retained, installed, _) = attempt(TYPE_WORK_LIMIT, "Free", false, false);
+        assert!(free.is_ok());
+        assert_eq!((retained, installed), (1, None));
+        let (invalid, _, retained, installed, _) = attempt(TYPE_WORK_LIMIT, "Layer", true, false);
+        assert_eq!(invalid.unwrap_err().reason, ResolveReason::InternalState);
+        assert_eq!((retained, installed), (0, None));
+    }
+
+    #[test]
     fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
         // One outer nominal provenance record, one constructor provenance
         // record, two field-provenance slots, one synthesized Tuple node, and
