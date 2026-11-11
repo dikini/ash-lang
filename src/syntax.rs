@@ -2672,6 +2672,7 @@ pub(crate) fn generator_adapter_definition(
                 };
                 // The shell is created at the invocation; the seed itself
                 // keeps its original source, context and diagnostic packet.
+                budget.charge_units(3).map_err(resource)?;
                 let seed = expr(
                     SurfaceExprKind::Block(SurfaceBlock {
                         declarations: Vec::new(),
