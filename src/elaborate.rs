@@ -28986,6 +28986,21 @@ fn equational_origin(
     equational: &crate::resolved::ResolvedEquationalGlobal,
 ) -> Origin {
     let first = equational.equations.first();
+    if let Some(equation) = first
+        && equation.body.span.source() != equation.span.source()
+    {
+        return Origin::Related {
+            primary: Box::new(Origin::Expansion {
+                invocation: equation.span,
+                definition: equation.body.span,
+            }),
+            related: vec![
+                definition_span,
+                equational.interface.span,
+                equational.interface.annotation.span,
+            ],
+        };
+    }
     Origin::Related {
         primary: Box::new(Origin::Source(
             first.map_or(definition_span, |equation| equation.span),
@@ -32574,6 +32589,189 @@ mod tests {
     };
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    fn equational_origin_fixture(
+        definition: Span,
+        interface: Span,
+        annotation: Span,
+        equation: Option<(Span, Span)>,
+    ) -> crate::resolved::ResolvedEquationalGlobal {
+        use crate::resolved::{
+            Binder, ResolvedEquation, ResolvedEquationHead, ResolvedExternalInterface,
+        };
+
+        let binder = BinderId::resolved(ModuleId::new(0), 0);
+        crate::resolved::ResolvedEquationalGlobal {
+            interface: ResolvedExternalInterface {
+                name: Binder {
+                    id: binder,
+                    spelling: "value".into(),
+                    origin: Origin::Source(definition),
+                },
+                annotation: ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(annotation)],
+                        0,
+                    ),
+                    origin: Origin::Source(annotation),
+                    span: annotation,
+                },
+                requirements: Box::new([]),
+                type_parameters: Box::new([]),
+                span: interface,
+            },
+            equations: equation
+                .into_iter()
+                .map(|(span, body)| ResolvedEquation {
+                    name: ResolvedEquationHead {
+                        binder,
+                        spelling: "value".into(),
+                        origin: Origin::Source(span),
+                    },
+                    patterns: Vec::new(),
+                    body: ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span: body,
+                        diagnostic: None,
+                    },
+                    span,
+                })
+                .collect(),
+        }
+    }
+
+    fn validate_equational_test_origin(
+        origin: Origin,
+        sources: &[&SourceFile],
+    ) -> Result<(), crate::core::ValidationError> {
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Generated {
+                    cause: Box::new(origin),
+                    reason: GeneratedReason::FunctionLowering,
+                },
+            )
+            .unwrap();
+        crate::core::validate(builder.finish(root).unwrap(), sources).map(|_| ())
+    }
+
+    #[test]
+    fn equational_origin_same_source_shape_is_unchanged() {
+        let source = SourceFile::new("caller.ash", "0123456789abcdefghijklmnop").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let (definition, interface, annotation, equation, body) = (
+            span(0, 5),
+            span(6, 10),
+            span(11, 15),
+            span(16, 21),
+            span(21, 26),
+        );
+        let global =
+            equational_origin_fixture(definition, interface, annotation, Some((equation, body)));
+        assert_eq!(
+            equational_origin(definition, &global),
+            Origin::Related {
+                primary: Box::new(Origin::Source(equation)),
+                related: vec![definition, interface, annotation, body],
+            }
+        );
+        let duplicate = equational_origin_fixture(
+            definition,
+            definition,
+            definition,
+            Some((equation, definition)),
+        );
+        assert_eq!(
+            equational_origin(definition, &duplicate).related_spans(),
+            &[definition, definition, definition, definition]
+        );
+        let empty = equational_origin_fixture(definition, interface, annotation, None);
+        assert_eq!(
+            equational_origin(definition, &empty),
+            Origin::Related {
+                primary: Box::new(Origin::Source(definition)),
+                related: vec![definition, interface, annotation],
+            }
+        );
+    }
+
+    #[test]
+    fn equational_origin_cross_source_quote_retains_both_sources() {
+        let caller = SourceFile::new("caller.ash", "0123456789abcdefghijklmnop").unwrap();
+        let quote = SourceFile::new("quote.ash", "quote construction").unwrap();
+        let span = |start, end| caller.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let (definition, interface, annotation, invocation) =
+            (span(0, 5), span(6, 10), span(11, 15), span(16, 21));
+        let quoted = quote.span(ByteRange::new(0, 18).unwrap()).unwrap();
+        let mut global = equational_origin_fixture(
+            definition,
+            interface,
+            annotation,
+            Some((invocation, quoted)),
+        );
+        let frame = Arc::new(crate::syntax::ExpansionFrame {
+            invocation,
+            definition: quoted,
+        });
+        let mut diagnostic = crate::syntax::DiagnosticLocation::new(quoted.into());
+        diagnostic.frames.push(Arc::clone(&frame));
+        global.equations[0].body.diagnostic = Some(Box::new(diagnostic));
+        let origin = equational_origin(definition, &global);
+        assert_eq!(
+            origin,
+            Origin::Related {
+                primary: Box::new(Origin::Expansion {
+                    invocation,
+                    definition: quoted,
+                }),
+                related: vec![definition, interface, annotation],
+            }
+        );
+        assert_eq!(origin.primary_span(), invocation);
+        assert!(Arc::ptr_eq(
+            &global.equations[0].body.diagnostic.as_ref().unwrap().frames[0],
+            &frame
+        ));
+        validate_equational_test_origin(origin, &[&caller, &quote]).unwrap();
+    }
+
+    #[test]
+    fn equational_origin_cross_source_quote_still_checks_definition_source() {
+        let caller = SourceFile::new("caller.ash", "0123456789abcdefghijklmnop").unwrap();
+        let quote = SourceFile::new("quote.ash", "quote construction").unwrap();
+        let span = |start, end| caller.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let (definition, interface, annotation, invocation) =
+            (span(0, 5), span(6, 10), span(11, 15), span(16, 21));
+        let quoted = quote.span(ByteRange::new(0, 18).unwrap()).unwrap();
+        let make = |interface, body| {
+            equational_origin_fixture(definition, interface, annotation, Some((invocation, body)))
+        };
+        let missing = equational_origin(definition, &make(interface, quoted));
+        assert_eq!(
+            validate_equational_test_origin(missing, &[&caller])
+                .unwrap_err()
+                .cause_name(),
+            Some("unadmitted-origin-source")
+        );
+        let outside = Span::unchecked_for_test(quote.id(), ByteRange::new(0, 19).unwrap());
+        let invalid = equational_origin(definition, &make(interface, outside));
+        assert_eq!(
+            validate_equational_test_origin(invalid, &[&caller, &quote])
+                .unwrap_err()
+                .cause_name(),
+            Some("invalid-origin-span")
+        );
+        let foreign_related = equational_origin(definition, &make(quoted, quoted));
+        assert_eq!(
+            validate_equational_test_origin(foreign_related, &[&caller, &quote])
+                .unwrap_err()
+                .cause_name(),
+            Some("related-origin-source")
+        );
+    }
 
     #[test]
     fn wide_handler_coverage_is_exact_atomic_and_retryable() {
