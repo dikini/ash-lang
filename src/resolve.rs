@@ -16302,9 +16302,9 @@ impl Resolver<'_, '_> {
                 "contextual free type discovery exceeded its work budget",
             )
         };
-        // Copy and hash the exact key before probing the existing authenticated facts.
+        // Copy, hash, and compare the key before probing the authenticated facts.
         self.type_work
-            .charge(name.text.len().saturating_mul(2).saturating_add(1))
+            .charge(name.text.len().saturating_mul(3).saturating_add(1))
             .map_err(|()| exhausted())?;
         let key = (name.text.clone(), name.introduction);
         if self.syntax_nominals.contains_key(&key) {
@@ -16331,7 +16331,7 @@ impl Resolver<'_, '_> {
         // This lookup sizes the existing retention route; it does not decide which
         // owner or nominal is valid. The retention call below remains authoritative.
         self.type_work
-            .charge(name.text.len().saturating_add(1))
+            .charge(name.text.len().saturating_mul(2).saturating_add(1))
             .map_err(|()| exhausted())?;
         let original_len = terms
             .and_then(|terms| terms.targeted_nominal(&name.text))
@@ -16342,8 +16342,9 @@ impl Resolver<'_, '_> {
             location
                 .related
                 .len()
-                .saturating_add(location.frames.len())
-                .saturating_add(1)
+                .saturating_mul(3)
+                .saturating_add(location.frames.len().saturating_mul(2))
+                .saturating_add(6)
         });
 
         // Insertion may rehash every existing owned key. Charge the sizing scan
@@ -16351,7 +16352,14 @@ impl Resolver<'_, '_> {
         // existing retention path can mutate the map.
         let growth_work = if self.syntax_nominals.len() == self.syntax_nominals.capacity() {
             let count = self.syntax_nominals.len();
-            self.type_work.charge(count).map_err(|()| exhausted())?;
+            self.type_work
+                .charge(
+                    self.syntax_nominals
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )
+                .map_err(|()| exhausted())?;
             self.syntax_nominals.keys().fold(
                 count.saturating_add(1).saturating_mul(4),
                 |work, (text, _)| work.saturating_add(text.len()),

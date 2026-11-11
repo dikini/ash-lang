@@ -161,7 +161,6 @@ fn i07_missing_type_is_reported_at_the_invocation() {
 }
 
 #[test]
-#[ignore = "blocked by the separately tracked definition-context nominal typing failure"]
 fn imported_generated_type_combines_applications_grouping_and_capture_depth() {
     let fixture = Fixture::new();
     let generated = format!("{}$T{}", "Layer<(".repeat(40), ")>".repeat(40));
