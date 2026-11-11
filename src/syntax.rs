@@ -3498,6 +3498,7 @@ impl<'a> SyntaxExpansion<'a> {
                 true,
                 None,
                 &[],
+                None,
                 budget,
             )? {
                 return Err(MacroParseFailure::Invalid);
@@ -4357,64 +4358,43 @@ fn validate_template_syntax_inner(
     } else {
         None
     };
+    if declaration.template_escapes.is_some() {
+        let budget = admission_budget
+            .as_deref_mut()
+            .ok_or(MacroParseFailure::Invalid)?;
+        // The template is complete here, including repetition-owned generator
+        // clauses. Validate reads even when there are no generators.
+        resolve_template_escape_reads(declaration, budget)?;
+    }
     let matcher = generator_matcher.as_deref().unwrap_or(&declaration.matcher);
     if let Some(budget) = &mut admission_budget {
         // Admission validates structure without executing protected captures.
-        charge_declaration_template(template, matcher, &captures, budget)?;
+        charge_template_inner(
+            template,
+            matcher,
+            &captures,
+            false,
+            None,
+            &[],
+            declaration.template_escapes.as_deref(),
+            budget,
+        )?;
     }
     let mut contents = template.to_vec();
-    if let Some(budget) = &mut admission_budget {
-        fn placeholders(
-            contents: &mut [MacroOutputNode],
-            depth: usize,
-            identifiers: &mut Vec<SurfaceName>,
-            budget: &mut SyntaxBudget,
-        ) -> Result<(), ResourceFailure> {
-            for node in contents {
-                budget.charge()?;
-                match node {
-                    MacroOutputNode::TemplateEscape(name) => {
-                        let span = name.span;
-                        let index = identifiers.len();
-                        let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
-                        let bytes = "__ash_escape_admission_".len().saturating_add(digits);
-                        // The temporary name and its list copy both own text.
-                        budget.charge_units(bytes.saturating_mul(2).saturating_add(2))?;
-                        if identifiers.len() == identifiers.capacity() {
-                            let live = identifiers.len();
-                            budget.charge_units(live.saturating_mul(2).saturating_add(1))?;
-                            identifiers.reserve_exact(1);
-                        } else {
-                            budget.charge()?;
-                        }
-                        let placeholder = SurfaceName {
-                            text: format!("__ash_escape_admission_{index}"),
-                            span,
-                            introduction: usize::MAX - index,
-                            introduced_at: Some(span),
-                            written: false,
-                            diagnostic: None,
-                        };
-                        identifiers.push(placeholder.clone());
-                        *node = MacroOutputNode::Identifier(placeholder, span.into());
-                    }
-                    MacroOutputNode::Group(_, children, _) => {
-                        placeholders(children, type_depth(depth, 1)?, identifiers, budget)?;
-                    }
-                    _ => {}
-                }
-            }
-            Ok(())
-        }
-        placeholders(&mut contents, 0, &mut identifiers, budget).map_err(resource)?;
-    }
-    substitute_contents(
+    let mut loan = admission_budget.as_deref_mut();
+    let placeholders = loan.as_ref().map(|_| &mut identifiers);
+    substitute_contents_at(
         &mut contents,
         matcher,
         &captures,
         0,
         declaration.span,
-        admission_budget.as_deref_mut(),
+        &mut Vec::new(),
+        &mut loan,
+        &[],
+        None,
+        declaration.template_escapes.as_deref(),
+        placeholders,
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     match declaration.category {
@@ -4510,17 +4490,55 @@ fn capture_by_name_with_depth<'a, 'name>(
     captures: &'a [SurfaceSyntaxCapture],
     indices: &[usize],
 ) -> Result<(&'a SurfaceSyntaxCapture, usize), CaptureLookupFailure<'name>> {
+    let schema =
+        matcher_capture_schema(matcher, name).ok_or(CaptureLookupFailure::Unknown(name))?;
+    let (index, repetitions) = (schema.index, schema.repetitions);
+    let mut capture = captures
+        .get(index)
+        .ok_or(CaptureLookupFailure::Invalid(name.span))?;
+    for index in indices.iter().take(repetitions) {
+        let SurfaceSyntaxCapture::Repeated(values) = capture else {
+            return Err(CaptureLookupFailure::Invalid(name.span));
+        };
+        capture = values
+            .values
+            .get(*index)
+            .ok_or(CaptureLookupFailure::Invalid(name.span))?;
+    }
+    Ok((capture, repetitions))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MatcherCaptureSchema {
+    index: usize,
+    kind: SurfaceSyntaxCaptureKind,
+    repetitions: usize,
+}
+
+// Use the same matcher preorder for definition admission and invocation leaf
+// selection. Group containers do not add an invocation repetition index.
+fn matcher_capture_schema(
+    matcher: &[SurfaceSyntaxMatcherPart],
+    name: &SurfaceName,
+) -> Option<MatcherCaptureSchema> {
     fn find(
         parts: &[SurfaceSyntaxMatcherPart],
         name: &SurfaceName,
         offset: &mut usize,
         repetitions: usize,
-    ) -> Option<(usize, usize)> {
+    ) -> Option<MatcherCaptureSchema> {
         for part in parts {
             match part {
-                SurfaceSyntaxMatcherPart::Capture { name: capture, .. } => {
+                SurfaceSyntaxMatcherPart::Capture {
+                    name: capture,
+                    kind,
+                } => {
                     if capture.text == name.text {
-                        return Some((*offset, repetitions));
+                        return Some(MatcherCaptureSchema {
+                            index: *offset,
+                            kind: *kind,
+                            repetitions,
+                        });
                     }
                     *offset += 1;
                 }
@@ -4539,22 +4557,7 @@ fn capture_by_name_with_depth<'a, 'name>(
         }
         None
     }
-
-    let (index, repetitions) =
-        find(matcher, name, &mut 0, 0).ok_or(CaptureLookupFailure::Unknown(name))?;
-    let mut capture = captures
-        .get(index)
-        .ok_or(CaptureLookupFailure::Invalid(name.span))?;
-    for index in indices.iter().take(repetitions) {
-        let SurfaceSyntaxCapture::Repeated(values) = capture else {
-            return Err(CaptureLookupFailure::Invalid(name.span));
-        };
-        capture = values
-            .values
-            .get(*index)
-            .ok_or(CaptureLookupFailure::Invalid(name.span))?;
-    }
-    Ok((capture, repetitions))
+    find(matcher, name, &mut 0, 0)
 }
 
 #[derive(Clone, Copy)]
@@ -4627,6 +4630,180 @@ fn charge_matcher_lookup(
     Ok(())
 }
 
+/// The known input type and source of one defining escape's lexical read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EscapeReadSource {
+    Matcher {
+        index: usize,
+        kind: SurfaceSyntaxCaptureKind,
+        repetitions: usize,
+    },
+    Generator,
+}
+
+/// Operand sources for one actual escape occurrence in a completed template.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct EscapeReadSchema {
+    pub(crate) descriptor: usize,
+    pub(crate) reads: Vec<EscapeReadSource>,
+}
+
+/// Resolve lexical reads only after the complete template and its generator
+/// clauses are available. Structural depth counts groups and repetitions;
+/// matcher selection uses only the separate repetition depth.
+pub(crate) fn resolve_template_escape_reads(
+    declaration: &SurfaceSyntaxDeclaration,
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<EscapeReadSchema>, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+    use crate::surface::SurfaceTemplateGenerator;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    fn walk<'a>(
+        nodes: &'a [MacroOutputNode],
+        declaration: &'a SurfaceSyntaxDeclaration,
+        active: &mut Vec<&'a SurfaceTemplateGenerator>,
+        depth: usize,
+        repetitions: usize,
+        resolved: &mut Vec<EscapeReadSchema>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        for node in nodes {
+            budget.charge().map_err(resource)?;
+            match node {
+                MacroOutputNode::TemplateEscape(adapter) => {
+                    let descriptors = declaration
+                        .template_escapes
+                        .as_deref()
+                        .ok_or(MacroParseFailure::Invalid)?;
+                    let mut selected = None;
+                    for (index, descriptor) in descriptors.iter().enumerate() {
+                        budget
+                            .charge_units(
+                                adapter
+                                    .text
+                                    .len()
+                                    .min(descriptor.adapter.text.len())
+                                    .saturating_add(1),
+                            )
+                            .map_err(resource)?;
+                        if descriptor.adapter.text == adapter.text {
+                            selected = Some((index, descriptor));
+                            break;
+                        }
+                    }
+                    let (descriptor, escape) = selected.ok_or(MacroParseFailure::Invalid)?;
+                    budget.charge_units(escape.reads.len()).map_err(resource)?;
+                    let mut reads = Vec::with_capacity(escape.reads.len());
+                    for name in escape.reads.iter() {
+                        charge_matcher_lookup(&declaration.matcher, name, 0, budget)
+                            .map_err(resource)?;
+                        if let Some(schema) = matcher_capture_schema(&declaration.matcher, name) {
+                            if schema.repetitions > repetitions {
+                                return Err(unknown_capture_failure(name, Some(budget)));
+                            }
+                            reads.push(EscapeReadSource::Matcher {
+                                index: schema.index,
+                                kind: schema.kind,
+                                repetitions: schema.repetitions,
+                            });
+                        } else {
+                            let mut found = false;
+                            for generator in active.iter() {
+                                budget
+                                    .charge_units(
+                                        name.text
+                                            .len()
+                                            .min(generator.name.text.len())
+                                            .saturating_add(1),
+                                    )
+                                    .map_err(resource)?;
+                                if generator.name.text == name.text {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                return Err(unknown_capture_failure(name, Some(budget)));
+                            }
+                            reads.push(EscapeReadSource::Generator);
+                        }
+                    }
+                    if resolved.len() == resolved.capacity() {
+                        budget
+                            .charge_units(resolved.len().saturating_mul(2).saturating_add(1))
+                            .map_err(resource)?;
+                        resolved.reserve_exact(1);
+                    } else {
+                        budget.charge().map_err(resource)?;
+                    }
+                    resolved.push(EscapeReadSchema { descriptor, reads });
+                }
+                MacroOutputNode::Group(_, children, _) => walk(
+                    children,
+                    declaration,
+                    active,
+                    type_depth(depth, 1).map_err(resource)?,
+                    repetitions,
+                    resolved,
+                    budget,
+                )?,
+                MacroOutputNode::TemplateRepeat(repeat) => {
+                    let original = active.len();
+                    if let Some(bindings) = &repeat.generators {
+                        let requested = original.saturating_add(bindings.len());
+                        budget.charge_units(bindings.len()).map_err(resource)?;
+                        if requested > active.capacity() {
+                            budget
+                                .charge_units(requested.saturating_add(original))
+                                .map_err(resource)?;
+                            active.reserve_exact(bindings.len());
+                        }
+                        active.extend(bindings.iter());
+                    }
+                    walk(
+                        &repeat.body,
+                        declaration,
+                        active,
+                        type_depth(depth, 1).map_err(resource)?,
+                        repetitions.saturating_add(1),
+                        resolved,
+                        budget,
+                    )?;
+                    active.truncate(original);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    let Some(template) = declaration.template_contents.as_deref() else {
+        return Err(MacroParseFailure::Invalid);
+    };
+    let initial = declaration.generators.as_deref().unwrap_or(&[]);
+    budget.charge_units(initial.len()).map_err(resource)?;
+    let mut active = Vec::with_capacity(initial.len());
+    active.extend(initial.iter());
+    let mut resolved = Vec::new();
+    walk(
+        template,
+        declaration,
+        &mut active,
+        0,
+        0,
+        &mut resolved,
+        budget,
+    )?;
+    Ok(resolved)
+}
+
 /// Inspect all splice uses, including those nested in another repetition.
 fn repetition_length<'a>(
     repeat: &'a TemplateRepeat,
@@ -4635,8 +4812,68 @@ fn repetition_length<'a>(
     indices: &[usize],
     prefix: usize,
     generators: &[&SurfaceName],
+    escapes: Option<&'a [crate::surface::SurfaceTemplateEscape]>,
     mut budget: Option<&mut SyntaxBudget>,
 ) -> Result<usize, RepetitionFailure<'a>> {
+    #[allow(clippy::too_many_arguments)]
+    fn inspect<'a>(
+        name: &'a SurfaceName,
+        matcher: &[SurfaceSyntaxMatcherPart],
+        captures: &[SurfaceSyntaxCapture],
+        indices: &[usize],
+        generators: &[&SurfaceName],
+        length: &mut Option<usize>,
+        span: Span,
+        budget: &mut Option<&mut SyntaxBudget>,
+    ) -> Result<(), RepetitionFailure<'a>> {
+        if let Some(budget) = budget.as_deref_mut() {
+            // Pay this lookup and the corresponding substitution lookup.
+            charge_matcher_lookup(matcher, name, 0, budget)
+                .map_err(|error| RepetitionFailure::Resource(error, span))?;
+            charge_matcher_lookup(matcher, name, 0, budget)
+                .map_err(|error| RepetitionFailure::Resource(error, span))?;
+            budget
+                .charge_units(indices.len().saturating_mul(6))
+                .map_err(|error| RepetitionFailure::Resource(error, span))?;
+        }
+        let capture = capture_by_name_at(name, matcher, captures, indices);
+        if matches!(capture, Err(CaptureLookupFailure::Unknown(_))) {
+            let mut found = false;
+            for generator in generators {
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget
+                        .charge_units(
+                            name.text
+                                .len()
+                                .min(generator.text.len())
+                                .saturating_add(1)
+                                .saturating_mul(2),
+                        )
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                }
+                if generator.text == name.text {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                return Ok(());
+            }
+        }
+        if let SurfaceSyntaxCapture::Repeated(values) =
+            capture.map_err(|failure| match failure {
+                CaptureLookupFailure::Unknown(name) => RepetitionFailure::Unknown(name),
+                CaptureLookupFailure::Invalid(span) => RepetitionFailure::Invalid(span),
+            })?
+        {
+            if length.is_some_and(|prior| prior != values.values.len()) {
+                return Err(RepetitionFailure::Mismatch(span));
+            }
+            *length = Some(values.values.len());
+        }
+        Ok(())
+    }
+
     let span = repeat.origin.primary();
     if let Some(budget) = budget.as_deref_mut() {
         budget
@@ -4658,46 +4895,16 @@ fn repetition_length<'a>(
         }
         match node {
             MacroOutputNode::Splice(name) => {
-                if let Some(budget) = budget.as_deref_mut() {
-                    charge_matcher_lookup(matcher, name, 0, budget)
-                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
-                    charge_matcher_lookup(matcher, name, 0, budget)
-                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
-                    budget
-                        .charge_units(indices.len().saturating_mul(6))
-                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
-                }
-                let capture = capture_by_name_at(name, matcher, captures, indices);
-                if matches!(capture, Err(CaptureLookupFailure::Unknown(_))) {
-                    let mut found = false;
-                    for generator in generators {
-                        if let Some(budget) = budget.as_deref_mut() {
-                            budget
-                                .charge_units(
-                                    name.text.len().min(generator.text.len()).saturating_add(1),
-                                )
-                                .map_err(|error| RepetitionFailure::Resource(error, span))?;
-                        }
-                        if generator.text == name.text {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found {
-                        continue;
-                    }
-                }
-                if let SurfaceSyntaxCapture::Repeated(values) =
-                    capture.map_err(|failure| match failure {
-                        CaptureLookupFailure::Unknown(name) => RepetitionFailure::Unknown(name),
-                        CaptureLookupFailure::Invalid(span) => RepetitionFailure::Invalid(span),
-                    })?
-                {
-                    if length.is_some_and(|length| length != values.values.len()) {
-                        return Err(RepetitionFailure::Mismatch(span));
-                    }
-                    length = Some(values.values.len());
-                }
+                inspect(
+                    name,
+                    matcher,
+                    captures,
+                    indices,
+                    generators,
+                    &mut length,
+                    span,
+                    &mut budget,
+                )?;
             }
             MacroOutputNode::Group(_, children, _) => {
                 let next = type_depth(depth, 1)
@@ -4743,8 +4950,40 @@ fn repetition_length<'a>(
                 pending.reserve_exact(inner.body.len());
                 pending.extend(inner.body.iter().map(|node| (node, next)));
             }
-            // Iteration-aware escapes belong to the later E5 delivery.
-            MacroOutputNode::TemplateEscape(_) => return Err(RepetitionFailure::Invalid(span)),
+            MacroOutputNode::TemplateEscape(adapter) => {
+                let mut selected = None;
+                for escape in escapes.into_iter().flatten() {
+                    if let Some(budget) = budget.as_deref_mut() {
+                        budget
+                            .charge_units(
+                                adapter
+                                    .text
+                                    .len()
+                                    .min(escape.adapter.text.len())
+                                    .saturating_add(1)
+                                    .saturating_mul(2),
+                            )
+                            .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    }
+                    if escape.adapter.text == adapter.text {
+                        selected = Some(escape);
+                        break;
+                    }
+                }
+                let escape = selected.ok_or(RepetitionFailure::Invalid(adapter.span))?;
+                for name in escape.reads.iter() {
+                    inspect(
+                        name,
+                        matcher,
+                        captures,
+                        indices,
+                        generators,
+                        &mut length,
+                        span,
+                        &mut budget,
+                    )?;
+                }
+            }
             _ => {}
         }
     }
@@ -4756,13 +4995,14 @@ fn repetition_length<'a>(
 }
 
 /// Reserve the copies performed by declaration-template substitution.
+#[cfg(test)]
 fn charge_declaration_template(
     template: &[MacroOutputNode],
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
-    charge_template_inner(template, matcher, captures, false, None, &[], budget)
+    charge_template_inner(template, matcher, captures, false, None, &[], None, budget)
 }
 
 fn charge_template_inner(
@@ -4772,6 +5012,7 @@ fn charge_template_inner(
     new_expression: bool,
     invocation: Option<Span>,
     generators: &[&SurfaceName],
+    escapes: Option<&[crate::surface::SurfaceTemplateEscape]>,
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
     use crate::parser::{MacroParseFailure, STRUCTURAL_DEPTH_LIMIT};
@@ -4933,6 +5174,7 @@ fn charge_template_inner(
                     &indices,
                     child_depth,
                     generators,
+                    escapes,
                     Some(&mut *budget),
                 ) {
                     Ok(count) => count,
@@ -5052,6 +5294,7 @@ pub(crate) fn prepare_declaration_template(
         false,
         Some(invocation),
         &[],
+        selection.declaration.template_escapes.as_deref(),
         budget,
     )? {
         return Err(MacroParseFailure::Invalid);
@@ -5164,6 +5407,7 @@ pub(crate) fn prepare_generator_template(
         false,
         Some(invocation),
         &names,
+        selection.declaration.template_escapes.as_deref(),
         budget,
     )? {
         return Err(MacroParseFailure::Invalid);
@@ -5194,6 +5438,8 @@ pub(crate) fn prepare_generator_template(
         &mut loan,
         &names,
         Some(&mut planner),
+        selection.declaration.template_escapes.as_deref(),
+        None,
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     Ok((output, planner.plan))
@@ -5257,6 +5503,8 @@ pub(crate) fn substitute_contents(
         &mut budget,
         &[],
         None,
+        None,
+        None,
     )
 }
 
@@ -5291,6 +5539,8 @@ fn substitute_contents_at(
     budget: &mut Option<&mut SyntaxBudget>,
     generator_names: &[&SurfaceName],
     mut generator: Option<&mut GeneratorPlanner>,
+    escapes: Option<&[crate::surface::SurfaceTemplateEscape]>,
+    mut admission_identifiers: Option<&mut Vec<SurfaceName>>,
 ) -> Result<(), TemplateSubstitutionFailure> {
     let mut position = 0;
     while position < contents.len() {
@@ -5303,6 +5553,7 @@ fn substitute_contents_at(
                 indices,
                 indices.len(),
                 generator_names,
+                escapes,
                 None,
             ) {
                 Ok(count) => count,
@@ -5351,6 +5602,8 @@ fn substitute_contents_at(
                     budget,
                     generator_names,
                     generator.as_deref_mut(),
+                    escapes,
+                    admission_identifiers.as_deref_mut(),
                 )?;
                 if let Some(saved) = saved {
                     generator
@@ -5462,10 +5715,53 @@ fn substitute_contents_at(
                     budget,
                     generator_names,
                     generator.as_deref_mut(),
+                    escapes,
+                    admission_identifiers.as_deref_mut(),
                 )?;
             }
             MacroOutputNode::TemplateEscape(name) => {
-                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+                let Some(identifiers) = admission_identifiers.as_deref_mut() else {
+                    return Err(TemplateSubstitutionFailure::Invalid(name.span));
+                };
+                let Some(budget) = budget.as_deref_mut() else {
+                    return Err(TemplateSubstitutionFailure::Invalid(name.span));
+                };
+                let resource = |error| {
+                    TemplateSubstitutionFailure::Syntax(
+                        name.span,
+                        crate::parser::MacroParseFailure::Syntax {
+                            diagnostics: Vec::new(),
+                            resource: Some(error),
+                        },
+                    )
+                };
+                let span = name.span;
+                let index = identifiers.len();
+                let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+                let bytes = "__ash_escape_admission_".len().saturating_add(digits);
+                // The temporary name and its list copy both own text.
+                budget
+                    .charge_units(bytes.saturating_mul(2).saturating_add(2))
+                    .map_err(resource)?;
+                if identifiers.len() == identifiers.capacity() {
+                    let live = identifiers.len();
+                    budget
+                        .charge_units(live.saturating_mul(2).saturating_add(1))
+                        .map_err(resource)?;
+                    identifiers.reserve_exact(1);
+                } else {
+                    budget.charge().map_err(resource)?;
+                }
+                let placeholder = SurfaceName {
+                    text: format!("__ash_escape_admission_{index}"),
+                    span,
+                    introduction: usize::MAX - index,
+                    introduced_at: Some(span),
+                    written: false,
+                    diagnostic: None,
+                };
+                identifiers.push(placeholder.clone());
+                *node = MacroOutputNode::Identifier(placeholder, span.into());
             }
             MacroOutputNode::TemplateRepeat(repeat) => {
                 return Err(TemplateSubstitutionFailure::Invalid(
@@ -6337,6 +6633,168 @@ mod tests {
         let sites = sites.borrow();
         assert!(!sites.sites.is_empty());
         assert!(sites.sites.iter().all(|site| site.callee != 0));
+    }
+
+    #[test]
+    fn escape_reads_use_completed_matcher_and_repetition_scopes() {
+        fn project(text: &str) -> (SourceFile, crate::surface::SurfaceModule) {
+            let source = SourceFile::new("escape-scope.ash", text).unwrap();
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            assert!(tree.parse_diagnostics().is_empty());
+            let sites = std::cell::RefCell::new(crate::parser::QuoteProjection {
+                introduction: 1,
+                next_ordinal: 0,
+                sites: Vec::new(),
+            });
+            let mut budget = SyntaxBudget::default();
+            let module = crate::parser::project_declaration_expansions_with_quotes(
+                &source,
+                &tree,
+                &[],
+                &[],
+                &mut Vec::new(),
+                &mut budget,
+                None,
+                Some(&sites),
+            )
+            .unwrap();
+            (source, module)
+        }
+
+        let (source, module) = project(include_str!(
+            "../docs/design/macros/fixtures/escapes/forms.ash"
+        ));
+        let schema = |name: &str| {
+            let declaration = module
+                .syntax_declarations
+                .iter()
+                .find(|declaration| declaration.name.text == name)
+                .unwrap();
+            resolve_template_escape_reads(declaration, &mut SyntaxBudget::default()).unwrap()
+        };
+        assert_eq!(
+            schema("zip_values")[0].reads,
+            [EscapeReadSource::Matcher {
+                index: 1,
+                kind: SurfaceSyntaxCaptureKind::Expression,
+                repetitions: 1,
+            }]
+        );
+        assert_eq!(schema("cached")[0].reads, [EscapeReadSource::Generator]);
+        assert_eq!(
+            schema("nested_values")[0].reads,
+            [
+                EscapeReadSource::Matcher {
+                    index: 2,
+                    kind: SurfaceSyntaxCaptureKind::Expression,
+                    repetitions: 2,
+                },
+                EscapeReadSource::Generator,
+            ]
+        );
+
+        for name in ["zip_values", "cached", "nested_values"] {
+            let declaration = module
+                .syntax_declarations
+                .iter()
+                .find(|declaration| declaration.name.text == name)
+                .unwrap();
+            validate_quote_template_syntax(
+                declaration,
+                &source,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &mut SyntaxBudget::default(),
+            )
+            .expect("the existing repetition is admitted with its escape reads");
+        }
+
+        let zip = module
+            .syntax_declarations
+            .iter()
+            .find(|declaration| declaration.name.text == "zip_values")
+            .unwrap();
+        let repeat = zip
+            .template_contents
+            .as_deref()
+            .unwrap()
+            .iter()
+            .find_map(|node| match node {
+                MacroOutputNode::TemplateRepeat(repeat) => Some(repeat.as_ref()),
+                _ => None,
+            })
+            .unwrap();
+        let span = zip.name.span;
+        let identifier = SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name: zip.name.clone(),
+            origin: span.into(),
+        });
+        let expression = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Unit,
+                span,
+                diagnostic: None,
+            },
+            contains_protected_type: false,
+            quote_sites: Default::default(),
+            contents: Arc::from([]),
+        });
+        let repeated = |value: &SurfaceSyntaxCapture, count| {
+            SurfaceSyntaxCapture::Repeated(SurfaceRepeatedCapture {
+                values: vec![value.clone(); count],
+            })
+        };
+        let captures = [repeated(&identifier, 2), repeated(&expression, 2)];
+        let mismatched = [repeated(&identifier, 2), repeated(&expression, 3)];
+        let escapes = zip.template_escapes.as_deref();
+        let run = |captures: &[SurfaceSyntaxCapture], budget: &mut SyntaxBudget| {
+            repetition_length(
+                repeat,
+                &zip.matcher,
+                captures,
+                &[],
+                0,
+                &[],
+                escapes,
+                Some(budget),
+            )
+        };
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        assert!(matches!(run(&captures, &mut measured), Ok(2)));
+        let total = measured.consumed();
+        let mut unequal = SyntaxBudget::default();
+        assert!(matches!(
+            run(&mismatched, &mut unequal),
+            Err(RepetitionFailure::Mismatch(_))
+        ));
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            run(&captures, &mut short),
+            Err(RepetitionFailure::Resource(_, _))
+        ));
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            assert!(matches!(run(&captures, &mut exact), Ok(2)));
+            assert_eq!(exact.consumed(), total);
+        }
+
+        let (_, invalid) = project(include_str!(
+            "../docs/design/macros/fixtures/escapes/out_of_scope_forms.ash"
+        ));
+        let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) =
+            resolve_template_escape_reads(
+                &invalid.syntax_declarations[0],
+                &mut SyntaxBudget::default(),
+            )
+        else {
+            panic!("a repeated read outside its repetition must fail at admission");
+        };
+        assert_eq!(
+            diagnostics[0].reason,
+            crate::parser::ParseReason::UnknownTemplateCapture
+        );
     }
 
     #[test]
