@@ -195,20 +195,32 @@ fn owner_nominal_access_and_caller_shadowing_remain_distinct() {
                     }\n";
     fixture.write(
         "forms.ash",
-        &format!("type Layer<A> = Layer(A)\n{template}"),
+        "type Layer<A> = Layer(A)\n\
+         make : Unit -> Layer<Int>\n\
+         make () = Layer(42)\n\
+         pub syntax declaration: (emit) $name:ident with $run:ident => {\n\
+             pub $name : Layer<Int> -> Int\n\
+             $name (Layer(value)) = value\n\
+             pub $run : Unit -> Int\n\
+             $run () = $name(make(()))\n\
+         }\n",
     );
     fixture.write(
         "entry.ash",
         "import forms (syntax emit)\n\
          type Layer<A> = Decoy(Bool)\n\
-         emit answer\n\
+         emit answer with run_answer\n\
          main : Unit -> Int\n\
-         main () = 42\n",
+         main () = run_answer(())\n",
     );
     let program = compile_path(fixture.configuration())
         .expect("the syntax owner's private nominal survives caller shadowing");
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 
+    fixture.write(
+        "forms.ash",
+        &format!("type Layer<A> = Layer(A)\n{template}"),
+    );
     fixture.write(
         "entry.ash",
         "import forms (Layer, syntax emit)\nemit answer\nmain : Unit -> Int\nmain () = 42\n",
