@@ -437,6 +437,18 @@ fn expect_import_name(parser: &mut Parser<'_>) {
     }
 }
 
+fn expect_declaration_metaname(parser: &mut Parser<'_>) {
+    if parser
+        .current()
+        .and_then(super::declaration_metaname)
+        .is_some()
+    {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
 fn expect_lower_identifier(parser: &mut Parser<'_>) {
     if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
         let _ = parser.bump();
@@ -590,7 +602,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
                 let _ = parser.bump();
             }
         }
-        syntax_declaration_body(parser);
+        syntax_declaration_body(parser, false);
         parser.finish();
         return;
     }
@@ -649,16 +661,19 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
             let _ = parser.bump();
-            let name = match parser.current() {
-                Some(TokenKind::Identifier(name)) => Some(name),
-                Some(TokenKind::UpperIdentifier(name)) if declaration => Some(name),
-                _ => None,
+            let name = if declaration {
+                parser.current().and_then(super::declaration_metaname)
+            } else {
+                match parser.current() {
+                    Some(TokenKind::Identifier(name)) => Some(name.as_str()),
+                    _ => None,
+                }
             };
-            if name.is_some_and(|name| !names.insert(name.clone())) {
+            if name.is_some_and(|name| !names.insert(name.to_owned())) {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
             if declaration {
-                expect_import_name(parser);
+                expect_declaration_metaname(parser);
             } else {
                 expect_lower_identifier(parser);
             }
@@ -694,7 +709,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     if !declaration && (!previous_capture || !final_expression || names.is_empty()) {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
-    syntax_declaration_body(parser);
+    syntax_declaration_body(parser, declaration);
     parser.finish();
 }
 
@@ -1046,22 +1061,18 @@ fn syntax_matcher_items(
             parser.start(NodeKind::SyntaxCapture);
             let _ = parser.bump();
             let index = parser.position;
-            let length = match parser.current() {
-                Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => {
-                    Some(name.len())
-                }
-                _ => None,
-            };
+            let length = parser
+                .current()
+                .and_then(super::declaration_metaname)
+                .map(str::len);
             if let Some(length) = length {
                 let mut duplicate = false;
                 for existing in names.iter() {
                     if !parser.charge_matcher_work(existing.len().min(length).saturating_add(1)) {
                         break;
                     }
-                    let found = match &parser.tokens[index].kind {
-                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => name,
-                        _ => unreachable!(),
-                    };
+                    let found = super::declaration_metaname(&parser.tokens[index].kind)
+                        .expect("the metaname was checked above");
                     duplicate |= existing == found;
                 }
                 if parser.resource_failure.is_some() {
@@ -1082,16 +1093,13 @@ fn syntax_matcher_items(
                         break;
                     }
                     names.reserve_exact(1);
-                    let name = match &parser.tokens[index].kind {
-                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => {
-                            name.clone()
-                        }
-                        _ => unreachable!(),
-                    };
+                    let name = super::declaration_metaname(&parser.tokens[index].kind)
+                        .expect("the metaname was checked above")
+                        .to_owned();
                     names.push(name);
                 }
             }
-            expect_import_name(parser);
+            expect_declaration_metaname(parser);
             let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
             let kind = match parser.current() {
                 Some(TokenKind::Identifier(name)) if name == "expr" => {
@@ -1194,17 +1202,17 @@ fn syntax_matcher_items(
     (nullable, first_capture, previous_capture, first, pending)
 }
 
-fn syntax_declaration_body(parser: &mut Parser<'_>) {
+fn syntax_declaration_body(parser: &mut Parser<'_>, declaration: bool) {
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
     if parser.at(&TokenKind::Using) {
         let _ = parser.bump();
         expect_lower_identifier(parser);
     } else {
-        template_body(parser);
+        template_body(parser, declaration);
     }
 }
 
-fn template_body(parser: &mut Parser<'_>) {
+fn template_body(parser: &mut Parser<'_>, declaration: bool) {
     parser.start(NodeKind::TemplateBody);
     if !parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace) {
         parser.finish();
@@ -1215,7 +1223,12 @@ fn template_body(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
-    let previous_mode = std::mem::replace(&mut parser.quote_mode, QuoteMode::Template);
+    let mode = if declaration {
+        QuoteMode::DeclarationTemplate
+    } else {
+        QuoteMode::Template
+    };
+    let previous_mode = std::mem::replace(&mut parser.quote_mode, mode);
     let mut closing = vec![TokenKind::RightBrace];
     while let Some(expected) = closing.last() {
         if parser.at(&TokenKind::SyntaxKeyword) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
@@ -1279,6 +1292,7 @@ pub(super) fn syntax_quote(parser: &mut Parser<'_>) {
     }
     let mode = match parser.quote_mode {
         QuoteMode::Template => QuoteMode::Template,
+        QuoteMode::DeclarationTemplate => QuoteMode::DeclarationTemplate,
         QuoteMode::Ordinary | QuoteMode::Escape | QuoteMode::Quote => QuoteMode::Quote,
     };
     let previous_mode = std::mem::replace(&mut parser.quote_mode, mode);
@@ -1324,14 +1338,19 @@ pub(super) fn syntax_escape(parser: &mut Parser<'_>) {
 
 pub(super) fn quote_hole(parser: &mut Parser<'_>) {
     let kind = match parser.quote_mode {
-        QuoteMode::Template => NodeKind::TemplateSplice,
+        QuoteMode::Template | QuoteMode::DeclarationTemplate => NodeKind::TemplateSplice,
         QuoteMode::Escape => NodeKind::EscapeCaptureRead,
         QuoteMode::Quote => NodeKind::QuoteHole,
         QuoteMode::Ordinary => unreachable!("ordinary Ash has no quote holes"),
     };
     parser.start(kind);
     let _ = parser.bump(); // $
-    if matches!(parser.current(), Some(TokenKind::Identifier(_)))
+    if parser.quote_mode == QuoteMode::DeclarationTemplate
+        && parser
+            .current()
+            .and_then(super::declaration_metaname)
+            .is_some()
+        || matches!(parser.current(), Some(TokenKind::Identifier(_)))
         || parser.quote_mode != QuoteMode::Quote
             && matches!(parser.current(), Some(TokenKind::UpperIdentifier(_)))
     {

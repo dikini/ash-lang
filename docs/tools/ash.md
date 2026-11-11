@@ -339,6 +339,27 @@ Generator clauses and escapes within repetitions are not yet supported. The
 [declaration syntax specification](../../spec/syntax-expansion.md#imported-declaration-syntax)
 describes the current boundary.
 
+## Imported derives
+
+The compiler also accepts imported derives on top-level types and newtypes.
+For example, the fixed [derive fixture](../design/macros/fixtures/derives/README.md)
+imports `marker` and `tagged` and applies both to the original subject:
+
+```ash
+type Color = Red
+    | Blue
+    deriving (marker, tagged)
+```
+
+A derive definition uses `pub syntax derive: (name)` and can bind the subject
+name with an optional `$target:ident`. A checked transformer receives the
+complete Declaration at capture 0 and that optional Identifier at capture 1.
+Derives run in list order; their declarations are checked by the ordinary
+compiler. The [derive specification](../../spec/syntax-expansion.md#derive-syntax)
+describes capture behavior and the currently recorded downstream limitations.
+Generator clauses and matcher-capture reads in escaped code remain under
+development.
+
 ## Quotation in declaration expansion
 
 During checked declaration expansion, an ordinary helper can construct an

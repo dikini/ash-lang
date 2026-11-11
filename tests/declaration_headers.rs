@@ -4,7 +4,9 @@ use ash::{
     driver::{RunConfiguration, compile_path, execute},
     lexer::lex,
     module::ModuleRoots,
-    parser::{ConcreteElement, Event, NodeKind, ProjectionError, parse, project_module},
+    parser::{
+        ConcreteElement, Event, NodeKind, ParseReason, ProjectionError, parse, project_module,
+    },
     source::{SourceFile, Span},
     surface::{
         SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory, SurfaceSyntaxImplementation,
@@ -196,6 +198,127 @@ fn declaration_matcher_capture_names_include_uppercase_without_changing_expressi
             Err(ProjectionError::RecoveryNodesPresent)
         );
     }
+}
+
+#[test]
+fn fixed_declaration_keyword_capture_keeps_its_spelling_and_span() {
+    let forms = include_str!("../docs/design/macros/fixtures/declarations/extra_forms.ash");
+    let (source, tree) = parsed(forms);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    let module = project_module(&source, &tree).unwrap();
+    let definition = module.syntax_declarations.last().unwrap();
+    assert_eq!(definition.name.text, "box_implementation");
+    assert!(matches!(
+        definition.matcher.first(),
+        Some(SurfaceSyntaxMatcherPart::Capture {
+            name,
+            kind: SurfaceSyntaxCaptureKind::Identifier,
+        }) if name.text == "interface" && text_at(&source, name.span) == "interface"
+    ));
+}
+
+#[test]
+fn fixed_handwritten_determination_control_executes() {
+    let program = compile_path(fixture("declarations", "control_relation.ash")).unwrap();
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn keyword_metanames_are_confined_to_declaration_captures_and_template_reads() {
+    for word in [
+        "fn",
+        "let",
+        "rec",
+        "and",
+        "type",
+        "newtype",
+        "interface",
+        "impl",
+        "effect",
+        "perform",
+        "handle",
+        "with",
+        "resume",
+        "discard",
+        "retain",
+        "resource",
+        "hook",
+        "register",
+        "cleanup",
+        "region",
+        "using",
+        "where",
+        "match",
+        "import",
+        "as",
+        "pub",
+        "opaque",
+        "syntax",
+        "Int",
+        "Bool",
+        "Unit",
+        "String",
+        "Bytes",
+        "true",
+        "false",
+    ] {
+        let text = format!("pub syntax declaration: (sink) ${word}:ident => {{}}\n");
+        let (source, tree) = parsed(&text);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{word}: {:?}",
+            tree.parse_diagnostics()
+        );
+        let module = project_module(&source, &tree).unwrap();
+        assert!(matches!(
+            module.syntax_declarations[0].matcher.as_slice(),
+            [SurfaceSyntaxMatcherPart::Capture { name, .. }] if name.text == word
+        ));
+    }
+
+    let text = "pub syntax declaration: (quoted) $type:ident => {\nvalue : Unit -> Int\nvalue () = syntax { $type }\n}\n";
+    let (source, tree) = parsed(text);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    project_module(&source, &tree).unwrap();
+
+    for text in [
+        "pub syntax declaration: (bad) $_:ident => {}\n",
+        "pub syntax declaration: (bad) $interface:ident then $interface:ident => {}\n",
+        "pub syntax declaration: (bad) $( $interface:ident then $interface:ident ),+ => {}\n",
+        "pub syntax declaration: (interface) $name:ident => {}\n",
+        "pub syntax ordinary $interface:ident then $value:expr => { $value }\n",
+        "pub syntax ordinary $value:expr => { syntax { $interface } }\n",
+        "main : Unit -> Int\nmain () = syntax { $interface }\n",
+        "pub syntax declaration: (bad) $interface:ident => {\nvalue : Unit -> Int\nvalue () = ${ $interface }\n}\n",
+    ] {
+        let (_, tree) = parsed(text);
+        assert!(!tree.parse_diagnostics().is_empty(), "accepted {text:?}");
+    }
+
+    let (source, tree) = parsed("pub syntax derive: (good) $target:ident => {}\n");
+    assert!(tree.parse_diagnostics().is_empty());
+    assert_eq!(
+        project_module(&source, &tree).unwrap().syntax_declarations[0].category,
+        SurfaceSyntaxCategory::Derive
+    );
+
+    let (source, tree) = parsed("pub syntax derive: (bad) $interface:ident => {}\n");
+    assert!(
+        tree.parse_diagnostics().iter().any(|diagnostic| {
+            diagnostic.reason == ParseReason::ExpectedForm
+                && text_at(&source, diagnostic.primary.span()) == "interface"
+        }),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
 }
 
 #[test]

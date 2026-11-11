@@ -50,14 +50,20 @@ syntax_declaration ::=
       "=>" ( template_block | "using" identifier )
   | "pub" "syntax" "declaration" ":" "(" identifier ")"
       { declaration_matcher_item }
+      "=>" ( declaration_template_block | "using" identifier )
+  | "pub" "syntax" "derive" ":" "(" identifier ")"
+      [ "$" identifier ":" "ident" ]
       "=>" ( declaration_template_block | "using" identifier ) ;
 matcher_item ::= matcher_literal | "$" identifier ":" ( "expr" | "ident" ) ;
+declaration_capture_name ::= identifier | upper_identifier | reserved_word ;
 declaration_matcher_item ::=
     matcher_literal
-  | "$" ( identifier | upper_identifier ) ":" ( "ident" | "expr" | "type" | "pattern" | "declaration" )
+  | "$" declaration_capture_name ":"
+      ( "ident" | "expr" | "type" | "pattern" | "declaration" )
   | "(" { declaration_matcher_item } ")"
   | "{" { declaration_matcher_item | line_end } "}"
-  | "$" "(" { declaration_matcher_item } ")" [ repetition_separator ] ( "*" | "+" ) ;
+  | "$" "(" { declaration_matcher_item } ")"
+      [ repetition_separator ] ( "*" | "+" ) ;
 template_block ::= "{" { template_element } "}" ;
 template_element ::=
     template_token
@@ -67,8 +73,9 @@ template_element ::=
 declaration_template_block ::= "{" { declaration_template_element } "}" ;
 declaration_template_element ::=
     template_token
-  | "$" ( identifier | upper_identifier )
-  | "$" "(" { declaration_template_element | line_end } ")" [ repetition_separator ] ( "*" | "+" )
+  | "$" declaration_capture_name
+  | "$" "(" { declaration_template_element | line_end } ")"
+      [ repetition_separator ] ( "*" | "+" )
   | "$" "{" expression "}"
   | "$" block
   | "(" { declaration_template_element } ")"
@@ -78,12 +85,13 @@ syntax_invocation ::= identifier syntax_matcher_input ;
 matcher_literal ::= /one permitted literal token/ ;
 repetition_separator ::= /one permitted non-delimiter token/ ;
 template_token ::= /one token other than a group delimiter or "$"/ ;
+reserved_word ::= /a reserved word listed in lexical structure/ ;
 syntax_matcher_input ::= /input accepted by the selected syntax matcher/ ;
 
 type_declaration ::=
   [ "pub" [ "opaque" ] ]
   "type" upper_identifier [ type_parameters ] "=" [ line_end ] constructor_declaration
-  { line_end "|" constructor_declaration } ;
+  { line_end "|" constructor_declaration } [ line_end deriving_clause ] ;
 type_parameters ::=
   "<" type_parameter { "," type_parameter } ">" ;
 type_parameter ::= upper_identifier [ ":" kind ] ;
@@ -94,7 +102,8 @@ constructor_declaration ::=
 newtype_declaration ::=
   [ "pub" [ "opaque" ] ]
   "newtype" upper_identifier [ type_parameters ] "="
-  upper_identifier "(" type ")" ;
+  upper_identifier "(" type ")" [ line_end deriving_clause ] ;
+deriving_clause ::= "deriving" "(" identifier { "," identifier } [ "," ] ")" ;
 
 effect_declaration ::=
   [ "pub" ] "effect" upper_identifier [ type_parameters ]
@@ -296,9 +305,9 @@ line_end ::= /logical-newline-in-module-or-block-context/ ;
 `syntax_invocation` is selected by a locally imported syntax name; the
 remainder is determined by that declaration's matcher, not by a global parser
 extension. A syntax name begins with a lowercase letter and is not a reserved
-word. An expression matcher occupies one logical line, has at least one uniquely named
-capture, ends in an expression capture, and separates adjacent captures with
-literal tokens. It has no repetition, alternatives, or
+word. An expression matcher occupies one logical line, has at least one
+uniquely named capture, ends in an expression capture, and separates adjacent
+captures with literal tokens. It has no repetition, alternatives, or
 optional items. Group delimiters, logical line ends, `$`, and `=>` are not
 matcher literals. A template retains balanced token groups and named splices;
 its substituted body must parse as one block expression. The definition and

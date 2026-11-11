@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{RunConfiguration, compile_path, execute},
+    driver::{PipelineFailure, RunConfiguration, compile_path, execute},
     lexer::lex,
     module::{LoadGraphError, ModuleRoots},
     parser::{
@@ -25,6 +25,90 @@ fn imported_grouped_repetitions_accept_an_empty_template() {
     })
     .expect("the imported grouped matcher accepts ordered, ragged source identifiers");
     assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn declaration_keyword_metanames_bind_and_expand_in_repetitions() {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-keyword-metanames-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    fs::write(
+        directory.join("forms.ash"),
+        "pub syntax declaration: (single) $interface:ident => {\n\
+         $interface : Unit -> Int\n\
+         $interface () = 14\n\
+         }\n\
+         pub syntax declaration: (series) $( $type:ident ),+ => {\n\
+         $(\n\
+         $type : Unit -> Int\n\
+         $type () = 14\n\
+         )+\n\
+         }\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("main.ash"),
+        "import forms (syntax single, syntax series)\n\
+         single lone\n\
+         series first, second\n\
+         main : Unit -> Int\n\
+         main () = lone() + first() + second()\n",
+    )
+    .unwrap();
+    let program = compile_path(RunConfiguration {
+        entry: directory.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("keyword metanames name declaration captures and their template reads");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    fs::write(
+        directory.join("main.ash"),
+        "import forms (syntax single)\nsingle interface\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    let invalid_input = compile_path(RunConfiguration {
+        entry: directory.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("an ident capture cannot consume the interface keyword");
+    assert!(invalid_input.is_source_rejection());
+
+    fs::write(
+        directory.join("forms.ash"),
+        "pub syntax declaration: (single) $interface:ident => {\n$type : Unit -> Int\n$type () = 42\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("main.ash"),
+        "import forms (syntax single)\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    let unknown = compile_path(RunConfiguration {
+        entry: directory.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("an unused template cannot read an unbound keyword metaname");
+    let Some(PipelineFailure::Syntax(syntax)) = unknown.pipeline_failure() else {
+        panic!("expected a syntax failure, got {unknown:?}");
+    };
+    assert!(
+        syntax
+            .parser
+            .iter()
+            .any(|diagnostic| { diagnostic.reason == ParseReason::UnknownTemplateCapture })
+    );
 }
 
 #[test]
