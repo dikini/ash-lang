@@ -1107,7 +1107,15 @@ impl ResolvedModule {
         Ok(())
     }
 
-    pub(crate) fn new(mut parts: ResolvedModuleParts) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(parts: ResolvedModuleParts) -> Self {
+        Self::new_with_quote_sites(parts, Vec::new())
+    }
+
+    pub(crate) fn new_with_quote_sites(
+        mut parts: ResolvedModuleParts,
+        quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    ) -> Self {
         Self {
             module: parts.module,
             registry: std::mem::take(&mut parts.registry),
@@ -1124,12 +1132,8 @@ impl ResolvedModule {
             span: parts.span,
             defining_sources: Vec::new(),
             imported_lowerings: Vec::new(),
-            quote_sites: Vec::new(),
+            quote_sites,
         }
-    }
-
-    pub(crate) fn set_quote_sites(&mut self, sites: Vec<crate::syntax::ResolvedQuoteSite>) {
-        self.quote_sites = sites;
     }
 
     pub(crate) fn quote_sites(&self) -> &[crate::syntax::ResolvedQuoteSite] {

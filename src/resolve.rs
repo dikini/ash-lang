@@ -1773,8 +1773,7 @@ fn finish_module_resolution(
         .map_err(ResolveModuleError::Representation)?;
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
-    let mut resolved = ResolvedModule::new(admission.parts);
-    resolved.set_quote_sites(admission.quote_sites);
+    let mut resolved = ResolvedModule::new_with_quote_sites(admission.parts, admission.quote_sites);
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
