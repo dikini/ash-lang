@@ -481,6 +481,7 @@ pub struct LoadedModule {
     surface: SurfaceModule,
     dependencies: Box<[ModuleDependency]>,
     quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
+    quote_introduction: Option<usize>,
 }
 
 // A cloned surface has different Box allocations. Its source syntax is still
@@ -494,6 +495,7 @@ impl Clone for LoadedModule {
             surface: self.surface.clone(),
             dependencies: self.dependencies.clone(),
             quote_sites: Vec::new(),
+            quote_introduction: None,
         }
     }
 }
@@ -547,6 +549,10 @@ impl LoadedModule {
 
     pub(crate) fn quote_sites(&self) -> &[crate::syntax::SurfaceQuoteSite] {
         &self.quote_sites
+    }
+
+    pub(crate) fn quote_introduction(&self) -> Option<usize> {
+        self.quote_introduction
     }
 }
 
@@ -1470,6 +1476,7 @@ impl StagedModule {
         } = self.surface;
         let mut completed_owners = None;
         let mut completed_sites = Vec::new();
+        let mut completed_quote_introduction = None;
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1513,6 +1520,7 @@ impl StagedModule {
                             staged_owners.reserve_exact(1);
                         }
                         staged_owners.push(quote_owner);
+                        completed_quote_introduction = Some(staged_owners.len());
                         Some(std::cell::RefCell::new(crate::parser::QuoteProjection {
                             introduction: staged_owners.len(),
                             next_ordinal: *next_quote_ordinal,
@@ -1571,6 +1579,7 @@ impl StagedModule {
             surface,
             dependencies: self.dependencies.into_boxed_slice(),
             quote_sites: completed_sites,
+            quote_introduction: completed_quote_introduction,
         })
     }
 }
@@ -1585,10 +1594,6 @@ pub(crate) struct HeaderGraph {
 }
 
 impl HeaderGraph {
-    pub(crate) fn take_syntax_budget(&mut self) -> SyntaxBudget {
-        std::mem::take(&mut self.syntax_budget)
-    }
-
     pub(crate) fn source_work(&self) -> Result<(crate::types::TypeWorkBudget, usize), ()> {
         if !self.loaded.is_empty() || self.completed.is_some() {
             return Err(());
@@ -1641,12 +1646,16 @@ impl HeaderGraph {
 
     pub(crate) fn current_module_with_syntax_budget(
         &mut self,
-    ) -> Option<(&LoadedModule, &mut SyntaxBudget)> {
+    ) -> Option<(&LoadedModule, &mut SyntaxBudget, &mut usize)> {
         let module = match &self.completed {
             Some(graph) => graph.modules.last(),
             None => self.loaded.last(),
         }?;
-        Some((module, &mut self.syntax_budget))
+        Some((
+            module,
+            &mut self.syntax_budget,
+            &mut self.next_quote_ordinal,
+        ))
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
@@ -1724,6 +1733,13 @@ impl HeaderGraph {
             });
         }
         self.completed.as_ref()
+    }
+
+    pub(crate) fn completed_graph_with_syntax_budget(
+        &mut self,
+    ) -> Option<(&ModuleGraph, &mut SyntaxBudget)> {
+        self.completed_graph()?;
+        Some((self.completed.as_ref()?, &mut self.syntax_budget))
     }
 
     pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
@@ -3258,17 +3274,22 @@ mod tests {
             .unwrap();
         let consumed = graph.syntax_budget.consumed();
         let loaded_id = {
-            let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+            let (module, budget, ordinal) = graph.current_module_with_syntax_budget().unwrap();
             budget.charge_units(7).unwrap();
+            *ordinal = 11;
             module.id()
         };
         assert_eq!(graph.syntax_budget.consumed(), consumed + 7);
+        assert_eq!(graph.next_quote_ordinal, 11);
         assert!(graph.completed_graph().is_some());
-        let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+        let (module, budget, ordinal) = graph.current_module_with_syntax_budget().unwrap();
         assert_eq!(module.id(), loaded_id);
         assert_eq!(budget.consumed(), consumed + 7);
+        assert_eq!(*ordinal, 11);
+        *ordinal += 1;
         budget.charge().unwrap();
         assert_eq!(graph.syntax_budget.consumed(), consumed + 8);
+        assert_eq!(graph.next_quote_ordinal, 12);
     }
 
     #[test]
@@ -3573,6 +3594,7 @@ mod tests {
             },
             dependencies: Box::new([]),
             quote_sites: Vec::new(),
+            quote_introduction: None,
         }
     }
 }

@@ -2556,6 +2556,7 @@ struct Resolver<'state, 'inputs> {
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
     surface_quote_sites: &'state [crate::syntax::SurfaceQuoteSite],
+    replacement_quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
@@ -3044,6 +3045,7 @@ impl Resolver<'_, '_> {
             syntax_inputs: None,
             syntax_expansion: None,
             surface_quote_sites: &[],
+            replacement_quote_sites: Vec::new(),
             quote_sites: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
@@ -13617,7 +13619,13 @@ impl Resolver<'_, '_> {
             ResolveTask::FinishApplication { span, quote_site } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
                 let retained_quote = if let Some(index) = quote_site {
-                    let source = self.surface_quote_sites.get(index).ok_or_else(|| {
+                    let source = match index {
+                        SurfaceQuoteSiteIndex::Module(index) => self.surface_quote_sites.get(index),
+                        SurfaceQuoteSiteIndex::Replacement(index) => {
+                            self.replacement_quote_sites.get(index)
+                        }
+                    }
+                    .ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
                             span,
@@ -14441,19 +14449,37 @@ impl Resolver<'_, '_> {
         match &expression.kind {
             SurfaceExprKind::SyntaxInvocation { name, captures } => {
                 if self.active_expansions >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
-                    let definition = self
-                        .syntax_expansion
-                        .as_ref()
-                        .and_then(|expansion| expansion.selected(name))
-                        .ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                expression.span,
-                                "the syntax expansion lost its selected definition",
-                            )
-                        })?
-                        .declaration
-                        .span;
+                    let definition = if crate::syntax::has_quoted_capture(captures) {
+                        self.syntax_expansion
+                            .as_deref_mut()
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the syntax expansion is unavailable",
+                                )
+                            })?
+                            .quoted_selection_span(name, captures, expression.span)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the quote budget was exhausted",
+                                )
+                            })?
+                    } else {
+                        self.syntax_expansion
+                            .as_ref()
+                            .and_then(|expansion| expansion.selected(name))
+                            .map(|selection| selection.declaration.span)
+                    }
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            expression.span,
+                            "the syntax expansion lost its selected definition",
+                        )
+                    })?;
                     let invocation = name.introduced_at.unwrap_or(expression.span);
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::InternalState,
@@ -14484,9 +14510,12 @@ impl Resolver<'_, '_> {
                     expansion.expand(name, captures, expression.span, &mut self.constraint_work);
                 self.syntax_expansion = Some(expansion);
                 let replacement = replacement.map_err(unsupported_syntax_template)?;
+                let previous_sites =
+                    std::mem::replace(&mut self.replacement_quote_sites, replacement.quote_sites);
                 self.active_expansions += 1;
-                let resolved = self.resolve_expr(&replacement);
+                let resolved = self.resolve_expr(&replacement.expression);
                 self.active_expansions -= 1;
+                self.replacement_quote_sites = previous_sites;
                 expressions.push(resolved?);
             }
             SurfaceExprKind::TemplateSplice(_) => {
@@ -15071,7 +15100,8 @@ impl Resolver<'_, '_> {
             }
             SurfaceExprKind::Apply(application) => {
                 let mut quote_site = None;
-                if !self.surface_quote_sites.is_empty() {
+                if !self.surface_quote_sites.is_empty() || !self.replacement_quote_sites.is_empty()
+                {
                     let pointer = std::ptr::from_ref(application.function.as_ref()) as usize;
                     let expansion = self.syntax_expansion.as_deref_mut().ok_or_else(|| {
                         error(
@@ -15080,7 +15110,15 @@ impl Resolver<'_, '_> {
                             "the quote budget was lost",
                         )
                     })?;
-                    for (index, site) in self.surface_quote_sites.iter().enumerate() {
+                    let sites = self
+                        .surface_quote_sites
+                        .iter()
+                        .enumerate()
+                        .map(|(index, site)| (SurfaceQuoteSiteIndex::Module(index), site))
+                        .chain(self.replacement_quote_sites.iter().enumerate().map(
+                            |(index, site)| (SurfaceQuoteSiteIndex::Replacement(index), site),
+                        ));
+                    for (index, site) in sites {
                         expansion
                             .charge_quote_work(1, expression.span)
                             .map_err(|()| {
@@ -15352,6 +15390,11 @@ impl Drop for PendingLexicalResolution<'_> {
     }
 }
 
+enum SurfaceQuoteSiteIndex {
+    Module(usize),
+    Replacement(usize),
+}
+
 enum ResolveTask<'a> {
     FinishResume {
         owner: ResumeId,
@@ -15454,7 +15497,7 @@ enum ResolveTask<'a> {
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
-        quote_site: Option<usize>,
+        quote_site: Option<SurfaceQuoteSiteIndex>,
     },
     FinishBinary {
         kind: BinaryKind,

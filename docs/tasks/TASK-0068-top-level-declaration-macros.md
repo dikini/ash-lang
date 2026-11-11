@@ -25,8 +25,8 @@ partial criteria and the remaining producer/consumer interfaces.
 
 The reviewed work structure is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206)
 as seven workstreams and 45 child issues. All 112 native blocking links still
-match the reviewed graph. D1 #214 and S1 #215 are closed; 43 child issues remain
-open. The user has authorized delivery and squash merges into the retaining
+match the reviewed graph. D1 #214, S1 #215 and D8 #232 are closed; 42 child
+issues remain open. The user has authorized delivery and squash merges into the retaining
 branch; Main remains separate.
 
 The active `/root` orchestrator inherits its launching model/effort and owns
@@ -73,9 +73,11 @@ cases, prerequisites and hard boundaries.
 The reviewed original 45-unit delivery prediction is **142 points**. C1–C4's
 recorded planning scope is **8 predicted points**, giving **150 points** for
 the full scope. Preserve these fixed predictions and all original DAG edges.
-D1/S1 account for seven fully closed predicted points; the 43 open units total
-135 original points and include retained partial work. These figures do not
-measure remaining effort or grant partial acceptance credit.
+D1, S1 and D8 account for ten fully closed predicted points; the 42 open units
+total 132 original points and include retained partial work. These figures do
+not measure remaining effort or grant partial acceptance credit. Earlier
+partial-delivery records below describe their state at the time and are
+superseded where the later retained checkpoints say so.
 
 **Delivered:** Thirteen earlier reviewed squash deliveries establish D1/S1,
 partial declaration selection/matching/admission, type/pattern capture producers,
@@ -730,9 +732,9 @@ have independent retention and readback checks. Full S2 remains open.
 **Owner:** The developer owns the candidate and evidence; QA and Sol own
 independent checks; the orchestrator owns retention and acceptance confirmation.
 
-### Diagnostic origin candidate
+### Retained diagnostic origin delivery
 
-**Delivered in the candidate:** The existing reviewed diagnostic change for
+**Delivered:** The existing reviewed diagnostic change for
 [#265](https://github.com/dikini/ash-lang/issues/265),
 [#272](https://github.com/dikini/ash-lang/issues/272) and
 [#274](https://github.com/dikini/ash-lang/issues/274) is adopted unchanged at
@@ -755,32 +757,101 @@ receipt SHA-256 is
 `evidence/downstream-diagnostics/focused-6458c4ee/receipt.json` in the handoff.
 Independent QA cleared the receipt in audit
 `9deab82714baed7ab02d5503493cd42ff8bc0ddbf59f1eced6f861d07072b2a4`.
-Exact-head review remains pending.
+[PR #294](https://github.com/dikini/ash-lang/pull/294) retained the reviewed
+change at `04d0d957213c32fc90ec838866f91ae3c6ccd9bf`. All three original
+diagnostic issues were closed after independent acceptance readback.
 
-**Remaining:** Original issue acceptance and the full TASK-0068 verification
-remain open. This candidate does not close the original H2/H3 or #230 criteria.
+**Remaining:** The full TASK-0068 verification and the original H2/H3 and
+issue #230 criteria remain open.
 
-**Awaiting:** Exact-head Sol PR review, retaining integration and checked
-acceptance for each original issue.
+**Awaiting:** No further acceptance is pending for #265, #272 or #274.
 
 **Owner:** The developer owns the candidate and records; independent QA and Sol
 own their checks; the orchestrator owns integration and acceptance confirmation.
+
+### Retained D8 checkpoint
+
+**Delivered:** [PR #295](https://github.com/dikini/ash-lang/pull/295) retained
+the reviewed D8 tree as `ac3a70d3bd2e24fd316d7bee3b98c08458ccdee1`. The
+unchanged seven-stage fresh workspace verification completed at candidate
+`bd1ae6f9395e0f83fc76fb4fb51aac2ca6d1465c`; the retained tree was identical.
+The human and JSON I15 checks were refreshed against that candidate's actual
+binary. Independent QA and review checked the gate, named cases and retained
+result. All five original D8 criteria were accepted and
+[issue #232](https://github.com/dikini/ash-lang/issues/232) was closed after
+independent readback.
+
+**Remaining:** E4 and the later full corpus, integration and final acceptance
+remain open. The D8 checkpoint does not close the original H1/H2/H3 criteria.
+
+**Awaiting:** No further D8 acceptance is pending. E4 is the next fresh
+workspace checkpoint.
+
+**Owner:** The developer owns the next implementation and evidence; independent
+QA and review own their checks; the orchestrator owns retention and acceptance.
+
+### Retained equational-origin repair
+
+**Delivered:** The separately authorized
+[PR #297](https://github.com/dikini/ash-lang/pull/297) retained
+`ded4a06f3810d67884f0e9ec3af4441169aed768` for
+[issue #296](https://github.com/dikini/ash-lang/issues/296). Its existing
+expansion origin preserves the actual caller and protected-expression sources
+for the affected cross-source equation. Same-source origins, ordinary checking
+and Core validation remain unchanged. Focused controls passed and independent
+review confirmed the retained result and completed issue readback.
+
+**Remaining:** The quote and escape implementation and E4 acceptance are
+separate. A local combination produced `44 : Int` on the unchanged early nested
+fixture and `42 : Int` on the I17 dependency control; the full E4 criteria and
+fresh workspace checkpoint remain open.
+
+**Awaiting:** No further #296 acceptance is pending.
+
+**Owner:** The developer owns the quote and escape continuation; the
+orchestrator owns integration and acceptance.
+
+### Connected quote and escape candidate
+
+**Delivered in the candidate:** Checked ordinary helpers can construct
+expression fragments using quotes and holes, and declaration templates can
+evaluate an escaped expression or block. The unchanged early nested case
+returns `44 : Int`, the fixed I17 helper slice crosses an ordinary dependency,
+and the fixed quote token roundtrip and its handwritten control return
+`42 : Int`. The existing identity observation checks the returned token and
+group structure, the captured identifier's context and source origin, and the
+actual capture-owned quote call. A reached ordinary quotation without the
+compile-time host refuses before publishing its internal representation.
+Focused controls cover ordinary type failures, output admission, the shared
+syntax budget and the atomic failure's lack of module publication.
+
+**Remaining:** Direct forwarding of a protected quoted expression is not yet
+implemented. The separate unknown outer-splice diagnostic in
+[#263](https://github.com/dikini/ash-lang/issues/263), the complete E1 and E2
+criteria, the full generator and repetition graphs, and later integrated and
+final checks remain open. E4 acceptance is pending its own focused review,
+fresh workspace checkpoint, retention and checked issue readback.
+
+**Awaiting:** Independent review and QA of this candidate, the E4 checkpoint,
+retaining integration and acceptance readback.
+
+**Owner:** The developer owns source and evidence; QA and independent review
+own their checks; the orchestrator owns retention and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
 derives, generators, publication handoffs, full corpus/diagnostics,
 specification/tool documentation and integrated acceptance. D3's full I19
 criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
-Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
-fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
+Prior partial H1/H2/H3 tests do not close their original criteria. The fresh
+D8 checkpoint is retained; E4, V3 and the final gate remain open.
 
 **Awaiting:** Each further delivery requires independent QA, Sol PR review,
 retained-result verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
-and its PR, commit and evidence. The next fresh full checkpoint is D8, after the
-first declaration path, integrated H2/H3 and protected-copy/composed-depth gates
-are ready; E4 is the second checkpoint, V3 joins the complete public path and
-V7 supplies the final fresh full gate before V8 retaining acceptance.
+and its PR, commit and evidence. The next fresh full checkpoint is E4; V3 joins
+the complete public path and V7 supplies the final fresh full gate before V8
+retaining acceptance.
 
 **Owner:** The orchestrator assigns the next eligible delivery and integration;
 the developer owns product changes, builds, repairs and acceptance updates;
@@ -791,10 +862,9 @@ these separate downstream issues:
 [#272](https://github.com/dikini/ash-lang/issues/272) and
 [#274](https://github.com/dikini/ash-lang/issues/274) and
 [#277](https://github.com/dikini/ash-lang/issues/277). The diagnostic-origin
-candidate above is under independent review for #265, #272 and #274. These
-issues and dependent criteria remain open until their retained evidence and
-acceptance readbacks are complete. Verify live status
-for #263 and #277 before reporting their progress.
+delivery above closed #265, #272 and #274 after retained evidence and independent
+readback. Dependent original criteria remain open.
+Verify live status for #263 and #277 before reporting their progress.
 
 The plan preserves the fixed inputs, supplemental early cases and original full
 graphs. Component or handwritten-control results do not replace their connected

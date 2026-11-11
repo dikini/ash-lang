@@ -339,7 +339,7 @@ impl SyntaxContexts {
         Ok(Self::new(caller, owner_imports, &owners))
     }
 
-    fn new_budgeted_expression(
+    pub(crate) fn new_budgeted_expression(
         caller: &[SelectedSyntax],
         owner_imports: &[Vec<SelectedSyntax>],
         owners: &[SyntaxOwner],
@@ -2247,7 +2247,26 @@ pub(crate) type DeclarationTransformer<'a> = dyn for<'call> FnMut(
     ) -> Result<(Vec<MacroOutputNode>, usize), Span>
     + 'a;
 
-type SyntaxTransformer<'a> = dyn FnMut(
+pub(crate) struct ExpandedExpression {
+    pub(crate) expression: SurfaceExpr,
+    pub(crate) quote_sites: Vec<SurfaceQuoteSite>,
+}
+
+pub(crate) struct QuoteExpansionLoan<'a> {
+    pub(crate) budget: &'a mut SyntaxBudget,
+    pub(crate) owners: &'a mut Vec<SyntaxOwner>,
+    pub(crate) next_quote_ordinal: &'a mut usize,
+    pub(crate) quote_introduction: usize,
+}
+
+pub(crate) fn has_quoted_capture(captures: &[SurfaceSyntaxCapture]) -> bool {
+    captures.iter().any(|capture| {
+        matches!(capture, SurfaceSyntaxCapture::Expression(value)
+            if !matches!(value.quote_sites, crate::surface::CapturedQuoteSites::Empty))
+    })
+}
+
+type SyntaxTransformer<'a> = dyn for<'call> FnMut(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
         Span,
@@ -2256,7 +2275,8 @@ type SyntaxTransformer<'a> = dyn FnMut(
         &[Option<usize>],
         &Arc<ExpansionFrame>,
         &mut crate::interface::InterfaceConstraintBudget,
-    ) -> Result<(SurfaceExpr, usize), Span>
+        Option<QuoteExpansionLoan<'call>>,
+    ) -> Result<(ExpandedExpression, usize), Span>
     + 'a;
 
 /// Expands one invocation while the ordinary resolver owns its lexical scope.
@@ -2267,6 +2287,8 @@ pub(crate) struct SyntaxExpansion<'a> {
     owners: Vec<SyntaxOwner>,
     parse_failure: Option<crate::driver::SyntaxParseFailure>,
     syntax_budget: Option<&'a mut SyntaxBudget>,
+    next_quote_ordinal: Option<&'a mut usize>,
+    quote_introduction: Option<usize>,
     transformer: &'a mut SyntaxTransformer<'a>,
 }
 
@@ -2277,8 +2299,13 @@ impl<'a> SyntaxExpansion<'a> {
         owner_imports: &'a [Vec<SelectedSyntax>],
         owners: Vec<SyntaxOwner>,
         syntax_budget: Option<&'a mut SyntaxBudget>,
+        quote_source: Option<(&'a mut usize, usize)>,
         transformer: &'a mut SyntaxTransformer<'a>,
     ) -> Self {
+        let (next_quote_ordinal, quote_introduction) = match quote_source {
+            Some((ordinal, introduction)) => (Some(ordinal), Some(introduction)),
+            None => (None, None),
+        };
         Self {
             source,
             selected,
@@ -2286,6 +2313,8 @@ impl<'a> SyntaxExpansion<'a> {
             owners,
             parse_failure: None,
             syntax_budget,
+            next_quote_ordinal,
+            quote_introduction,
             transformer,
         }
     }
@@ -2326,17 +2355,85 @@ impl<'a> SyntaxExpansion<'a> {
         imports.iter().find(|syntax| syntax.name == name.text)
     }
 
+    fn quote_selection_index(
+        &mut self,
+        name: &SurfaceName,
+        captures: &[SurfaceSyntaxCapture],
+        invocation: Span,
+    ) -> Result<Option<(Option<usize>, usize)>, ()> {
+        // Protected-Type projection already reserved this future lookup.
+        let prepaid = captures.iter().any(|capture| {
+            matches!(capture, SurfaceSyntaxCapture::Expression(value) if value.contains_protected_type)
+        });
+        if !prepaid {
+            self.charge_quote_work(2, invocation)?;
+        }
+        let owner = if name.introduction == 0 {
+            None
+        } else {
+            let Some(owner) = self.owner(name.introduction).and_then(|owner| owner.owner) else {
+                return Ok(None);
+            };
+            Some(owner)
+        };
+        let count = match owner {
+            None => self.selected.len(),
+            Some(owner) => match self.owner_imports.get(owner) {
+                Some(imports) => imports.len(),
+                None => return Ok(None),
+            },
+        };
+        for index in 0..count {
+            let candidate = match owner {
+                None => &self.selected[index],
+                Some(owner) => &self.owner_imports[owner][index],
+            };
+            let work = candidate.name.len().min(name.text.len()).saturating_add(1);
+            if !prepaid {
+                self.charge_quote_work(work, invocation)?;
+            }
+            let candidate = match owner {
+                None => &self.selected[index],
+                Some(owner) => &self.owner_imports[owner][index],
+            };
+            if candidate.name == name.text {
+                return Ok(Some((owner, index)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn quoted_selection_span(
+        &mut self,
+        name: &SurfaceName,
+        captures: &[SurfaceSyntaxCapture],
+        invocation: Span,
+    ) -> Result<Option<Span>, ()> {
+        let Some((owner, index)) = self.quote_selection_index(name, captures, invocation)? else {
+            return Ok(None);
+        };
+        Ok(Some(match owner {
+            None => self.selected[index].declaration.span,
+            Some(owner) => self.owner_imports[owner][index].declaration.span,
+        }))
+    }
+
     pub(crate) fn expand(
         &mut self,
         name: &SurfaceName,
         captures: &[SurfaceSyntaxCapture],
         invocation: Span,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-    ) -> Result<SurfaceExpr, Span> {
+    ) -> Result<ExpandedExpression, Span> {
+        if has_quoted_capture(captures) {
+            return self.expand_quote_expression(name, captures, invocation, constraint_work);
+        }
         if captures.iter().any(|capture| {
             matches!(capture, SurfaceSyntaxCapture::Expression(value) if value.contains_protected_type)
         }) {
-            return self.expand_type_expression(name, captures, invocation);
+            return self.expand_type_expression(name, captures, invocation).map(|expression| {
+                ExpandedExpression { expression, quote_sites: Vec::new() }
+            });
         }
         let anchor = name.introduced_at.unwrap_or(invocation);
         let selection = self.selected(name).cloned().ok_or(invocation)?;
@@ -2395,7 +2492,13 @@ impl<'a> SyntaxExpansion<'a> {
                     }
                     Err(crate::parser::MacroParseFailure::Invalid) => return Err(invocation),
                 };
-                (expression, 0)
+                (
+                    ExpandedExpression {
+                        expression,
+                        quote_sites: Vec::new(),
+                    },
+                    0,
+                )
             }
             SurfaceSyntaxImplementation::Transformer(_) => (self.transformer)(
                 &selection,
@@ -2406,6 +2509,7 @@ impl<'a> SyntaxExpansion<'a> {
                 &owners,
                 &frame,
                 constraint_work,
+                None,
             )?,
         };
         self.owners.extend((0..fresh_count).map(|_| SyntaxOwner {
@@ -2413,8 +2517,116 @@ impl<'a> SyntaxExpansion<'a> {
             declaration: selection.declaration.span,
             import_span: selection.import_span,
         }));
-        expression.span = invocation;
+        expression.expression.span = invocation;
         Ok(expression)
+    }
+
+    fn expand_quote_expression(
+        &mut self,
+        name: &SurfaceName,
+        captures: &[SurfaceSyntaxCapture],
+        invocation: Span,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<ExpandedExpression, Span> {
+        let (owner, index) = self
+            .quote_selection_index(name, captures, invocation)
+            .map_err(|()| invocation)?
+            .ok_or(invocation)?;
+        let selection = match owner {
+            None => &self.selected[index],
+            Some(owner) => &self.owner_imports[owner][index],
+        };
+        if !matches!(
+            selection.declaration.implementation,
+            SurfaceSyntaxImplementation::Transformer(_)
+        ) {
+            return Err(invocation);
+        }
+        let anchor = name.introduced_at.unwrap_or(invocation);
+        let definition = selection.declaration.span;
+        let Some(budget) = self.syntax_budget.as_deref_mut() else {
+            return Err(invocation);
+        };
+        let Some(next_quote_ordinal) = self.next_quote_ordinal.as_deref_mut() else {
+            return Err(invocation);
+        };
+        let Some(quote_introduction) = self.quote_introduction else {
+            return Err(invocation);
+        };
+        let owner_checkpoint = self.owners.len();
+        let result = (|| {
+            let charged = || crate::driver::SyntaxParseFailure {
+                diagnostics: Vec::new(),
+                resource: None,
+                invocation: anchor,
+                definition,
+                teardown: None,
+            };
+            let pay = |resource| crate::driver::SyntaxParseFailure {
+                resource: Some(resource),
+                ..charged()
+            };
+            budget.charge_units(captures.len()).map_err(pay)?;
+            charge_selected_expression(selection, budget).map_err(pay)?;
+            let selection = selection.clone();
+            budget.charge().map_err(pay)?;
+            if self.owners.len() == self.owners.capacity() {
+                let live = self.owners.len();
+                budget
+                    .charge_units(live.saturating_mul(2).saturating_add(1))
+                    .map_err(pay)?;
+                self.owners.reserve_exact(1);
+            }
+            self.owners.push(SyntaxOwner {
+                owner: Some(selection.owner),
+                declaration: definition,
+                import_span: selection.import_span,
+            });
+            let introduction = self.owners.len();
+            budget.charge().map_err(pay)?;
+            let frame = Arc::new(ExpansionFrame {
+                invocation: anchor,
+                definition,
+            });
+            budget.charge_units(self.owners.len()).map_err(pay)?;
+            let owners = self
+                .owners
+                .iter()
+                .map(|owner| owner.owner)
+                .collect::<Vec<_>>();
+            let (mut expression, fresh_count) = (self.transformer)(
+                &selection,
+                captures,
+                anchor,
+                name,
+                introduction,
+                &owners,
+                &frame,
+                constraint_work,
+                Some(QuoteExpansionLoan {
+                    budget,
+                    owners: &mut self.owners,
+                    next_quote_ordinal,
+                    quote_introduction,
+                }),
+            )
+            .map_err(|_| charged())?;
+            if fresh_count != 0 {
+                return Err(charged());
+            }
+            expression.expression.span = invocation;
+            Ok(expression)
+        })();
+        match result {
+            Ok(expression) => Ok(expression),
+            Err(failure) => {
+                self.owners.truncate(owner_checkpoint);
+                if failure.resource.is_some() {
+                    self.parse_failure = Some(failure);
+                }
+                Err(invocation)
+            }
+        }
     }
 
     fn expand_type_expression(
@@ -2848,6 +3060,17 @@ pub(crate) fn validate_template_syntax(
     validate_template_syntax_inner(declaration, source, contexts, admission_budget.as_mut())
 }
 
+/// Use the graph ledger for newly admitted quotation work, preserving the
+/// previous admission allowance for templates without quotes or escapes.
+pub(crate) fn validate_quote_template_syntax(
+    declaration: &SurfaceSyntaxDeclaration,
+    source: &crate::source::SourceFile,
+    contexts: &SyntaxContexts,
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
+    validate_template_syntax_inner(declaration, source, contexts, Some(budget))
+}
+
 fn validate_template_syntax_inner(
     declaration: &SurfaceSyntaxDeclaration,
     source: &crate::source::SourceFile,
@@ -2937,6 +3160,7 @@ fn validate_template_syntax_inner(
             SurfaceSyntaxCaptureKind::Expression => {
                 SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                     contains_protected_type: false,
+                    quote_sites: Default::default(),
                     expression: SurfaceExpr {
                         diagnostic: None,
                         kind: SurfaceExprKind::Unit,
@@ -2997,36 +3221,46 @@ fn validate_template_syntax_inner(
         fn placeholders(
             contents: &mut [MacroOutputNode],
             depth: usize,
+            identifiers: &mut Vec<SurfaceName>,
             budget: &mut SyntaxBudget,
         ) -> Result<(), ResourceFailure> {
             for node in contents {
                 budget.charge()?;
                 match node {
                     MacroOutputNode::TemplateEscape(name) => {
-                        budget.charge_units(2)?;
                         let span = name.span;
-                        *node = MacroOutputNode::ForwardedExpression(
-                            SurfaceExpressionCapture {
-                                expression: SurfaceExpr {
-                                    kind: SurfaceExprKind::Unit,
-                                    span,
-                                    diagnostic: None,
-                                },
-                                contents: Arc::from([]),
-                                contains_protected_type: false,
-                            },
-                            span.into(),
-                        );
+                        let index = identifiers.len();
+                        let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+                        let bytes = "__ash_escape_admission_".len().saturating_add(digits);
+                        // The temporary name and its list copy both own text.
+                        budget.charge_units(bytes.saturating_mul(2).saturating_add(2))?;
+                        if identifiers.len() == identifiers.capacity() {
+                            let live = identifiers.len();
+                            budget.charge_units(live.saturating_mul(2).saturating_add(1))?;
+                            identifiers.reserve_exact(1);
+                        } else {
+                            budget.charge()?;
+                        }
+                        let placeholder = SurfaceName {
+                            text: format!("__ash_escape_admission_{index}"),
+                            span,
+                            introduction: usize::MAX - index,
+                            introduced_at: Some(span),
+                            written: false,
+                            diagnostic: None,
+                        };
+                        identifiers.push(placeholder.clone());
+                        *node = MacroOutputNode::Identifier(placeholder, span.into());
                     }
                     MacroOutputNode::Group(_, children, _) => {
-                        placeholders(children, type_depth(depth, 1)?, budget)?;
+                        placeholders(children, type_depth(depth, 1)?, identifiers, budget)?;
                     }
                     _ => {}
                 }
             }
             Ok(())
         }
-        placeholders(&mut contents, 0, budget).map_err(resource)?;
+        placeholders(&mut contents, 0, &mut identifiers, budget).map_err(resource)?;
     }
     substitute_contents(
         &mut contents,
@@ -3047,16 +3281,28 @@ fn validate_template_syntax_inner(
             )?;
         }
         crate::surface::SurfaceSyntaxCategory::Declaration => {
-            crate::parser::parse_declaration_template_admission(
-                source,
-                declaration.span,
-                contents,
-                contexts,
-                &identifiers,
-                admission_budget
-                    .as_mut()
-                    .expect("declaration admission owns its budget"),
-            )?;
+            let budget = admission_budget
+                .as_mut()
+                .expect("declaration admission owns its budget");
+            if declaration.contains_quote_or_escape {
+                crate::parser::parse_quote_declaration_template_admission(
+                    source,
+                    declaration.span,
+                    contents,
+                    contexts,
+                    &identifiers,
+                    budget,
+                )?;
+            } else {
+                crate::parser::parse_declaration_template_admission(
+                    source,
+                    declaration.span,
+                    contents,
+                    contexts,
+                    &identifiers,
+                    budget,
+                )?;
+            }
         }
     }
     Ok(())
@@ -3426,11 +3672,13 @@ mod tests {
             expression: expression.clone(),
             contents: Arc::clone(&contents),
             contains_protected_type: true,
+            quote_sites: Default::default(),
         });
         let ordinary = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
             expression,
             contents: Arc::from([]),
             contains_protected_type: false,
+            quote_sites: Default::default(),
         });
         let run = |selected: &[SelectedSyntax],
                    capture: &SurfaceSyntaxCapture,
@@ -3443,13 +3691,21 @@ mod tests {
                                    _: usize,
                                    _: &[Option<usize>],
                                    _: &Arc<ExpansionFrame>,
-                                   _: &mut InterfaceConstraintBudget|
-             -> Result<(SurfaceExpr, usize), Span> {
+                                   _: &mut InterfaceConstraintBudget,
+                                   _: Option<QuoteExpansionLoan<'_>>|
+             -> Result<(ExpandedExpression, usize), Span> {
                 called.set(true);
                 Err(span)
             };
-            let mut expansion =
-                SyntaxExpansion::new(&source, selected, &[], Vec::new(), loan, &mut transformer);
+            let mut expansion = SyntaxExpansion::new(
+                &source,
+                selected,
+                &[],
+                Vec::new(),
+                loan,
+                None,
+                &mut transformer,
+            );
             let result = expansion.expand(
                 &selected[0].declaration.name,
                 std::slice::from_ref(capture),
@@ -3475,7 +3731,7 @@ mod tests {
             let output = output.expect("the selected Template expands");
             assert!(failure.is_none() && !called);
             assert_eq!(owners, 1);
-            let SurfaceExprKind::Block(template) = &output.kind else {
+            let SurfaceExprKind::Block(template) = &output.expression.kind else {
                 panic!("the template returns its expression in a block")
             };
             assert!(template.declarations.is_empty());
@@ -3543,6 +3799,67 @@ mod tests {
             assert!(output.is_err() && failure.is_none() && !called);
             assert_eq!(owners, 0);
             assert_eq!(budget.consumed(), 0);
+        }
+
+        // The same paid lookup serves an actual quote invocation and its
+        // structural-depth refusal. Exercise a later matching name so the
+        // preceding comparison is charged as well.
+        let mut quoted = ordinary.clone();
+        let SurfaceSyntaxCapture::Expression(quoted_expression) = &mut quoted else {
+            unreachable!()
+        };
+        quoted_expression.quote_sites = crate::surface::CapturedQuoteSites::Owned(Vec::new());
+        let selected = [keep, twice.clone()];
+        let lookup = |budget: &mut SyntaxBudget| {
+            let mut transformer =
+                |_: &SelectedSyntax,
+                 _: &[SurfaceSyntaxCapture],
+                 _: Span,
+                 _: &SurfaceName,
+                 _: usize,
+                 _: &[Option<usize>],
+                 _: &Arc<ExpansionFrame>,
+                 _: &mut InterfaceConstraintBudget,
+                 _: Option<QuoteExpansionLoan<'_>>|
+                 -> Result<(ExpandedExpression, usize), Span> { Err(span) };
+            let mut expansion = SyntaxExpansion::new(
+                &source,
+                &selected,
+                &[],
+                Vec::new(),
+                Some(budget),
+                None,
+                &mut transformer,
+            );
+            let result = expansion.quoted_selection_span(
+                &twice.declaration.name,
+                std::slice::from_ref(&quoted),
+                span,
+            );
+            (result, expansion.take_parse_failure())
+        };
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (result, failure) = lookup(&mut measured);
+        assert_eq!(result.unwrap(), Some(twice.declaration.span));
+        assert!(failure.is_none());
+        let total = measured.consumed();
+        assert!(total > 17);
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        let (result, failure) = lookup(&mut short);
+        assert!(result.is_err());
+        assert!(matches!(
+            failure.unwrap().resource,
+            Some(ResourceFailure::SyntaxWork { .. })
+        ));
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let (result, failure) = lookup(&mut exact);
+            assert_eq!(result.unwrap(), Some(twice.declaration.span));
+            assert!(failure.is_none());
+            assert_eq!(exact.consumed(), total);
         }
     }
 
@@ -3724,6 +4041,7 @@ mod tests {
         };
         let nested = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::SyntaxInvocation {
                     name,
@@ -3746,6 +4064,7 @@ mod tests {
         )]);
         let expression = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: ordinary.clone(),
             contents: Arc::clone(&retained),
         };
@@ -3777,6 +4096,7 @@ mod tests {
         }
         let host = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: ordinary,
             contents: Arc::from([]),
         };
@@ -3787,6 +4107,7 @@ mod tests {
         ));
         let protected = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: host.expression,
             contents: Arc::from([MacroOutputNode::Group(
                 MacroDelimiter::Parentheses,
@@ -3799,6 +4120,66 @@ mod tests {
                 .unwrap()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn declaration_escape_admission_uses_the_borrowed_budget_at_its_boundary() {
+        use crate::parser::MacroParseFailure;
+
+        let source = SourceFile::new(
+            "wrong_category_forms.ash",
+            include_str!("../docs/design/macros/fixtures/escapes/wrong_category_forms.ash"),
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let sites = std::cell::RefCell::new(crate::parser::QuoteProjection {
+            introduction: 1,
+            next_ordinal: 0,
+            sites: Vec::new(),
+        });
+        let mut staging_budget = SyntaxBudget::default();
+        let module = crate::parser::project_declaration_expansions_with_quotes(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut staging_budget,
+            None,
+            Some(&sites),
+        )
+        .expect("the actual declaration and escape adapter project");
+        let declaration = &module.syntax_declarations[0];
+        assert!(declaration.contains_quote_or_escape);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+
+        let mut measured = SyntaxBudget::default();
+        validate_quote_template_syntax(declaration, &source, &contexts, &mut measured)
+            .expect("syntax-only admission accepts the escape placeholder");
+        let used = measured.consumed();
+        assert!(used > 1);
+
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            validate_quote_template_syntax(declaration, &source, &contexts, &mut short),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut spent = SyntaxBudget::with_limit(used);
+        spent.charge().unwrap();
+        assert!(matches!(
+            validate_quote_template_syntax(declaration, &source, &contexts, &mut spent),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut exact = SyntaxBudget::with_limit(used);
+        validate_quote_template_syntax(declaration, &source, &contexts, &mut exact)
+            .expect("the exact remaining graph allowance admits the template");
+        assert_eq!(exact.consumed(), used);
     }
 
     #[test]
@@ -4436,6 +4817,7 @@ mod tests {
             }),
             SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                 contains_protected_type: false,
+                quote_sites: Default::default(),
                 expression: SurfaceExpr {
                     kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name)),
                     span,
@@ -4692,6 +5074,7 @@ mod tests {
         let packet: Arc<[MacroOutputNode]> = Arc::from([]);
         let nested = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::SyntaxInvocation {
                     name: name.clone(),
@@ -4821,6 +5204,7 @@ mod tests {
             .remove(0);
         let capture = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::SyntaxInvocation {
                     name: outer.name.clone(),

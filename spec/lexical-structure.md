@@ -19,19 +19,17 @@ syntactic position and scope.
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
 `impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `retain`,
 `resource`, `hook`, `register`, `cleanup`, `region`, `using`, `where`,
-`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `String`, `Bytes`, `true`, and
-`false` cannot be identifiers. The single spelling `_` is the
-wildcard token rather than an ordinary identifier; spellings such as `_tail`
-remain ordinary identifiers.
+`match`, `import`, `as`, `pub`, `opaque`, `syntax`, `Int`, `Bool`, `Unit`,
+`String`, `Bytes`, `true`, and `false` cannot be identifiers. The single
+spelling `_` is the wildcard token rather than an ordinary identifier;
+spellings such as `_tail` remain ordinary identifiers.
 
 `publish` remains an ordinary operation identifier. `cell` is contextual in a
 resource acquisition and remains an ordinary identifier elsewhere.
 `foreign`, `library`, `profile`, `symbol` and `name` are contextual in foreign
 declarations and remain ordinary identifiers elsewhere.
-`syntax` is contextual in a syntax declaration or targeted syntax import and
-remains an ordinary identifier elsewhere. A locally imported syntax name is
-reserved for that syntax in the importing module as described by
-[syntax expansion](syntax-expansion.md#definitions-and-imports).
+A locally imported syntax name is reserved for that syntax in the importing
+module as described by [syntax expansion](syntax-expansion.md#definitions-and-imports).
 `builtin` is reserved as a module-root name, not as an
 identifier; [name resolution](name-resolution.md#compiler-owned-cell-module)
 defines that root's fixed import.
@@ -55,8 +53,9 @@ written angle-bracketed parameter or argument list is nonempty. The longest
 token wins where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
-`$` introduces a capture in a syntax matcher or a splice in its template;
-outside those positions it is rejected by the parser.
+`$` introduces a capture in a syntax matcher, a splice in its template, or a
+hole or escape in the supported quotation forms described by
+[syntax expansion](syntax-expansion.md#quotation-and-template-escapes).
 Ordinary `String` literals, foreign profiles and native-symbol names use
 double-quoted strings. Their
 contents admit `\"`, `\\`, `\n`, `\r`, `\t` and `\0` escapes; other escapes,
@@ -89,10 +88,11 @@ requested kind.
 | `Plus`, `Star`, `Arrow`, `FatArrow` | `+`, `*`, `->`, `=>` |
 | `Pipe`, `Bang`, `Comma`, `Less`, `Greater` | `\|`, `!`, `,`, `<`, `>` |
 | `LineEnd` | LF or CRLF |
+| `SyntaxKeyword`, `Dollar` | `syntax`, `$` |
 
 Identifiers have a separate syntax representation. Parentheses and braces
-are represented as balanced groups; `$`, semicolon and end-of-file have no
-public `TokenKind` constructor. The interface and token operations are
+are represented as balanced groups; semicolon and end-of-file have no public
+`TokenKind` constructor. The interface and token operations are
 specified by [syntax expansion](syntax-expansion.md#canonical-syntax-interface).
 
 This complete entry module is rejected with the lexical reason `lex.comment`.

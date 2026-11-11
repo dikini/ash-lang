@@ -303,6 +303,23 @@ exposes these relationships for tools. Authored rejection text remains the
 transformer's message. Expansion happens during compilation and the generated
 executable does not run syntax services.
 
+## Quotation in declaration expansion
+
+During checked declaration expansion, an ordinary helper can construct an
+expression fragment with `syntax { ... }`. A `$name` inside the quote inserts
+the fragment stored in that ordinary variable. A declaration template can
+run an expression or multiline block in `${ ... }` and insert the resulting
+expression fragment. The escaped code is checked as ordinary Ash; integers
+and other primitive values are not implicitly converted to syntax.
+
+A reached quotation needs the compile-time syntax host. Running it in an
+ordinary program without that host fails. A procedural expression transformer
+can return the token and group view of a quoted capture for reparsing. Direct
+forwarding of a protected quoted expression, matcher-capture reads in escaped
+code, and the full repetition and generator forms are still under development. See
+[quotation and template escapes](../../spec/syntax-expansion.md#quotation-and-template-escapes)
+for the current boundary.
+
 ## Complete module-tree example
 
 Given this tree:

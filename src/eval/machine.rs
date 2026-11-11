@@ -6944,6 +6944,34 @@ pub(crate) fn evaluate_transformer_with_owners<'a>(
     syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
     staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    let mut contexts = Some(contexts);
+    evaluate_transformer_with_context_slot(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        &mut contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+    )
+}
+
+// The quote-input route recovers the same context allocation after the host has
+// finished, before the ordinary machine teardown.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_transformer_with_context_slot<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: &mut Option<std::sync::Arc<crate::syntax::SyntaxContexts>>,
+    frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
@@ -6962,40 +6990,50 @@ pub(crate) fn evaluate_transformer_with_owners<'a>(
         {
             machine.transformer_drop_observer = Some(TransformerDropObserver);
         }
-        let evaluation = machine.run_loop()?;
-        let (value, heap) = evaluation.into_observation_parts();
-        let host = machine
+        let mut transferred = (|| {
+            let evaluation = machine.run_loop()?;
+            let (value, heap) = evaluation.into_observation_parts();
+            let host = machine
+                .syntax_host
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            #[cfg(test)]
+            {
+                let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
+                machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+            }
+            let transferred = host
+                .transfer(&value, heap.cells(), &mut machine.instantiation_work)
+                .map(|output| (output, host.fresh_count()));
+            #[cfg(test)]
+            if captures.iter().any(|capture| {
+                matches!(
+                    capture,
+                    crate::surface::SurfaceSyntaxCapture::Declaration(_)
+                )
+            }) && transferred.is_ok()
+                && machine_test_hooks::TRANSFORMER_DROPS.get() == 0
+                && machine_test_hooks::ROOT_CLOSES.get() == 0
+            {
+                let count = machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get();
+                machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.set(count + 1);
+            }
+            #[cfg(test)]
+            if transferred.is_err() {
+                let failures = machine_test_hooks::TRANSFER_FAILURES.get();
+                machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
+            }
+            drop(value);
+            drop(heap);
+            transferred
+        })();
+        *contexts = machine
             .syntax_host
             .as_mut()
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        #[cfg(test)]
-        {
-            let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
-            machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+            .and_then(syntax::SyntaxHost::take_contexts);
+        if contexts.is_none() && transferred.is_ok() {
+            transferred = Err(RuntimeFailure::InvalidControlState);
         }
-        let transferred = host
-            .transfer(&value, heap.cells(), &mut machine.instantiation_work)
-            .map(|output| (output, host.fresh_count()));
-        #[cfg(test)]
-        if captures.iter().any(|capture| {
-            matches!(
-                capture,
-                crate::surface::SurfaceSyntaxCapture::Declaration(_)
-            )
-        }) && transferred.is_ok()
-            && machine_test_hooks::TRANSFORMER_DROPS.get() == 0
-            && machine_test_hooks::ROOT_CLOSES.get() == 0
-        {
-            let count = machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get();
-            machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.set(count + 1);
-        }
-        #[cfg(test)]
-        if transferred.is_err() {
-            let failures = machine_test_hooks::TRANSFER_FAILURES.get();
-            machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
-        }
-        drop(value);
-        drop(heap);
         drop(machine);
         transferred
     })();

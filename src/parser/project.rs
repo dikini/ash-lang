@@ -2112,6 +2112,7 @@ fn project_syntax_declaration(
             matcher: project_matcher_items(source, sequence, tokens)?,
             implementation: SurfaceSyntaxImplementation::Template,
             template_contents: Some(Vec::new().into()),
+            contains_quote_or_escape: false,
             span: node_span(source, child, tokens)?,
         });
     }
@@ -2168,51 +2169,56 @@ fn project_syntax_declaration(
             _ => return malformed(InternalReason::UnexpectedShape),
         }
     }
-    let (implementation, template_contents) = if let Some(block) =
-        child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody)
-    {
-        let mut contents = capture_template_contents(source, block, tokens, declaration, adapters)?;
-        if declaration {
-            contents = match contents.pop() {
-                Some(crate::syntax::MacroOutputNode::Group(
-                    crate::syntax::MacroDelimiter::Braces,
-                    mut children,
-                    _,
-                )) if contents.is_empty() => {
-                    if matches!(
-                        children.first(),
-                        Some(crate::syntax::MacroOutputNode::Token(
-                            TokenKind::LineEnd,
-                            _,
-                            _
-                        ))
-                    ) {
-                        children.remove(0);
+    let (implementation, template_contents, contains_quote_or_escape) =
+        if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
+            let (mut contents, contains_quote_or_escape) =
+                capture_template_contents(source, block, tokens, declaration, adapters)?;
+            if declaration {
+                contents = match contents.pop() {
+                    Some(crate::syntax::MacroOutputNode::Group(
+                        crate::syntax::MacroDelimiter::Braces,
+                        mut children,
+                        _,
+                    )) if contents.is_empty() => {
+                        if matches!(
+                            children.first(),
+                            Some(crate::syntax::MacroOutputNode::Token(
+                                TokenKind::LineEnd,
+                                _,
+                                _
+                            ))
+                        ) {
+                            children.remove(0);
+                        }
+                        children
                     }
-                    children
-                }
-                _ => return malformed(InternalReason::UnexpectedShape),
-            };
-        }
-        (SurfaceSyntaxImplementation::Template, Some(contents.into()))
-    } else {
-        let mut after_arrow = direct_tokens(child, tokens)
-            .skip_while(|token| token.kind != TokenKind::FatArrow)
-            .skip(1);
-        if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
-            return malformed(InternalReason::UnexpectedShape);
-        }
-        let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
-            InternalReason::UnexpectedShape,
-        ))?;
-        if after_arrow.next().is_some() {
-            return malformed(InternalReason::UnexpectedShape);
-        }
-        (
-            SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
-            None,
-        )
-    };
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                };
+            }
+            (
+                SurfaceSyntaxImplementation::Template,
+                Some(contents.into()),
+                contains_quote_or_escape,
+            )
+        } else {
+            let mut after_arrow = direct_tokens(child, tokens)
+                .skip_while(|token| token.kind != TokenKind::FatArrow)
+                .skip(1);
+            if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+            if after_arrow.next().is_some() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            (
+                SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
+                None,
+                false,
+            )
+        };
     Ok(SurfaceSyntaxDeclaration {
         category: if declaration {
             SurfaceSyntaxCategory::Declaration
@@ -2223,6 +2229,7 @@ fn project_syntax_declaration(
         matcher,
         implementation,
         template_contents,
+        contains_quote_or_escape,
         span: node_span(source, child, tokens)?,
     })
 }
@@ -3912,16 +3919,26 @@ fn charge_capture_contents_with_expression(
     // pending elements before either worklist can grow.
     budget.charge_units(root.children.len())?;
     budget.charge_units(root.children.len())?;
+    let quoted_dollar = matches!(root.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
     let mut pending = if new_type_scratch {
         budget.charge_units(root.children.len())?;
         let mut pending = Vec::with_capacity(root.children.len());
-        pending.extend(root.children.iter().rev());
+        pending.extend(
+            root.children
+                .iter()
+                .rev()
+                .map(|child| (child, quoted_dollar)),
+        );
         pending
     } else {
-        root.children.iter().rev().collect::<Vec<_>>()
+        root.children
+            .iter()
+            .rev()
+            .map(|child| (child, quoted_dollar))
+            .collect::<Vec<_>>()
     };
     let mut groups = contents_prefix;
-    while let Some(element) = pending.pop() {
+    while let Some((element, quoted_dollar)) = pending.pop() {
         budget.charge_units(2)?;
         match element {
             ConcreteElement::Node(node) => {
@@ -3939,7 +3956,14 @@ fn charge_capture_contents_with_expression(
                         pending.reserve_exact(node.children.len());
                     }
                 }
-                pending.extend(node.children.iter().rev());
+                let quoted_dollar =
+                    matches!(node.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
+                pending.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|child| (child, quoted_dollar)),
+                );
             }
             ConcreteElement::Token(index) => {
                 // Flattened index, reconstructed output entry and contents
@@ -3981,7 +4005,9 @@ fn charge_capture_contents_with_expression(
                             InternalReason::UnexpectedShape,
                         ))?;
                     }
-                    TokenKind::Dollar => {
+                    TokenKind::Dollar
+                        if kind != SurfaceSyntaxCaptureKind::Expression || !quoted_dollar =>
+                    {
                         return Err(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         )
@@ -5956,16 +5982,21 @@ fn project_syntax_expression_capture(
     expression: SurfaceExpr,
     contents: Vec<crate::syntax::MacroOutputNode>,
     contains_protected_type: bool,
-) -> SurfaceExpressionCapture {
+    quote_sites: crate::surface::CapturedQuoteSites,
+) -> Result<SurfaceExpressionCapture, ProjectionError> {
     if let [crate::syntax::MacroOutputNode::ForwardedExpression(original, _)] = contents.as_slice()
     {
-        original.clone()
+        if !matches!(quote_sites, crate::surface::CapturedQuoteSites::Empty) {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        Ok(original.clone())
     } else {
-        SurfaceExpressionCapture {
+        Ok(SurfaceExpressionCapture {
             contains_protected_type,
+            quote_sites,
             expression,
             contents: contents.into(),
-        }
+        })
     }
 }
 
@@ -6256,13 +6287,16 @@ fn capture_template_contents(
     tokens: &ProjectionTokens<'_>,
     declaration: bool,
     adapters: &mut Vec<SurfaceDefinition>,
-) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     let mut escapes = Vec::new();
+    let mut contains_quote_or_escape = false;
     let mut pending = Vec::new();
     reserve_expression_scratch(&mut pending, 1, tokens.expression_budget)?;
     pending.push(node);
     while let Some(current) = pending.pop() {
         charge_expression_allocation(1, tokens.expression_budget)?;
+        contains_quote_or_escape |=
+            matches!(current.kind, NodeKind::SyntaxQuote | NodeKind::SyntaxEscape);
         if current.kind == NodeKind::SyntaxEscape {
             if !declaration {
                 return malformed(InternalReason::UnexpectedShape);
@@ -6320,7 +6354,7 @@ fn capture_template_contents(
         }
     }
     capture_contents_with_escapes(source, node, tokens, &Default::default(), Some(&escapes))
-        .map(|(contents, _)| contents)
+        .map(|(contents, _)| (contents, contains_quote_or_escape))
 }
 
 fn make_template_escape_adapter(
@@ -6549,7 +6583,7 @@ fn capture_contents_with_escapes(
     #[allow(clippy::too_many_arguments)]
     fn push_group(
         source: &SourceFile,
-        indices: &[usize],
+        indices: &[(usize, bool)],
         position: usize,
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
@@ -6561,7 +6595,7 @@ fn capture_contents_with_escapes(
     ) -> Result<(), ProjectionError> {
         let close = indices
             .get(position.saturating_sub(1))
-            .and_then(|index| tokens.get(*index))
+            .and_then(|(index, _)| tokens.get(*index))
             .ok_or(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape,
             ))?;
@@ -6577,12 +6611,13 @@ fn capture_contents_with_escapes(
     #[allow(clippy::too_many_arguments)]
     fn push_leaf(
         source: &SourceFile,
-        indices: &[usize],
+        indices: &[(usize, bool)],
         position: &mut usize,
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         escapes: Option<&[(usize, SurfaceName)]>,
         index: usize,
+        quoted_dollar: bool,
         token: &Token,
         output: &mut Vec<MacroOutputNode>,
         contains_protected_type: &mut bool,
@@ -6601,10 +6636,10 @@ fn capture_contents_with_escapes(
                     .map_err(ProjectionError::ResourceLimit)?;
             }
             output.push(MacroOutputNode::TemplateEscape(adapter.clone()));
-        } else if matches!(token.kind, TokenKind::Dollar) {
+        } else if matches!(token.kind, TokenKind::Dollar) && !quoted_dollar {
             let next = indices
                 .get(*position)
-                .and_then(|index| tokens.projection_token(*index))
+                .and_then(|(index, _)| tokens.projection_token(*index))
                 .ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
@@ -6645,7 +6680,7 @@ fn capture_contents_with_escapes(
 
     fn sequence(
         source: &SourceFile,
-        indices: &[usize],
+        indices: &[(usize, bool)],
         position: &mut usize,
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
@@ -6654,7 +6689,7 @@ fn capture_contents_with_escapes(
     ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {
         let mut output = Vec::new();
         let mut contains_protected_type = false;
-        while let Some(&index) = indices.get(*position) {
+        while let Some(&(index, quoted_dollar)) = indices.get(*position) {
             let token = tokens.get(index).ok_or(ProjectionError::MalformedTree(
                 InternalReason::TokenOutOfRange,
             ))?;
@@ -6704,6 +6739,7 @@ fn capture_contents_with_escapes(
                     originals,
                     escapes,
                     index,
+                    quoted_dollar,
                     token,
                     &mut output,
                     &mut contains_protected_type,
@@ -6717,15 +6753,27 @@ fn capture_contents_with_escapes(
     }
 
     let mut indices = Vec::new();
+    let quote_tokens = escapes.is_none();
+    let quoted_dollar =
+        quote_tokens && matches!(node.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
     let mut pending = if tokens.expression_budget.is_some() {
         let mut pending = Vec::new();
         reserve_expression_scratch(&mut pending, node.children.len(), tokens.expression_budget)?;
-        pending.extend(node.children.iter().rev());
+        pending.extend(
+            node.children
+                .iter()
+                .rev()
+                .map(|child| (child, quoted_dollar)),
+        );
         pending
     } else {
-        node.children.iter().rev().collect::<Vec<_>>()
+        node.children
+            .iter()
+            .rev()
+            .map(|child| (child, quoted_dollar))
+            .collect::<Vec<_>>()
     };
-    while let Some(element) = pending.pop() {
+    while let Some((element, quoted_dollar)) = pending.pop() {
         match element {
             ConcreteElement::Node(child)
                 if child.kind == NodeKind::SyntaxEscape && escapes.is_some() =>
@@ -6734,7 +6782,7 @@ fn capture_contents_with_escapes(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 reserve_expression_scratch(&mut indices, 1, tokens.expression_budget)?;
-                indices.push(*index);
+                indices.push((*index, false));
             }
             ConcreteElement::Node(child) => {
                 reserve_expression_scratch(
@@ -6742,11 +6790,19 @@ fn capture_contents_with_escapes(
                     child.children.len(),
                     tokens.expression_budget,
                 )?;
-                pending.extend(child.children.iter().rev());
+                let quoted_dollar = quote_tokens
+                    && matches!(child.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
+                pending.extend(
+                    child
+                        .children
+                        .iter()
+                        .rev()
+                        .map(|element| (element, quoted_dollar)),
+                );
             }
             ConcreteElement::Token(index) => {
                 reserve_expression_scratch(&mut indices, 1, tokens.expression_budget)?;
-                indices.push(*index);
+                indices.push((*index, quoted_dollar));
             }
             ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
                 return Err(ProjectionError::RecoveryNodesPresent);
@@ -7327,7 +7383,8 @@ fn project_selected_declaration_invocation_node_inner(
                             expression,
                             contents,
                             contains_protected_type,
-                        ),
+                            crate::surface::CapturedQuoteSites::Empty,
+                        )?,
                     ));
                 }
                 SurfaceSyntaxCaptureKind::Type => {
@@ -7563,6 +7620,7 @@ pub(super) fn project_macro_expression_budgeted(
     frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
     owner_prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
+    quote_sites: Option<&std::cell::RefCell<QuoteProjection>>,
 ) -> Result<SurfaceExpr, DeclarationExpansionFailure> {
     for _ in 0..4 {
         budget.charge_units(parsed.tree.events.len())?;
@@ -7587,7 +7645,7 @@ pub(super) fn project_macro_expression_budgeted(
         staging_frames: None,
         preserve_name_diagnostic: false,
         expression_budget: None,
-        quote_sites: None,
+        quote_sites,
     };
     if charge_projection_preflight_with_expression(
         expression,
@@ -7703,6 +7761,7 @@ fn project_quote_contents<'a>(
     struct Group {
         delimiter: MacroDelimiter,
         opening: Span,
+        origin: Option<crate::syntax::MacroOrigin>,
         children: Vec<MacroOutputNode>,
     }
     enum Work<'a> {
@@ -7733,7 +7792,20 @@ fn project_quote_contents<'a>(
                     text_len.saturating_mul(2).saturating_add(2),
                     tokens.expression_budget,
                 )?;
+                if let Some(MacroOutputNode::Identifier(name, origin)) = name_token.original
+                    && let Some(budget) = tokens.expression_budget
+                {
+                    let mut budget = budget.borrow_mut();
+                    crate::syntax::charge_type_name_copy(name, 0, &mut budget)
+                        .map_err(ProjectionError::ResourceLimit)?;
+                    crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                        .map_err(ProjectionError::ResourceLimit)?;
+                }
                 let name = surface_name(name_token)?;
+                if let Some(budget) = tokens.expression_budget {
+                    crate::syntax::charge_type_name_copy(&name, 0, &mut budget.borrow_mut())
+                        .map_err(ProjectionError::ResourceLimit)?;
+                }
                 reserve_expression_scratch(&mut operands, 1, tokens.expression_budget)?;
                 operands.push(QuoteOperand::Name(name.clone()));
                 MacroOutputNode::Splice(name)
@@ -7775,6 +7847,21 @@ fn project_quote_contents<'a>(
                 match &token.kind {
                     TokenKind::LeftParen | TokenKind::LeftBrace => {
                         reserve_expression_scratch(&mut groups, 1, tokens.expression_budget)?;
+                        let origin = match tokens.originals.and_then(|nodes| nodes.get(&index)) {
+                            Some(MacroOutputNode::Group(_, _, origin))
+                            | Some(MacroOutputNode::Token(_, _, origin)) => {
+                                if let Some(budget) = tokens.expression_budget {
+                                    crate::syntax::charge_type_origin_copy(
+                                        origin,
+                                        0,
+                                        &mut budget.borrow_mut(),
+                                    )
+                                    .map_err(ProjectionError::ResourceLimit)?;
+                                }
+                                Some(origin.clone())
+                            }
+                            _ => None,
+                        };
                         groups.push(Group {
                             delimiter: if token.kind == TokenKind::LeftParen {
                                 MacroDelimiter::Parentheses
@@ -7782,6 +7869,7 @@ fn project_quote_contents<'a>(
                                 MacroDelimiter::Braces
                             },
                             opening: token.span,
+                            origin,
                             children: Vec::new(),
                         });
                         continue;
@@ -7800,7 +7888,35 @@ fn project_quote_contents<'a>(
                         MacroOutputNode::Group(
                             group.delimiter,
                             group.children,
-                            join_spans(source, group.opening, token.span)?.into(),
+                            match group.origin {
+                                Some(origin) => origin,
+                                None => join_spans(source, group.opening, token.span)?.into(),
+                            },
+                        )
+                    }
+                    TokenKind::Dollar => return malformed(InternalReason::UnexpectedShape),
+                    _ if matches!(
+                        tokens.originals.and_then(|nodes| nodes.get(&index)),
+                        Some(MacroOutputNode::Token(_, _, _))
+                    ) =>
+                    {
+                        let Some(MacroOutputNode::Token(kind, spelling, origin)) =
+                            tokens.originals.and_then(|nodes| nodes.get(&index))
+                        else {
+                            return malformed(InternalReason::UnexpectedShape);
+                        };
+                        if let Some(budget) = tokens.expression_budget {
+                            let mut budget = budget.borrow_mut();
+                            crate::syntax::charge_type_token_copy(kind, &mut budget)
+                                .map_err(ProjectionError::ResourceLimit)?;
+                            crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                                .map_err(ProjectionError::ResourceLimit)?;
+                            budget.charge().map_err(ProjectionError::ResourceLimit)?;
+                        }
+                        MacroOutputNode::Token(
+                            kind.clone(),
+                            std::sync::Arc::clone(spelling),
+                            origin.clone(),
                         )
                     }
                     TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
@@ -7808,12 +7924,28 @@ fn project_quote_contents<'a>(
                             text.len().saturating_add(1),
                             tokens.expression_budget,
                         )?;
-                        let name = surface_name(tokens.projection_token(index).ok_or(
+                        let projected = tokens.projection_token(index).ok_or(
                             ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
-                        )?)?;
-                        MacroOutputNode::Identifier(name, token.span.into())
+                        )?;
+                        let origin = if let Some(MacroOutputNode::Identifier(name, origin)) =
+                            projected.original
+                        {
+                            if let Some(budget) = tokens.expression_budget {
+                                let mut budget = budget.borrow_mut();
+                                crate::syntax::charge_type_name_copy(name, 0, &mut budget)
+                                    .map_err(ProjectionError::ResourceLimit)?;
+                                crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                                    .map_err(ProjectionError::ResourceLimit)?;
+                                crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                                    .map_err(ProjectionError::ResourceLimit)?;
+                            }
+                            origin.clone()
+                        } else {
+                            token.span.into()
+                        };
+                        let name = surface_name(projected)?;
+                        MacroOutputNode::Identifier(name, origin)
                     }
-                    TokenKind::Dollar => return malformed(InternalReason::UnexpectedShape),
                     kind => {
                         let start = usize::try_from(token.span.range().start()).map_err(|_| {
                             ProjectionError::MalformedTree(InternalReason::InvalidSpan)
@@ -7931,6 +8063,10 @@ fn project_expression_with_fragments(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<SurfaceExpr, ProjectionError> {
+    struct CaptureQuotes {
+        sites: Vec<crate::syntax::SurfaceQuoteSite>,
+        descendants: bool,
+    }
     let mut tasks = if tokens.expression_budget.is_some() {
         let mut tasks = Vec::new();
         reserve_expression_scratch(&mut tasks, 1, tokens.expression_budget)?;
@@ -7942,6 +8078,8 @@ fn project_expression_with_fragments(
     let mut projected = Vec::new();
     let mut type_facts = Vec::<bool>::new();
     let mut capture_depth = 0_usize;
+    let mut capture_quotes: Vec<CaptureQuotes> = Vec::new();
+    let mut completed_quotes: Vec<crate::surface::CapturedQuoteSites> = Vec::new();
     macro_rules! push_scratch {
         ($items:expr, $item:expr $(,)?) => {{
             let items = &mut *$items;
@@ -8441,10 +8579,16 @@ fn project_expression_with_fragments(
                             | crate::syntax::MacroOutputNode::ForwardedExpression(capture, _),
                         ) = original_nodes.get(index)
                     {
+                        if !matches!(
+                            &capture.quote_sites,
+                            crate::surface::CapturedQuoteSites::Empty
+                        ) {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
                         push_result!(capture.expression.clone());
                     } else if let Some(quote) = optional_child_of_kind(node, NodeKind::SyntaxQuote)?
                     {
-                        if tokens.quote_sites.is_none() || capture_depth != 0 {
+                        if tokens.quote_sites.is_none() {
                             return malformed(InternalReason::UnexpectedShape);
                         }
                         let (contents, operands) = project_quote_contents(source, quote, tokens)?;
@@ -8516,6 +8660,11 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                reserve_expression_scratch(&mut capture_quotes, 1, tokens.expression_budget)?;
+                capture_quotes.push(CaptureQuotes {
+                    sites: Vec::new(),
+                    descendants: false,
+                });
             }
             ExpressionTask::EndCapture => {
                 capture_depth =
@@ -8524,6 +8673,19 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                let frame = capture_quotes.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let marked = frame.descendants || !frame.sites.is_empty();
+                if marked && let Some(parent) = capture_quotes.last_mut() {
+                    parent.descendants = true;
+                }
+                reserve_expression_scratch(&mut completed_quotes, 1, tokens.expression_budget)?;
+                completed_quotes.push(if marked {
+                    crate::surface::CapturedQuoteSites::Owned(frame.sites)
+                } else {
+                    crate::surface::CapturedQuoteSites::Empty
+                });
             }
             ExpressionTask::QuoteName(name) => {
                 let span = name.span;
@@ -8566,11 +8728,9 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 let callee = std::ptr::from_ref(application.function.as_ref()) as usize;
-                let mut sites = sites.borrow_mut();
-                reserve_expression_scratch(&mut sites.sites, 1, tokens.expression_budget)?;
                 charge_expression_move(contents.len(), tokens.expression_budget)?;
                 charge_expression_allocation(1, tokens.expression_budget)?;
-                sites.sites.push(crate::syntax::SurfaceQuoteSite {
+                let site = crate::syntax::SurfaceQuoteSite {
                     callee,
                     template: std::sync::Arc::new(crate::syntax::QuoteTemplate {
                         ordinal,
@@ -8578,8 +8738,15 @@ fn project_expression_with_fragments(
                         contents: contents.into_boxed_slice(),
                         holes: count,
                     }),
-                });
-                drop(sites);
+                };
+                if let Some(frame) = capture_quotes.last_mut() {
+                    reserve_expression_scratch(&mut frame.sites, 1, tokens.expression_budget)?;
+                    frame.sites.push(site);
+                } else {
+                    let mut sites = sites.borrow_mut();
+                    reserve_expression_scratch(&mut sites.sites, 1, tokens.expression_budget)?;
+                    sites.sites.push(site);
+                }
                 push_result!(expression);
             }
             ExpressionTask::FinishSyntaxInvocation {
@@ -8599,6 +8766,15 @@ fn project_expression_with_fragments(
                 charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let mut expressions = projected.split_off(split).into_iter();
                 let mut contents = contents.into_iter();
+                let mut quote_packets = if tokens.quote_sites.is_some() {
+                    let start = completed_quotes.len().checked_sub(count).ok_or(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                    )?;
+                    charge_expression_move(count, tokens.expression_budget)?;
+                    completed_quotes.split_off(start).into_iter()
+                } else {
+                    Vec::new().into_iter()
+                };
                 let facts_start =
                     if tokens.expression_budget.is_some() {
                         type_facts.len().checked_sub(count).ok_or(
@@ -8630,7 +8806,16 @@ fn project_expression_with_fragments(
                                     expression,
                                     contents,
                                     contains_type,
-                                ),
+                                    if tokens.quote_sites.is_some() {
+                                        quote_packets.next().ok_or(
+                                            ProjectionError::MalformedTree(
+                                                InternalReason::UnexpectedShape,
+                                            ),
+                                        )?
+                                    } else {
+                                        crate::surface::CapturedQuoteSites::Empty
+                                    },
+                                )?,
                             ))
                         }
                     }),
@@ -9101,7 +9286,11 @@ fn project_expression_with_fragments(
             }
         }
     }
-    if projected.len() != 1 {
+    if projected.len() != 1
+        || capture_depth != 0
+        || !capture_quotes.is_empty()
+        || !completed_quotes.is_empty()
+    {
         return malformed(InternalReason::UnexpectedShape);
     }
     projected.pop().ok_or(ProjectionError::MalformedTree(
@@ -13062,6 +13251,7 @@ mod tests {
         };
         let ordinary = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span: probe_span,
@@ -15593,6 +15783,7 @@ mod tests {
                 MacroOutputNode::ForwardedExpression(
                     SurfaceExpressionCapture {
                         contains_protected_type: false,
+                        quote_sites: Default::default(),
                         expression: SurfaceExpr {
                             kind: SurfaceExprKind::Unit,
                             span,
@@ -15715,6 +15906,7 @@ mod tests {
             MacroOutputNode::Expression(
                 SurfaceExpressionCapture {
                     contains_protected_type: false,
+                    quote_sites: Default::default(),
                     expression: SurfaceExpr {
                         kind: SurfaceExprKind::Unit,
                         span,
@@ -15727,6 +15919,7 @@ mod tests {
             MacroOutputNode::ForwardedExpression(
                 SurfaceExpressionCapture {
                     contains_protected_type: false,
+                    quote_sites: Default::default(),
                     expression: SurfaceExpr {
                         kind: SurfaceExprKind::Unit,
                         span,
@@ -17370,6 +17563,7 @@ mod tests {
                         MacroOutputNode::ForwardedExpression(
                             SurfaceExpressionCapture {
                                 contains_protected_type: false,
+                                quote_sites: Default::default(),
                                 expression: SurfaceExpr {
                                     kind: SurfaceExprKind::Unit,
                                     span,
@@ -20061,6 +20255,7 @@ mod tests {
         };
         let value = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 diagnostic: None,
                 kind: SurfaceExprKind::Unit,
@@ -20204,6 +20399,7 @@ mod tests {
         let body_name = make_name("value", 8, span(body_start, body_start + 5));
         let body = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(body_name.clone())),
                 span: body_name.span,
@@ -20826,6 +21022,7 @@ mod tests {
                         kind: SurfaceSyntaxCaptureKind::Expression,
                     } => Some(SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                         contains_protected_type: false,
+                        quote_sites: Default::default(),
                         expression: SurfaceExpr {
                             kind: SurfaceExprKind::Unit,
                             span: name.span,
@@ -21175,6 +21372,7 @@ mod tests {
         let expression = captured.equations[0].body.clone();
         let capture = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: expression.clone(),
             contents: std::sync::Arc::from([]),
         };
@@ -21656,6 +21854,7 @@ mod tests {
         let expression = captured.equations[0].body.clone();
         let capture = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: expression.clone(),
             contents: std::sync::Arc::from([]),
         };
@@ -21668,7 +21867,7 @@ mod tests {
                 |token| matches!(&token.kind, TokenKind::Identifier(name) if name == "placeholder"),
             )
             .unwrap();
-        let originals = std::collections::HashMap::from([(
+        let mut originals = std::collections::HashMap::from([(
             index,
             crate::syntax::MacroOutputNode::Expression(capture, expression.span.into()),
         )]);
@@ -21691,6 +21890,26 @@ mod tests {
             panic!("expected the projected equation");
         };
         assert_eq!(global.equations[0].body, expression);
+        for sites in [
+            crate::surface::CapturedQuoteSites::Owned(Vec::new()),
+            crate::surface::CapturedQuoteSites::Lost,
+        ] {
+            let Some(crate::syntax::MacroOutputNode::Expression(capture, _)) =
+                originals.get_mut(&index)
+            else {
+                panic!("the protected expression remains available");
+            };
+            capture.quote_sites = sites;
+            let mut tokens = ProjectionTokens::source(raw_tokens);
+            tokens.originals = Some(&originals);
+            tokens.occurrence = Some(source.span(ByteRange::new(0, 4).unwrap()).unwrap());
+            assert!(matches!(
+                project_surface_module(&source, root, &tokens),
+                Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape
+                ))
+            ));
+        }
     }
 
     #[test]
@@ -22457,6 +22676,132 @@ usage arena => resume arena
     }
 
     #[test]
+    fn captured_quote_keeps_dollars_as_syntax_data() {
+        use crate::{
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+
+        let quote = "syntax { ${ syntax { $fragment } } }";
+        assert!(
+            include_str!("../../docs/design/macros/fixtures/escapes/quote_roundtrip_forms.ash")
+                .contains(quote)
+        );
+        let source = SourceFile::new(
+            "capture.ash",
+            format!("probe : Unit -> Int\nprobe () = {quote}\n"),
+        )
+        .unwrap();
+        let tree = super::super::parse(lex(&source).unwrap());
+        assert!(tree.parse_diagnostics().is_empty());
+        let mut pending = vec![tree.root().unwrap()];
+        let quote_node = loop {
+            let node = pending.pop().expect("the actual quote is present");
+            if node.kind == NodeKind::SyntaxQuote {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let (contents, contains_type) =
+            capture_contents_and_type(&source, quote_node, &tokens, &Default::default()).unwrap();
+        assert!(!contains_type);
+        let [
+            MacroOutputNode::Token(TokenKind::SyntaxKeyword, _, _),
+            MacroOutputNode::Group(MacroDelimiter::Braces, outer, _),
+        ] = contents.as_slice()
+        else {
+            panic!("the outer quote remains structured syntax");
+        };
+        let [
+            MacroOutputNode::Token(TokenKind::Dollar, _, _),
+            MacroOutputNode::Group(MacroDelimiter::Braces, escape, _),
+        ] = outer.as_slice()
+        else {
+            panic!("the inline escape retains its dollar and complete group");
+        };
+        let [
+            MacroOutputNode::Token(TokenKind::SyntaxKeyword, _, _),
+            MacroOutputNode::Group(MacroDelimiter::Braces, inner, _),
+        ] = escape.as_slice()
+        else {
+            panic!("the nested quote remains structured syntax");
+        };
+        assert!(matches!(inner.as_slice(),
+            [MacroOutputNode::Token(TokenKind::Dollar, _, _), MacroOutputNode::Identifier(name, _)]
+                if name.text == "fragment"));
+        let reserve = |budget: &mut SyntaxBudget| {
+            charge_capture_contents_with_expression(
+                quote_node,
+                &tokens,
+                SurfaceSyntaxCaptureKind::Expression,
+                false,
+                true,
+                0,
+                budget,
+            )
+        };
+        let mut measured = SyntaxBudget::default();
+        reserve(&mut measured).expect("the graph budget admits quote tokens before copying");
+        let used = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            reserve(&mut short),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut exact = SyntaxBudget::with_limit(used);
+        reserve(&mut exact).expect("the exact preflight allowance succeeds");
+        assert_eq!(exact.consumed(), used);
+        let mut copy_budget = SyntaxBudget::default();
+        reserve(&mut copy_budget).unwrap();
+        let reserved = copy_budget.consumed();
+        let loan = std::cell::RefCell::new(&mut copy_budget);
+        let mut paid_tokens = ProjectionTokens::source(tree.tokens());
+        paid_tokens.expression_budget = Some(&loan);
+        let (paid_contents, paid_type) =
+            capture_contents_and_type(&source, quote_node, &paid_tokens, &Default::default())
+                .expect("the preflighted quote is copied on the same graph ledger");
+        assert_eq!(paid_contents, contents);
+        assert!(!paid_type);
+        assert!(loan.borrow().consumed() > reserved);
+
+        let template = SourceFile::new("template.ash", "$part").unwrap();
+        let raw = lex(&template).unwrap().tokens;
+        let node = ConcreteNode {
+            kind: NodeKind::TemplateSplice,
+            children: (0..2).map(ConcreteElement::Token).collect(),
+        };
+        assert!(matches!(
+            charge_capture_contents_with_expression(
+                &node,
+                &ProjectionTokens::source(&raw),
+                SurfaceSyntaxCaptureKind::Expression,
+                false,
+                true,
+                0,
+                &mut SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let (contents, _) = capture_contents_with_escapes(
+            &template,
+            &node,
+            &ProjectionTokens::source(&raw),
+            &Default::default(),
+            Some(&[]),
+        )
+        .unwrap();
+        assert!(
+            matches!(contents.as_slice(), [MacroOutputNode::Splice(name)] if name.text == "part")
+        );
+    }
+
+    #[test]
     fn selected_expression_capture_fact_follows_originals_and_groups() {
         use crate::{
             syntax::MacroOutputNode,
@@ -22529,7 +22874,18 @@ usage arena => resume arena
             expression: expression.clone(),
             contents: Arc::clone(&retained),
             contains_protected_type: true,
+            quote_sites: Default::default(),
         };
+        assert!(matches!(
+            original.clone().quote_sites,
+            crate::surface::CapturedQuoteSites::Empty
+        ));
+        let mut quoted = original.clone();
+        quoted.quote_sites = crate::surface::CapturedQuoteSites::Owned(Vec::new());
+        assert!(matches!(
+            quoted.clone().quote_sites,
+            crate::surface::CapturedQuoteSites::Lost
+        ));
         let expression_source = SourceFile::new("fact-expression.ash", "((piece))").unwrap();
         let expression_raw = lex(&expression_source).unwrap().tokens;
         let expression_span = expression_raw[2].span;
@@ -22556,7 +22912,9 @@ usage arena => resume arena
             expression,
             vec![MacroOutputNode::ForwardedExpression(original, span.into())],
             false,
-        );
+            crate::surface::CapturedQuoteSites::Empty,
+        )
+        .unwrap();
         assert!(restored.contains_protected_type);
         assert!(Arc::ptr_eq(&restored.contents, &retained));
     }
@@ -23069,6 +23427,7 @@ usage arena => resume arena
                         expression,
                         contents,
                         contains_protected_type: true,
+                        quote_sites: Default::default(),
                     },
                     span.into(),
                 ),

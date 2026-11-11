@@ -12,8 +12,11 @@ Semantics](static-semantics.md) defines its type requirements.
 
 ## Grammar
 
-The following grammar is the complete Ash surface grammar. Each `;` terminates
-an EBNF production; it is not Ash source punctuation.
+The following grammar describes the core Ash surface grammar and expression
+syntax. The implemented declaration-template subset is described in
+[syntax expansion](syntax-expansion.md); the accepted CP-0034 extensions are
+not yet complete. Each `;` terminates an EBNF production; it is not Ash source
+punctuation.
 
 ```ebnf
 module ::= { import_declaration line_end } { module_declaration line_end } ;
@@ -208,7 +211,10 @@ primary_expression ::=
   | hook_expression
   | registration_expression
   | cleanup_expression
-  | parenthesized_expression ;
+  | parenthesized_expression
+  | quotation ;
+quotation ::= "syntax" "{" quoted_expression "}" ;
+quoted_expression ::= /one expression with quotation holes and inner escapes/ ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
 perform_expression ::= "perform" operation_reference primary_expression ;

@@ -132,7 +132,7 @@ pub(super) struct SyntaxHost<'inv> {
     source: SourceFile,
     caller: SurfaceName,
     introduction: usize,
-    contexts: Arc<SyntaxContexts>,
+    contexts: Option<Arc<SyntaxContexts>>,
     syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
     quote_sites: Arc<[crate::syntax::PreparedQuoteSite]>,
     staged_owners: Option<&'inv mut Vec<crate::syntax::SyntaxOwner>>,
@@ -167,13 +167,14 @@ impl<'inv> SyntaxHost<'inv> {
         frame: Arc<ExpansionFrame>,
         syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
     ) -> Result<Self, RuntimeFailure> {
+        let mut contexts = Some(contexts);
         Self::new_with_owners(
             entry,
             captures,
             source,
             caller,
             introduction,
-            contexts,
+            &mut contexts,
             frame,
             syntax_work,
             None,
@@ -188,7 +189,7 @@ impl<'inv> SyntaxHost<'inv> {
         source: &SourceFile,
         caller: &SurfaceName,
         introduction: usize,
-        contexts: Arc<SyntaxContexts>,
+        contexts: &mut Option<Arc<SyntaxContexts>>,
         frame: Arc<ExpansionFrame>,
         mut syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
         staged_owners: Option<&'inv mut Vec<crate::syntax::SyntaxOwner>>,
@@ -305,6 +306,52 @@ impl<'inv> SyntaxHost<'inv> {
                 .map_err(syntax_failure)?;
             crate::syntax::charge_type_name_copy(caller, 0, budget).map_err(syntax_failure)?;
         }
+        let captures = {
+            let mut copied = Vec::with_capacity(captures.len());
+            for capture in captures {
+                if syntax_work.is_none() && matches!(capture, SurfaceSyntaxCapture::Declaration(_))
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                if let Some(budget) = syntax_work.as_deref_mut() {
+                    match capture {
+                        SurfaceSyntaxCapture::Declaration(_) => {
+                            budget.charge().map_err(syntax_failure)?;
+                        }
+                        SurfaceSyntaxCapture::Identifier(capture) => {
+                            crate::syntax::charge_type_name_copy(&capture.name, 0, budget)
+                                .map_err(syntax_failure)?;
+                            crate::syntax::charge_type_origin_copy(&capture.origin, 0, budget)
+                                .map_err(syntax_failure)?;
+                        }
+                        SurfaceSyntaxCapture::Type(capture) => {
+                            crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
+                                .map_err(syntax_failure)?;
+                        }
+                        SurfaceSyntaxCapture::Pattern(capture) => {
+                            require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
+                                &capture.pattern,
+                                1,
+                                false,
+                                budget,
+                            ))?;
+                        }
+                        SurfaceSyntaxCapture::Expression(capture) => {
+                            require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                                &capture.expression,
+                                1,
+                                false,
+                                budget,
+                            ))?;
+                        }
+                        _ => return Err(RuntimeFailure::InvalidControlState),
+                    }
+                }
+                copied.push(capture.clone());
+            }
+            copied
+        };
+        let contexts = contexts.take().ok_or(RuntimeFailure::InvalidControlState)?;
         Ok(Self {
             occurrence: entry.occurrence,
             binder: entry.binder,
@@ -316,58 +363,11 @@ impl<'inv> SyntaxHost<'inv> {
             source: source.clone(),
             caller: caller.clone(),
             introduction,
-            contexts,
+            contexts: Some(contexts),
             quote_sites: Arc::clone(&entry.quote_sites),
             staged_owners,
             fresh_count: 0,
-            captures: {
-                let mut copied = Vec::with_capacity(captures.len());
-                for capture in captures {
-                    if syntax_work.is_none()
-                        && matches!(capture, SurfaceSyntaxCapture::Declaration(_))
-                    {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    }
-                    if let Some(budget) = syntax_work.as_deref_mut() {
-                        match capture {
-                            SurfaceSyntaxCapture::Declaration(_) => {
-                                budget.charge().map_err(syntax_failure)?;
-                            }
-                            SurfaceSyntaxCapture::Identifier(capture) => {
-                                crate::syntax::charge_type_name_copy(&capture.name, 0, budget)
-                                    .map_err(syntax_failure)?;
-                                crate::syntax::charge_type_origin_copy(&capture.origin, 0, budget)
-                                    .map_err(syntax_failure)?;
-                            }
-                            SurfaceSyntaxCapture::Type(capture) => {
-                                crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
-                                    .map_err(syntax_failure)?;
-                            }
-                            SurfaceSyntaxCapture::Pattern(capture) => {
-                                require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
-                                    &capture.pattern,
-                                    1,
-                                    false,
-                                    budget,
-                                ))?;
-                            }
-                            SurfaceSyntaxCapture::Expression(capture) => {
-                                require_unbridged_charge(
-                                    crate::syntax::charge_new_expression_copy(
-                                        &capture.expression,
-                                        1,
-                                        false,
-                                        budget,
-                                    ),
-                                )?;
-                            }
-                            _ => return Err(RuntimeFailure::InvalidControlState),
-                        }
-                    }
-                    copied.push(capture.clone());
-                }
-                copied
-            },
+            captures,
             syntax_work,
             type_accounting,
             expressions: Vec::new(),
@@ -387,6 +387,10 @@ impl<'inv> SyntaxHost<'inv> {
         self.handle(CompilerSyntaxHandleKind::Input)
     }
 
+    pub(super) fn take_contexts(&mut self) -> Option<Arc<SyntaxContexts>> {
+        self.contexts.take()
+    }
+
     pub(super) fn fresh_count(&self) -> usize {
         if self.staged_owners.is_some() {
             0
@@ -401,8 +405,11 @@ impl<'inv> SyntaxHost<'inv> {
         declaration: crate::source::Span,
         import_span: crate::source::Span,
     ) -> Result<usize, RuntimeFailure> {
-        let contexts =
-            Arc::get_mut(&mut self.contexts).ok_or(RuntimeFailure::InvalidControlState)?;
+        let contexts = self
+            .contexts
+            .as_mut()
+            .and_then(Arc::get_mut)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
         let staged = self
             .staged_owners
             .as_deref_mut()
@@ -482,6 +489,9 @@ impl<'inv> SyntaxHost<'inv> {
             if self.quote_sites[index].nodes.application != node {
                 continue;
             }
+            #[cfg(test)]
+            super::machine_test_hooks::QUOTE_REACHES
+                .set(super::machine_test_hooks::QUOTE_REACHES.get() + 1);
             if self.staged_owners.is_none() || self.syntax_work.is_none() {
                 return Err(RuntimeFailure::InvalidControlState);
             }
@@ -615,7 +625,9 @@ impl<'inv> SyntaxHost<'inv> {
             &source,
             template.origin,
             output,
-            &self.contexts,
+            self.contexts
+                .as_deref()
+                .ok_or(RuntimeFailure::InvalidControlState)?,
             &self.frame,
             self.syntax_work
                 .as_deref_mut()
@@ -626,6 +638,15 @@ impl<'inv> SyntaxHost<'inv> {
         reserve_type_push(&mut self.expressions, self.syntax_work.as_deref_mut(), true)?;
         let result = self.expressions.len();
         self.expressions.push(capture);
+        #[cfg(test)]
+        {
+            let completions = super::machine_test_hooks::QUOTE_COMPLETIONS.get();
+            if completions == 0 {
+                super::machine_test_hooks::FIRST_QUOTE_COMPLETION_WORK
+                    .set(self.syntax_work.as_deref().map(|budget| budget.consumed()));
+            }
+            super::machine_test_hooks::QUOTE_COMPLETIONS.set(completions + 1);
+        }
         Ok(Some(
             self.handle(CompilerSyntaxHandleKind::Expression(result)),
         ))
@@ -1277,7 +1298,9 @@ impl<'inv> SyntaxHost<'inv> {
                         &self.source,
                         self.frame.invocation,
                         output,
-                        &self.contexts,
+                        self.contexts
+                            .as_deref()
+                            .ok_or(RuntimeFailure::InvalidControlState)?,
                         &self.frame,
                         self.syntax_work
                             .as_deref_mut()
@@ -1324,13 +1347,16 @@ impl<'inv> SyntaxHost<'inv> {
                 match crate::syntax::admit_transformer_output(
                     &self.source,
                     output,
-                    &self.contexts,
+                    self.contexts
+                        .as_deref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
                     &self.frame,
                 ) {
                     Ok(expression) => {
                         let index = self.expressions.len();
                         self.expressions.push(SurfaceExpressionCapture {
                             contains_protected_type: false,
+                            quote_sites: Default::default(),
                             expression,
                             contents,
                         });
@@ -1365,7 +1391,9 @@ impl<'inv> SyntaxHost<'inv> {
                     &self.source,
                     self.frame.invocation,
                     output,
-                    &self.contexts,
+                    self.contexts
+                        .as_deref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
                     &self.frame,
                     self.syntax_work
                         .as_deref_mut()
@@ -1420,7 +1448,9 @@ impl<'inv> SyntaxHost<'inv> {
                     &self.source,
                     self.frame.invocation,
                     output,
-                    &self.contexts,
+                    self.contexts
+                        .as_deref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
                     &self.frame,
                     self.syntax_work
                         .as_deref_mut()
@@ -2541,7 +2571,7 @@ mod tests {
                 diagnostic: None,
             },
             introduction: 0,
-            contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+            contexts: Some(Arc::new(SyntaxContexts::new(&[], &[], &[]))),
             syntax_work: Some(budget),
             quote_sites: Arc::from([]),
             staged_owners: None,
@@ -3535,6 +3565,7 @@ mod tests {
         );
         let expression = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span,
@@ -3658,7 +3689,7 @@ mod tests {
                         &host.source,
                         span,
                         vec![node.clone()],
-                        &host.contexts,
+                        host.contexts.as_deref().unwrap(),
                         &host.frame,
                         &mut budget,
                     )
@@ -3668,7 +3699,7 @@ mod tests {
                         &host.source,
                         span,
                         vec![node.clone()],
-                        &host.contexts,
+                        host.contexts.as_deref().unwrap(),
                         &host.frame,
                         &mut budget,
                     )
@@ -4245,7 +4276,7 @@ mod tests {
                     let mut intake_budget = SyntaxBudget::default();
                     let mut intake = SyntaxHost::new(
                         &fixture.entry, &captures, &host.source, &host.caller, 0,
-                        Arc::clone(&host.contexts), Arc::clone(&host.frame), Some(&mut intake_budget),
+                        Arc::clone(host.contexts.as_ref().unwrap()), Arc::clone(&host.frame), Some(&mut intake_budget),
                     ).unwrap();
                     assert_eq!(Arc::strong_count(&alias), 3);
                     intake.constructors.insert(
@@ -5980,6 +6011,7 @@ mod tests {
             host.captures
                 .push(SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                     contains_protected_type: false,
+                    quote_sites: Default::default(),
                     expression: SurfaceExpr {
                         kind: SurfaceExprKind::Unit,
                         span,
@@ -6296,6 +6328,7 @@ mod tests {
                 vec![MacroOutputNode::ForwardedExpression(
                     SurfaceExpressionCapture {
                         contains_protected_type: false,
+                        quote_sites: Default::default(),
                         expression: SurfaceExpr {
                             kind: SurfaceExprKind::Unit,
                             span,
@@ -7548,6 +7581,7 @@ mod tests {
         let nested: Arc<[MacroOutputNode]> = Arc::from([]);
         let expression = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span,
@@ -7707,6 +7741,7 @@ mod tests {
         // independently of the parser.
         host.expressions.push(SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span,
@@ -8025,6 +8060,7 @@ mod tests {
                 }
                 let supported = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                     contains_protected_type: false,
+                    quote_sites: Default::default(),
                     expression,
                     contents: Arc::from([]),
                 });
@@ -8115,7 +8151,7 @@ mod tests {
                     source,
                     caller: name,
                     introduction: 0,
-                    contexts,
+                    contexts: Some(contexts),
                     syntax_work: None,
                     quote_sites: Arc::from([]),
                     staged_owners: None,
@@ -8262,7 +8298,7 @@ mod tests {
             source: source.clone(),
             caller: name.clone(),
             introduction: 0,
-            contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+            contexts: Some(Arc::new(SyntaxContexts::new(&[], &[], &[]))),
             syntax_work: None,
             quote_sites: Arc::from([]),
             staged_owners: None,
@@ -8521,6 +8557,7 @@ mod tests {
         };
         let protected = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression,
             contents: vec![MacroOutputNode::Identifier(name.clone(), combined.clone())].into(),
         };
@@ -8537,12 +8574,13 @@ mod tests {
         let expression = crate::syntax::admit_transformer_output(
             &source,
             contents.clone(),
-            &host.contexts,
+            host.contexts.as_deref().unwrap(),
             &host.frame,
         )
         .expect("the mixed captured syntax is an expression");
         let original = SurfaceExpressionCapture {
             contains_protected_type: false,
+            quote_sites: Default::default(),
             expression,
             contents: contents.into(),
         };

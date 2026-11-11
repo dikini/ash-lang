@@ -18,7 +18,7 @@ pub use machine::{
 };
 pub(crate) use machine::{
     evaluate_effect_with_quote_guards, evaluate_effect_with_source_native_quote_guards,
-    evaluate_transformer_with_owners,
+    evaluate_transformer_with_context_slot, evaluate_transformer_with_owners,
 };
 #[doc(hidden)]
 pub use value::CompilerSyntaxHandle;
