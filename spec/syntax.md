@@ -46,17 +46,37 @@ import_item ::=
 import_name ::= identifier | upper_identifier ;
 
 syntax_declaration ::=
-  "pub" "syntax" identifier matcher_item { matcher_item }
-  "=>" ( template_block | "using" identifier ) ;
+    "pub" "syntax" identifier matcher_item { matcher_item }
+      "=>" ( template_block | "using" identifier )
+  | "pub" "syntax" "declaration" ":" "(" identifier ")"
+      { declaration_matcher_item }
+      "=>" ( declaration_template_block | "using" identifier ) ;
 matcher_item ::= matcher_literal | "$" identifier ":" ( "expr" | "ident" ) ;
+declaration_matcher_item ::=
+    matcher_literal
+  | "$" ( identifier | upper_identifier ) ":" ( "ident" | "expr" | "type" | "pattern" | "declaration" )
+  | "(" { declaration_matcher_item } ")"
+  | "{" { declaration_matcher_item | line_end } "}"
+  | "$" "(" { declaration_matcher_item } ")" [ repetition_separator ] ( "*" | "+" ) ;
 template_block ::= "{" { template_element } "}" ;
 template_element ::=
     template_token
   | "$" identifier
   | "(" { template_element } ")"
   | "{" { template_element } "}" ;
+declaration_template_block ::= "{" { declaration_template_element } "}" ;
+declaration_template_element ::=
+    template_token
+  | "$" ( identifier | upper_identifier )
+  | "$" "(" { declaration_template_element | line_end } ")" [ repetition_separator ] ( "*" | "+" )
+  | "$" "{" expression "}"
+  | "$" block
+  | "(" { declaration_template_element } ")"
+  | "{" { declaration_template_element | line_end } "}"
+  | line_end ;
 syntax_invocation ::= identifier syntax_matcher_input ;
 matcher_literal ::= /one permitted literal token/ ;
+repetition_separator ::= /one permitted non-delimiter token/ ;
 template_token ::= /one token other than a group delimiter or "$"/ ;
 syntax_matcher_input ::= /input accepted by the selected syntax matcher/ ;
 
@@ -276,7 +296,7 @@ line_end ::= /logical-newline-in-module-or-block-context/ ;
 `syntax_invocation` is selected by a locally imported syntax name; the
 remainder is determined by that declaration's matcher, not by a global parser
 extension. A syntax name begins with a lowercase letter and is not a reserved
-word. A matcher occupies one logical line, has at least one uniquely named
+word. An expression matcher occupies one logical line, has at least one uniquely named
 capture, ends in an expression capture, and separates adjacent captures with
 literal tokens. It has no repetition, alternatives, or
 optional items. Group delimiters, logical line ends, `$`, and `=>` are not
@@ -284,6 +304,12 @@ matcher literals. A template retains balanced token groups and named splices;
 its substituted body must parse as one block expression. The definition and
 import restrictions are specified in
 [syntax expansion](syntax-expansion.md#definitions-and-imports).
+
+A declaration matcher can use the five capture kinds, balanced groups and
+repetitions described in [declaration syntax](syntax-expansion.md#imported-declaration-syntax).
+Its expanded output is a sequence of ordinary module declarations. Repetition
+and escape combinations that require generator or per-iteration escape support
+remain under development.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

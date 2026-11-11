@@ -303,6 +303,38 @@ exposes these relationships for tools. Authored rejection text remains the
 transformer's message. Expansion happens during compilation and the generated
 executable does not run syntax services.
 
+## Imported declaration syntax
+
+A declaration form can capture caller syntax and emit ordinary module
+declarations. For example, save this as `forms.ash`:
+
+```ash
+pub syntax declaration: (ones) $( $name:ident ),+ => {
+    $(
+        pub $name : Unit -> Int
+        $name () = 1
+    )+
+}
+```
+
+Then run this entry module:
+
+```ash
+import forms (syntax ones)
+ones first, second
+main : Unit -> Int
+main () = 40 + first(()) + second(())
+```
+
+It returns `42 : Int`. A matcher can also capture an expression, type, pattern,
+or one complete braced declaration. Repetitions may be nested. The compiler
+reports an ambiguous matcher, missing template driver, unequal driver lengths,
+empty one-or-more matcher, or trailing separator at the relevant source; JSON
+diagnostics retain the invocation and definition relationships where applicable.
+Generator clauses and escapes within repetitions are not yet supported. The
+[declaration syntax specification](../../spec/syntax-expansion.md#imported-declaration-syntax)
+describes the current boundary.
+
 ## Quotation in declaration expansion
 
 During checked declaration expansion, an ordinary helper can construct an
@@ -316,7 +348,7 @@ A reached quotation needs the compile-time syntax host. Running it in an
 ordinary program without that host fails. A procedural expression transformer
 can return the token and group view of a quoted capture for reparsing. Direct
 forwarding of a protected quoted expression, matcher-capture reads in escaped
-code, and the full repetition and generator forms are still under development. See
+code, per-iteration escapes, and generator forms are still under development. See
 [quotation and template escapes](../../spec/syntax-expansion.md#quotation-and-template-escapes)
 for the current boundary.
 

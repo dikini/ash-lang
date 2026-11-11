@@ -3118,30 +3118,61 @@ fn validate_template_syntax_inner(
         matcher: &[SurfaceSyntaxMatcherPart],
         depth: usize,
         repetitions: usize,
+        declaration_output: bool,
         captures: &mut Vec<SurfaceSyntaxCapture>,
         identifiers: &mut Vec<SurfaceName>,
         budget: &mut Option<&mut SyntaxBudget>,
     ) -> Result<(), MacroParseFailure> {
-        for part in matcher {
+        // A matcher alternates repeat and group containers, so recursion here
+        // consumes two Rust frames for each user-visible repetition level.
+        // Keep the walk in matcher order while charging its owned stack before
+        // each allocation and entry.
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge_units(2).map_err(resource)?;
+        }
+        let mut pending = Vec::with_capacity(1);
+        pending.push((matcher.iter(), depth, repetitions));
+        while let Some((parts, depth, repetitions)) = pending.last_mut() {
+            let Some(part) = parts.next() else {
+                pending.pop();
+                continue;
+            };
+            let (depth, repetitions) = (*depth, *repetitions);
             if let Some(budget) = budget.as_deref_mut() {
                 budget.charge().map_err(resource)?;
             }
             let (name, kind) = match part {
-                SurfaceSyntaxMatcherPart::Capture { name, kind } => (name, kind),
+                SurfaceSyntaxMatcherPart::Capture { name, kind } => {
+                    if !declaration_output && *kind == SurfaceSyntaxCaptureKind::Declaration {
+                        return Err(MacroParseFailure::Invalid);
+                    }
+                    (name, kind)
+                }
                 SurfaceSyntaxMatcherPart::Container(container) => {
+                    if !declaration_output {
+                        return Err(MacroParseFailure::Invalid);
+                    }
                     let next = type_depth(depth, 1).map_err(resource)?;
-                    placeholders(
-                        &container.body,
+                    if let Some(budget) = budget.as_deref_mut() {
+                        // Pay the entry's eventual inspection/pop and, when
+                        // necessary, the new slot and all moved live entries.
+                        budget.charge().map_err(resource)?;
+                        if pending.len() == pending.capacity() {
+                            budget
+                                .charge_units(pending.len().saturating_mul(2).saturating_add(1))
+                                .map_err(resource)?;
+                            pending.reserve_exact(1);
+                        }
+                    }
+                    pending.push((
+                        container.body.iter(),
                         next,
                         repetitions
                             + usize::from(matches!(
                                 &container.kind,
                                 SurfaceMatcherContainerKind::Repeat { .. }
                             )),
-                        captures,
-                        identifiers,
-                        budget,
-                    )?;
+                    ));
                     continue;
                 }
                 SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {
@@ -3243,6 +3274,7 @@ fn validate_template_syntax_inner(
         &declaration.matcher,
         0,
         0,
+        declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration,
         &mut captures,
         &mut identifiers,
         &mut admission_budget,
@@ -3737,6 +3769,17 @@ fn charge_template_inner(
                     .map_err(resource)?;
                 budget
                     .charge_units(entries.saturating_mul(indices.len().saturating_add(1)))
+                    .map_err(resource)?;
+                // Each iteration also owns a separate temporary index buffer.
+                budget
+                    .charge_units(count.saturating_mul(indices.len().saturating_add(1)))
+                    .map_err(resource)?;
+                // Substitution grows its own shared index buffer and moves its
+                // existing entries independently of those preflight buffers.
+                budget
+                    .charge_units(
+                        count.saturating_mul(indices.len().saturating_mul(2).saturating_add(1)),
+                    )
                     .map_err(resource)?;
                 if let Some((kind, _, origin)) = &repeat.separator {
                     for _ in 1..count {
@@ -4607,7 +4650,7 @@ mod tests {
     }
 
     #[test]
-    fn declaration_admission_charges_both_literal_matcher_traversals() {
+    fn declaration_admission_charges_every_literal_matcher_visit() {
         use crate::lexer::TokenKind;
         use crate::parser::MacroParseFailure;
 
@@ -4644,9 +4687,9 @@ mod tests {
         };
         let baseline_cost = measure(&baseline);
         let used = measure(&literal_heavy);
-        // The capacity fold and placeholder-building loop each visit all
-        // literals; the empty output leaves all later work unchanged.
-        assert_eq!(used - baseline_cost, 2 * count);
+        // The single ordered placeholder walk visits each literal once; the
+        // empty output leaves all later work unchanged.
+        assert_eq!(used - baseline_cost, count);
         let mut short = SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
             validate_template_syntax_inner(&literal_heavy, &source, &contexts, Some(&mut short)),
@@ -4666,7 +4709,7 @@ mod tests {
         ));
         let mut fresh = SyntaxBudget::with_limit(used);
         validate_template_syntax_inner(&literal_heavy, &source, &contexts, Some(&mut fresh))
-            .expect("the exact fresh admission ledger covers both traversals and validation");
+            .expect("the exact fresh admission ledger covers the walk and validation");
         assert_eq!(fresh.consumed(), used);
     }
 
@@ -5371,7 +5414,7 @@ mod tests {
     }
 
     #[test]
-    fn d5_only_zero_retained_template_nodes_are_admitted() {
+    fn d5_admission_requires_a_retained_template_and_category() {
         let source = SourceFile::new(
             "forms.ash",
             include_str!("../tests/fixtures/surface-macros/declaration-capture/forms.ash"),
@@ -5395,10 +5438,8 @@ mod tests {
             Arc::from("\n"),
             span.into(),
         )]));
-        assert!(matches!(
-            validate_template_syntax(&declaration, &source, &contexts),
-            Err(crate::parser::MacroParseFailure::Invalid)
-        ));
+        validate_template_syntax(&declaration, &source, &contexts)
+            .expect("a line boundary is a valid empty declaration output");
         declaration.template_contents = None;
         declaration.implementation =
             SurfaceSyntaxImplementation::Transformer(declaration.name.clone());
@@ -5664,7 +5705,7 @@ mod tests {
     }
 
     #[test]
-    fn d5_used_splice_is_refused_without_constructing_output() {
+    fn d5_declaration_splice_precharges_and_forwards_the_same_packet() {
         let source = SourceFile::new("capture.ash", "item").unwrap();
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
         let name = SurfaceName {
@@ -5693,15 +5734,34 @@ mod tests {
             unreachable!()
         };
         let retained = Arc::strong_count(&packet.contents);
+        let mut measured = SyntaxBudget::default();
+        charge_declaration_template(&output, &matcher, &captures, &mut measured).unwrap();
+        let cost = measured.consumed();
         assert!(matches!(
-            charge_declaration_template(&output, &matcher, &captures, &mut SyntaxBudget::default()),
-            Err(crate::parser::MacroParseFailure::Invalid)
+            charge_declaration_template(
+                &output,
+                &matcher,
+                &captures,
+                &mut SyntaxBudget::with_limit(cost - 1),
+            ),
+            Err(crate::parser::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
         ));
         assert_eq!(Arc::strong_count(&packet.contents), retained);
-        assert_eq!(
-            substitute_contents(&mut output, &matcher, &captures, 0, span),
-            Err(span)
-        );
         assert!(matches!(output.as_slice(), [MacroOutputNode::Splice(_)]));
+        let mut exact = SyntaxBudget::with_limit(cost);
+        charge_declaration_template(&output, &matcher, &captures, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), cost);
+        substitute_contents(&mut output, &matcher, &captures, 0, span).unwrap();
+        let [MacroOutputNode::ForwardedDeclaration(forwarded, origin)] = output.as_slice() else {
+            panic!("declaration splice must remain a typed packet");
+        };
+        assert!(Arc::ptr_eq(&packet.contents, &forwarded.contents));
+        assert_eq!(origin.primary(), span);
+        assert_eq!(Arc::strong_count(&packet.contents), retained + 1);
+        drop(output);
+        assert_eq!(Arc::strong_count(&packet.contents), retained);
     }
 }

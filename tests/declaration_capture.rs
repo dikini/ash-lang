@@ -43,6 +43,51 @@ fn captured_declaration_is_forwarded_to_the_module_consumer() {
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 }
 
+#[test]
+fn declaration_capture_cannot_enter_other_syntax_positions_or_fuse_with_neighbors() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("entry.ash"),
+        "import forms (syntax bad)\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    for (position, body) in [
+        (
+            "expression",
+            "bad_value : Unit -> Int\nbad_value () = $item\n",
+        ),
+        ("type", "bad_value : $item -> Int\nbad_value _ = 42\n"),
+        ("pattern", "bad_value : Unit -> Int\nbad_value $item = 42\n"),
+        (
+            "local block",
+            "bad_value : Unit -> Int\nbad_value () = {\n$item\n42\n}\n",
+        ),
+        (
+            "before a neighbor",
+            "$item next : Unit -> Int\nnext () = 42\n",
+        ),
+        (
+            "after a neighbor",
+            "bad_value : Unit -> Int\nbad_value () = 42 $item\n",
+        ),
+    ] {
+        fs::write(
+            fixture.0.join("forms.ash"),
+            format!("pub syntax declaration: (bad) $item:declaration => {{\n{body}}}\n"),
+        )
+        .unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err(position);
+        assert!(
+            failure.reason_code().starts_with("parse."),
+            "{position}: {failure:?}"
+        );
+    }
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

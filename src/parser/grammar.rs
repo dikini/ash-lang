@@ -719,8 +719,7 @@ fn capture_can_start_with(
         Kind::Declaration => matches!(token, TokenKind::LeftBrace),
         Kind::Type => matches!(
             token,
-            TokenKind::Identifier(_)
-                | TokenKind::UpperIdentifier(_)
+            TokenKind::UpperIdentifier(_)
                 | TokenKind::IntType
                 | TokenKind::BytesType
                 | TokenKind::StringType
@@ -2553,10 +2552,16 @@ fn syntax_invocation(
                         crate::surface::SurfaceSyntaxCaptureKind::Expression
                         | crate::surface::SurfaceSyntaxCaptureKind::Type
                         | crate::surface::SurfaceSyntaxCaptureKind::Pattern => {
-                            let stop = matcher.get(index + 1).and_then(matcher_start_stop);
-                            if let Some((kind, spelling)) = stop
-                                && !push_structured_stop(parser, kind, spelling)
-                            {
+                            let mut added_stops = 0;
+                            if !push_matcher_follow_stops(
+                                parser,
+                                &matcher[index + 1..],
+                                0,
+                                &mut added_stops,
+                            ) {
+                                for _ in 0..added_stops {
+                                    let _ = parser.syntax_stops.pop();
+                                }
                                 parser.finish();
                                 break;
                             }
@@ -2587,7 +2592,7 @@ fn syntax_invocation(
                                     unreachable!()
                                 }
                             }
-                            if stop.is_some() {
+                            for _ in 0..added_stops {
                                 let _ = parser.syntax_stops.pop();
                             }
                         }
@@ -2635,25 +2640,59 @@ fn structured_literal(parser: &mut Parser<'_>, kind: &TokenKind, spelling: &str)
     parser.at_syntax_literal(kind, spelling)
 }
 
-fn matcher_start_stop(
-    part: &crate::surface::SurfaceSyntaxMatcherPart,
-) -> Option<(&TokenKind, &str)> {
+fn push_matcher_follow_stops(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+    depth: usize,
+    added: &mut usize,
+) -> bool {
     use crate::surface::{SurfaceMatcherContainerKind, SurfaceSyntaxMatcherPart};
-    match part {
-        SurfaceSyntaxMatcherPart::Literal { kind, spelling } => Some((kind, spelling)),
-        SurfaceSyntaxMatcherPart::Container(container) => match &container.kind {
-            SurfaceMatcherContainerKind::Group { braces: true } => {
-                Some((&TokenKind::LeftBrace, "{"))
+    for part in parts {
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                if !push_structured_stop(parser, kind, spelling) {
+                    return false;
+                }
+                *added += 1;
+                break;
             }
-            SurfaceMatcherContainerKind::Group { braces: false } => {
-                Some((&TokenKind::LeftParen, "("))
+            SurfaceSyntaxMatcherPart::Container(container) => match &container.kind {
+                SurfaceMatcherContainerKind::Group { braces } => {
+                    let (kind, spelling) = if *braces {
+                        (&TokenKind::LeftBrace, "{")
+                    } else {
+                        (&TokenKind::LeftParen, "(")
+                    };
+                    if !push_structured_stop(parser, kind, spelling) {
+                        return false;
+                    }
+                    *added += 1;
+                    break;
+                }
+                SurfaceMatcherContainerKind::Repeat { one_or_more, .. } => {
+                    let Some(next) = depth.checked_add(1).filter(|next| {
+                        parser.nesting_depth.saturating_add(*next) <= super::STRUCTURAL_DEPTH_LIMIT
+                    }) else {
+                        parser.fail_structural_depth();
+                        return false;
+                    };
+                    if !push_matcher_follow_stops(parser, &container.body, next, added) {
+                        return false;
+                    }
+                    if *one_or_more {
+                        break;
+                    }
+                }
+            },
+            SurfaceSyntaxMatcherPart::Capture { .. } | SurfaceSyntaxMatcherPart::LineEnd => {
+                break;
             }
-            SurfaceMatcherContainerKind::Repeat { .. } => {
-                container.body.first().and_then(matcher_start_stop)
-            }
-        },
-        _ => None,
+        }
     }
+    true
 }
 
 fn structured_starts(
@@ -2774,16 +2813,14 @@ fn match_structured_items(
             }
             SurfaceSyntaxMatcherPart::Capture { kind, .. } => {
                 parser.start(NodeKind::SyntaxArgument);
-                let stop = parts.get(index + 1).and_then(matcher_start_stop);
-                let pushed = if let Some((kind, spelling)) = stop {
-                    if !push_structured_stop(parser, kind, spelling) {
-                        parser.finish();
-                        return false;
+                let mut added_stops = 0;
+                if !push_matcher_follow_stops(parser, &parts[index + 1..], 0, &mut added_stops) {
+                    for _ in 0..added_stops {
+                        let _ = parser.syntax_stops.pop();
                     }
-                    true
-                } else {
-                    false
-                };
+                    parser.finish();
+                    return false;
+                }
                 let accepted = match kind {
                     SurfaceSyntaxCaptureKind::Identifier => {
                         if matches!(
@@ -2826,7 +2863,7 @@ fn match_structured_items(
                         accepted
                     }
                 };
-                if pushed {
+                for _ in 0..added_stops {
                     let _ = parser.syntax_stops.pop();
                 }
                 parser.finish();
@@ -2872,30 +2909,27 @@ fn match_structured_items(
                         let mut count = 0usize;
                         let mut success = true;
                         let mut added_stops = 0;
-                        let cycle_stop = separator
-                            .as_ref()
-                            .map(|(kind, spelling)| (kind, spelling.as_str()))
-                            .or_else(|| match container.body.first() {
-                                Some(SurfaceSyntaxMatcherPart::Literal { kind, spelling }) => {
-                                    Some((kind, spelling.as_str()))
-                                }
-                                _ => None,
-                            });
-                        if let Some((kind, spelling)) = cycle_stop {
+                        if let Some((kind, spelling)) = separator {
                             if push_structured_stop(parser, kind, spelling) {
                                 added_stops += 1;
                             } else {
                                 success = false;
                             }
+                        } else if !push_matcher_follow_stops(
+                            parser,
+                            &container.body,
+                            0,
+                            &mut added_stops,
+                        ) {
+                            success = false;
                         }
-                        if let Some((kind, spelling)) =
-                            parts.get(index + 1).and_then(matcher_start_stop)
-                        {
-                            if push_structured_stop(parser, kind, spelling) {
-                                added_stops += 1;
-                            } else {
-                                success = false;
-                            }
+                        if !push_matcher_follow_stops(
+                            parser,
+                            &parts[index + 1..],
+                            0,
+                            &mut added_stops,
+                        ) {
+                            success = false;
                         }
                         while success && structured_starts(parser, &container.body) {
                             if !parser.charge_matcher_work(4) {
@@ -3723,6 +3757,7 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
                 crate::syntax::MacroOutputNode::Expression(_, _)
                     | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
                     | crate::syntax::MacroOutputNode::ForwardedType(_, _)
+                    | crate::syntax::MacroOutputNode::ForwardedDeclaration(_, _)
             )
         )
     {
@@ -3874,6 +3909,12 @@ fn typed_pattern(parser: &mut Parser<'_>) {
 
 pub(super) fn type_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Type);
+    if parser.at_forwarded_declaration() {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
+        let _ = parser.bump();
+        parser.finish();
+        return;
+    }
     if parser.at_syntax_stop() {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
         parser.finish();

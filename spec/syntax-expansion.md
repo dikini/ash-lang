@@ -1,11 +1,12 @@
 # Syntax Expansion
 
-Expression syntax lets a module publish a restricted matcher and either a
+Expression and declaration syntax let a module publish a matcher and either a
 template or a checked Ash transformer. An importer activates a syntax name
-explicitly. Expansion produces an ordinary expression, which then crosses the
-usual name resolution, checking, elaboration, linking, and independent Core
-validation boundaries. A transformer receives syntax, not inferred types,
-selected implementations, or Core.
+explicitly. Expression expansion produces an ordinary expression; declaration
+expansion produces ordinary module declarations. Both cross the usual name
+resolution, checking, elaboration, linking, and independent Core validation
+boundaries. A transformer receives syntax, not inferred types, selected
+implementations, or Core.
 
 ## Definitions and imports
 
@@ -75,6 +76,53 @@ internal uses remain connected. Free caller references keep their context.
 Expanding a copy does not change another copy. Runtime evaluation follows the
 resulting ordinary program; duplication does not imply single evaluation.
 
+## Imported declaration syntax
+
+An imported declaration syntax is selected in a module declaration position.
+Its contextual header names the declaration form:
+
+```ash
+pub syntax declaration: (ones) $( $name:ident ),+ => {
+    $(
+        pub $name : Unit -> Int
+        $name () = 1
+    )+
+}
+```
+
+Declaration matchers support `ident`, `expr`, `type`, `pattern`, and
+`declaration` captures. An identifier consumes one name. The expression,
+type, and pattern captures retain their ordinary grammatical boundaries. A
+declaration capture is enclosed in braces and must contain exactly one complete
+ordinary module declaration, including its signature and equations when those
+form one declaration. Its braces are not part of the captured declaration.
+The capture retains the caller's contexts and origins until it is consumed as
+one module declaration. It cannot be used as an expression, type, pattern, or
+local declaration.
+
+Matchers can contain balanced groups and nested `*` or `+` repetitions with an
+optional single-token separator. Captures retain their source order and nested
+shape. A variable-length capture stops at the next applicable literal,
+repetition separator, group delimiter, or invocation boundary at its own
+syntactic level. Adjacent captures and ambiguous repetition boundaries are
+rejected at definition admission. A one-or-more matcher requires an iteration;
+a separator requires another iteration after it.
+
+A declaration template can repeat its output with the same operators and
+optional separator. A repeated capture drives its corresponding template
+repetition, and multiple drivers at that level must have equal lengths. Nested
+repetitions select their current outer elements, so inner lengths may differ
+between outer iterations. A repetition without a driver is rejected when its
+definition is admitted; unequal live drivers reject the invocation. Failure
+publishes no partial expansion. Completed output is handed to the existing
+module declaration parser without re-lexing generated text.
+
+Structured repetition currently applies to declarative declaration templates.
+Generator clauses, per-iteration escapes, and the remaining procedural repeated
+capture paths are still under development. See the
+[declaration grammar](../docs/design/macros/declaration-grammar.md) for the
+accepted wider design.
+
 ## Quotation and template escapes
 
 A checked ordinary helper used during syntax expansion can construct an
@@ -94,10 +142,10 @@ An escaped expression fragment in a type position is rejected by syntax
 admission. A procedural expression transformer can return the token and group
 view of a quoted capture for reparsing; the tokens retain their syntax contexts
 and origins. Direct forwarding of a protected quoted expression remains under
-development. The currently connected path covers escaped code that does not
-read matcher captures. The complete capture, repetition and generator forms in
-[CP-0034](../docs/proposals/CP-0034-top-level-declaration-macros.md) remain
-under development.
+development. The currently connected escape path covers escaped code that does
+not read matcher captures. Capture reads in escaped code, per-iteration escapes,
+and generators in [CP-0034](../docs/proposals/CP-0034-top-level-declaration-macros.md)
+remain under development.
 
 ## Names and hygiene
 

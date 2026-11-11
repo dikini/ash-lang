@@ -120,6 +120,11 @@ occurs inside parentheses. Line breaks within that block are boundaries. When
 the block ends, the surrounding parenthesized context resumes. Empty logical
 lines are ignored.
 
+Inside the body of a declaration-template repetition, `$(` inherits the
+surrounding line-boundary rule. This permits a repetition to contain multiple
+ordinary declarations. Parentheses within its body keep the usual rule, and
+matcher parentheses and ordinary code inside template escapes are unchanged.
+
 An import or module declaration ends at a module-level logical line boundary.
 An unparenthesized infix expression occupies one logical line. A binding
 initializer or equation body may continue through balanced parentheses or a
