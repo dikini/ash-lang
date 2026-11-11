@@ -7413,8 +7413,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
-        let mut previous_nominal_end = None;
+        let mut previous_nominal: Option<Span> = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
+            // Retain and compare the complete primary span, including its source.
+            self.charge_type_work(2)?;
             if let Some(api) = crate::resolved::ResourceApi::for_module(nominal.id.module())
                 && (!registry
                     .nominal_parameters(nominal.id)
@@ -7431,7 +7433,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let Some(source) = registry_source else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
-            let nominal_range = nominal.origin.primary_span().range();
+            let nominal_span = nominal.origin.primary_span();
+            let nominal_range = nominal_span.range();
             if nominal.id != crate::types::NominalTypeId::new(module, index)
                 || nominal.origin.primary_span().source() != source
                 || !origin_depth_within_limit(&nominal.origin)
@@ -7440,11 +7443,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !nominal_names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal_end.is_some_and(|previous| nominal_range.start() < previous)
+                || previous_nominal.is_some_and(|previous| {
+                    nominal_range.start() < previous.range().end() && nominal_span != previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_nominal_end = Some(nominal_range.end());
+            previous_nominal = Some(nominal_span);
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
         let owner_parameter_count =
@@ -7545,8 +7550,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 &parameter_owners,
             )?;
         }
-        let mut previous_constructor_start = None;
+        let mut previous_constructor: Option<Span> = None;
         for constructor in registry.constructors() {
+            self.charge_type_work(2)?;
             let constructor_span = constructor.origin.primary_span();
             let constructor_range = constructor_span.range();
             let owner_range = registry
@@ -7576,12 +7582,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         || constructor_range.end() > owner.end()
                 })
                 || constructor_range.start() >= constructor_range.end()
-                || previous_constructor_start
-                    .is_some_and(|previous| constructor_range.start() <= previous)
+                || previous_constructor.is_some_and(|previous| {
+                    constructor_range.start() <= previous.range().start()
+                        && constructor_span != previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_constructor_start = Some(constructor_range.start());
+            previous_constructor = Some(constructor_span);
             self.validate_origin(&constructor.origin, self.program.root)?;
         }
         let expected_constructor_order = registry
@@ -7785,7 +7793,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
-        let mut previous_nominal_end = HashMap::new();
+        let mut previous_nominal = HashMap::<ModuleId, Span>::new();
 
         let source_original = original.is_some();
         let nominals = registry_source_order(
@@ -7806,6 +7814,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         for nominal in nominals {
             let module = nominal.id.module();
+            // Pay for retaining and comparing a full span before growing the map.
+            self.charge_type_work(2)?;
+            if !previous_nominal.contains_key(&module) {
+                self.charge_type_work(1)?;
+                previous_nominal
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            }
             if let Some(api) = crate::resolved::ResourceApi::for_module(module)
                 && (!registry
                     .nominal_parameters(nominal.id)
@@ -7854,16 +7870,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal_end
-                    .get(&module)
-                    .is_some_and(|previous| nominal_range.start() < *previous)
+                || previous_nominal.get(&module).is_some_and(|previous| {
+                    nominal_range.start() < previous.range().end() && nominal_span != *previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_nominal_end.insert(module, nominal_range.end());
+            previous_nominal.insert(module, nominal_span);
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
 
@@ -7964,7 +7980,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let mut constructor_ids = HashSet::new();
         let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
-        let mut previous_constructor_start = HashMap::new();
+        let mut previous_constructor = HashMap::<ModuleId, Span>::new();
         let constructors = registry_source_order(
             registry.constructors(),
             source_original,
@@ -7978,6 +7994,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         )?;
         for constructor in constructors {
             let module = constructor.owner.module();
+            self.charge_type_work(2)?;
+            if !previous_constructor.contains_key(&module) {
+                self.charge_type_work(1)?;
+                previous_constructor
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            }
             let Some(source) = relation.get(&module).copied() else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
@@ -8011,13 +8034,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         || constructor_range.end() > owner.end()
                 })
                 || constructor_range.start() >= constructor_range.end()
-                || previous_constructor_start
-                    .get(&module)
-                    .is_some_and(|previous| constructor_range.start() <= *previous)
+                || previous_constructor.get(&module).is_some_and(|previous| {
+                    constructor_range.start() <= previous.range().start()
+                        && constructor_span != *previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_constructor_start.insert(module, constructor_range.start());
+            previous_constructor.insert(module, constructor_span);
             self.validate_origin(&constructor.origin, self.program.root)?;
         }
 
@@ -41407,6 +41431,151 @@ mod replacement_owner_api_tests {
 mod registry_order_tests {
     use super::*;
     use crate::{core::CoreBuilder, source::ByteRange};
+
+    #[test]
+    fn registry_position_checks_allow_only_exact_primary_span_ties() {
+        let file = SourceFile::new("tied-ranges.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let foreign = SourceFile::new("foreign-ranges.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let foreign_span = foreign.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let first = crate::types::NominalTypeId::new(file.id(), 0);
+        let second = crate::types::NominalTypeId::new(file.id(), 1);
+
+        for expansion in [false, true] {
+            let origin = |primary| {
+                if expansion {
+                    Origin::Expansion {
+                        invocation: primary,
+                        definition: span(11, 12),
+                    }
+                } else {
+                    Origin::Source(primary)
+                }
+            };
+            for constructor_tie in [false, true] {
+                for (second_span, expected) in [
+                    (span(0, 10), true),
+                    (span(0, 9), false),
+                    (span(1, 10), constructor_tie),
+                    (foreign_span, false),
+                ] {
+                    let nominal_span = if constructor_tie {
+                        span(0, 10)
+                    } else {
+                        second_span
+                    };
+                    let constructor_span = if constructor_tie {
+                        second_span
+                    } else {
+                        span(3, 4)
+                    };
+                    let (nominals, constructors) = if constructor_tie {
+                        (
+                            vec![ResolvedNominalType {
+                                id: first,
+                                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                spelling: "First".into(),
+                                constructors: vec![
+                                    ConstructorId::new(first, 0),
+                                    ConstructorId::new(first, 1),
+                                ]
+                                .into_boxed_slice(),
+                                representation: None,
+                                representation_provenance: None,
+                                origin: origin(span(0, 10)),
+                            }],
+                            vec![
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 0),
+                                    owner: first,
+                                    spelling: "FirstValue".into(),
+                                    payload: None,
+                                    origin: origin(span(0, 10)),
+                                },
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 1),
+                                    owner: first,
+                                    spelling: "SecondValue".into(),
+                                    payload: None,
+                                    origin: origin(constructor_span),
+                                },
+                            ],
+                        )
+                    } else {
+                        (
+                            vec![
+                                ResolvedNominalType {
+                                    id: first,
+                                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                    spelling: "First".into(),
+                                    constructors: vec![ConstructorId::new(first, 0)]
+                                        .into_boxed_slice(),
+                                    representation: None,
+                                    representation_provenance: None,
+                                    origin: origin(span(0, 10)),
+                                },
+                                ResolvedNominalType {
+                                    id: second,
+                                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                    spelling: "Second".into(),
+                                    constructors: vec![ConstructorId::new(second, 0)]
+                                        .into_boxed_slice(),
+                                    representation: None,
+                                    representation_provenance: None,
+                                    origin: origin(nominal_span),
+                                },
+                            ],
+                            vec![
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 0),
+                                    owner: first,
+                                    spelling: "FirstValue".into(),
+                                    payload: None,
+                                    origin: origin(span(1, 2)),
+                                },
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(second, 0),
+                                    owner: second,
+                                    spelling: "SecondValue".into(),
+                                    payload: None,
+                                    origin: origin(constructor_span),
+                                },
+                            ],
+                        )
+                    };
+                    let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                        nominals,
+                        constructors,
+                    ));
+                    let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(registry);
+                    let root = builder
+                        .unit(Type::Unit, Origin::Source(span(0, 1)))
+                        .unwrap();
+                    let program = builder.finish(root).unwrap();
+                    let fallback = Validator::new(&program, &[&file, &foreign]);
+                    let modules = Validator::new_modules(
+                        &program,
+                        &[&file, &foreign],
+                        &[
+                            (first.module(), file.id()),
+                            (ModuleId::from(foreign.id()), foreign.id()),
+                        ],
+                    )
+                    .unwrap();
+                    for result in [fallback.validate_registry(), modules.validate_registry()] {
+                        assert_eq!(
+                            result.is_ok(),
+                            expected,
+                            "expansion={expansion}, constructor_tie={constructor_tie}, second={second_span:?}: {result:?}"
+                        );
+                        if let Err(error) = result {
+                            assert_eq!(error.reason(), ValidationReason::Registry);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn contextual_range_checks_preserve_ordinary_order_and_reject_overlap() {

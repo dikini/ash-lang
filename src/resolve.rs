@@ -10513,7 +10513,13 @@ impl Resolver<'_, '_> {
                 constructors: identity.constructors.clone().into_boxed_slice(),
                 representation: None,
                 representation_provenance: None,
-                origin: Origin::Source(declaration.span),
+                origin: match (declaration.declaration_kind, declaration.name.introduced_at) {
+                    (SurfaceNominalDeclarationKind::Data, Some(invocation)) => Origin::Expansion {
+                        invocation,
+                        definition: declaration.span,
+                    },
+                    _ => Origin::Source(declaration.span),
+                },
             })
             .collect::<Vec<_>>();
         let discard_nominals = |nominals: &mut Vec<ResolvedNominalType>| {
@@ -10713,7 +10719,13 @@ impl Resolver<'_, '_> {
                         owner: identity.id,
                         spelling: constructor.name.text.clone(),
                         payload: constructor_payload,
-                        origin: Origin::Source(constructor.span),
+                        origin: match constructor.name.introduced_at {
+                            Some(invocation) => Origin::Expansion {
+                                invocation,
+                                definition: constructor.span,
+                            },
+                            None => Origin::Source(constructor.span),
+                        },
                     });
                     nominal_payload_provenance.push(ConstructorPayloadProvenance {
                         constructor: *id,
