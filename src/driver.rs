@@ -1680,6 +1680,10 @@ where
                     )
                     .and_then(|(output, fresh_count)| match output {
                         crate::syntax::TransformerOutput::Expanded(nodes) => {
+                            #[cfg(test)]
+                            if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                                observe(selection, captures, &nodes);
+                            }
                             Ok((nodes, fresh_count))
                         }
                         crate::syntax::TransformerOutput::Rejected(failure) => {
@@ -5011,6 +5015,453 @@ mod tests {
 
     std::thread_local! {
         static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
+        static DERIVE_INPUTS: RefCell<Vec<Vec<crate::surface::SurfaceSyntaxCapture>>> = const { RefCell::new(Vec::new()) };
+        static DERIVE_MODULE_ORDER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        static INDEXED_TRANSFERRED: RefCell<Vec<(Vec<crate::surface::SurfaceSyntaxCapture>, Vec<crate::syntax::MacroOutputNode>)>> = const { RefCell::new(Vec::new()) };
+        static DERIVE_WORK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn observe_derive_input(
+        _source: &SourceFile,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        _budget: &crate::syntax_resource::SyntaxBudget,
+    ) {
+        if matches!(
+            captures.first(),
+            Some(crate::surface::SurfaceSyntaxCapture::Declaration(_))
+        ) {
+            DERIVE_INPUTS.with(|slot| slot.borrow_mut().push(captures.to_vec()));
+        }
+    }
+
+    fn observe_derive_module(_source: &SourceFile, module: &crate::surface::SurfaceModule) {
+        use crate::surface::{SurfaceDeclarationIndex, SurfaceTypeKind};
+        if !module
+            .type_declarations
+            .iter()
+            .any(|item| item.name.text == "Color")
+            || !module
+                .type_declarations
+                .iter()
+                .any(|item| item.name.text == "Count")
+        {
+            return;
+        }
+        let mut order = Vec::new();
+        for item in &module.declaration_order {
+            match *item {
+                SurfaceDeclarationIndex::Type(index) => {
+                    order.push(module.type_declarations[index].name.text.clone())
+                }
+                SurfaceDeclarationIndex::Implementation(index) => {
+                    let implementation = &module.implementations[index];
+                    let [argument] = implementation.head.arguments.as_ref() else {
+                        panic!("one interface argument")
+                    };
+                    let SurfaceTypeKind::Named(name) = &argument.kind else {
+                        panic!("the subject is a named nominal")
+                    };
+                    order.push(format!(
+                        "{}<{}>",
+                        implementation.head.interface.member().text,
+                        name.member().text
+                    ));
+                }
+                _ => {}
+            }
+        }
+        DERIVE_MODULE_ORDER.with(|slot| *slot.borrow_mut() = Some(order));
+    }
+
+    #[test]
+    fn derive_i09_retains_each_original_and_collects_outputs_in_order() {
+        use crate::{
+            parser::{G1_CAPTURE_OBSERVER, STAGED_MODULE_OBSERVER},
+            surface::SurfaceSyntaxCapture,
+            syntax::{MacroDelimiter, MacroOutputNode},
+        };
+        DERIVE_INPUTS.with(|slot| slot.borrow_mut().clear());
+        DERIVE_MODULE_ORDER.with(|slot| *slot.borrow_mut() = None);
+        G1_CAPTURE_OBSERVER.set(Some(observe_derive_input));
+        STAGED_MODULE_OBSERVER.set(Some(observe_derive_module));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives/main.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        let compiled = result.expect("the fixed derive graph compiles");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        let order = DERIVE_MODULE_ORDER.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .expect("the staged module was observed")
+        });
+        assert_eq!(
+            order,
+            [
+                "Color",
+                "Marker<Color>",
+                "Tagged<Color>",
+                "Count",
+                "Marker<Count>",
+                "Tagged<Count>"
+            ]
+        );
+        let captures = DERIVE_INPUTS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(captures.len(), 4);
+        for (index, expected) in ["Color", "Color", "Count", "Count"].into_iter().enumerate() {
+            let [
+                SurfaceSyntaxCapture::Declaration(subject),
+                SurfaceSyntaxCapture::Identifier(target),
+            ] = captures[index].as_slice()
+            else {
+                panic!("derive receives the original subject and its optional name")
+            };
+            assert_eq!(target.name.text, expected);
+            assert_eq!(target.name.introduction, 0);
+            assert!(subject.contents.iter().any(|node| matches!(node, MacroOutputNode::Identifier(name, _) if name.text == "deriving" && name.introduction == 0)));
+            assert!(subject.contents.iter().any(|node| matches!(node,
+                MacroOutputNode::Group(MacroDelimiter::Parentheses, names, _)
+                    if names.iter().filter_map(|node| match node { MacroOutputNode::Identifier(name, _) => Some(name.text.as_str()), _ => None }).collect::<Vec<_>>() == ["marker", "tagged"]
+            )));
+        }
+        let subject = |index: usize| match &captures[index][0] {
+            SurfaceSyntaxCapture::Declaration(subject) => &subject.contents,
+            _ => unreachable!(),
+        };
+        assert!(Arc::ptr_eq(subject(0), subject(1)));
+        assert!(Arc::ptr_eq(subject(2), subject(3)));
+        assert!(!Arc::ptr_eq(subject(0), subject(2)));
+    }
+
+    fn observe_indexed_transfer(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        if selection.declaration.name.text == "indexed" {
+            INDEXED_TRANSFERRED
+                .with(|slot| slot.borrow_mut().push((captures.to_vec(), output.to_vec())));
+        }
+    }
+
+    #[test]
+    fn indexed_i11_traverses_original_constructors_and_transfers_equations_before_teardown() {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            lexer::TokenKind,
+            surface::SurfaceSyntaxCapture,
+            syntax::{MacroDelimiter, MacroOutputNode},
+        };
+        for (entry, expected) in [
+            ("one.ash", vec!["Red"]),
+            ("main.ash", vec!["Red", "Blue"]),
+            ("three.ash", vec!["Red", "Blue", "Green"]),
+        ] {
+            hooks::reset();
+            INDEXED_TRANSFERRED.with(|slot| slot.borrow_mut().clear());
+            TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_indexed_transfer));
+            let result = compile_path(RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/indexed")
+                    .join(entry),
+                roots: ModuleRoots::empty(),
+            });
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let compiled = result.unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+            assert_eq!(hooks::DECLARATION_CAPTURES.get(), 1, "{entry}");
+            assert_eq!(hooks::DECLARATION_UNWRAPS.get(), 1, "{entry}");
+            assert_eq!(hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(), 1, "{entry}");
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1, "{entry}");
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1, "{entry}");
+            assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0, "{entry}");
+            let observed = INDEXED_TRANSFERRED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+            let [(captures, output)] = observed.as_slice() else {
+                panic!("{entry}: one output is transferred")
+            };
+            let [
+                SurfaceSyntaxCapture::Declaration(subject),
+                SurfaceSyntaxCapture::Identifier(target),
+            ] = captures.as_slice()
+            else {
+                panic!("{entry}: original subject and name are provided")
+            };
+            assert_eq!(target.name.text, "Color");
+            assert_eq!(target.name.introduction, 0);
+            let original_names = subject
+                .contents
+                .iter()
+                .filter_map(|node| match node {
+                    MacroOutputNode::Identifier(name, origin) => Some((name, origin)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(original_names[0].0.text, "Color");
+            assert_eq!(original_names[0].1.primary(), target.origin.primary());
+            let constructors = &original_names[1..1 + expected.len()];
+            assert_eq!(
+                constructors
+                    .iter()
+                    .map(|(name, _)| name.text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(constructors.iter().all(|(name, _)| name.introduction == 0));
+            assert!(subject.contents.iter().any(|node| matches!(node, MacroOutputNode::Identifier(name, _) if name.text == "deriving")));
+            let body = output
+                .iter()
+                .find_map(|node| match node {
+                    MacroOutputNode::Group(MacroDelimiter::Braces, body, _) => Some(body),
+                    _ => None,
+                })
+                .expect("the transferred implementation body is present");
+            let names = body
+                .iter()
+                .filter_map(|node| match node {
+                    MacroOutputNode::Identifier(name, origin) => Some((name, origin)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(names.len(), expected.len() * 2);
+            for (pair, (original, original_origin)) in names.chunks_exact(2).zip(constructors) {
+                assert_eq!(pair[0].0.text, "index");
+                assert_ne!(pair[0].0.introduction, 0);
+                assert_eq!(pair[1].0.text, original.text);
+                assert_eq!(pair[1].0.introduction, original.introduction);
+                assert_eq!(pair[1].1.primary(), original_origin.primary());
+            }
+            assert_eq!(
+                body.iter()
+                    .filter(|node| matches!(node, MacroOutputNode::Token(TokenKind::Equal, _, _)))
+                    .count(),
+                expected.len()
+            );
+            assert_eq!(body.iter().filter(|node| matches!(node, MacroOutputNode::Token(TokenKind::Integer(_), spelling, _) if spelling.as_ref() == "1")).count(), expected.len());
+            assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+            hooks::reset();
+        }
+    }
+
+    fn observe_import_transfer(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        if selection.declaration.name.text == "invalid" {
+            INDEXED_TRANSFERRED
+                .with(|slot| slot.borrow_mut().push((captures.to_vec(), output.to_vec())));
+        }
+    }
+
+    #[test]
+    fn checked_derive_import_transfers_then_is_refused_without_a_module() {
+        use crate::{
+            eval::machine_test_hooks as hooks, lexer::TokenKind, surface::SurfaceSyntaxCapture,
+            syntax::MacroOutputNode,
+        };
+        hooks::reset();
+        INDEXED_TRANSFERRED.with(|slot| slot.borrow_mut().clear());
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_import_transfer));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/derive-import/ordered.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let failure = result.expect_err("Import output must not publish a module");
+        assert!(failure.is_source_rejection());
+        assert!(failure.reason_code().starts_with("parse."));
+        let observed = INDEXED_TRANSFERRED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        let [(captures, output)] = observed.as_slice() else {
+            panic!("the checked transformer returned exactly one output")
+        };
+        assert!(matches!(
+            captures.as_slice(),
+            [SurfaceSyntaxCapture::Declaration(_)]
+        ));
+        assert!(matches!(
+            output.first(),
+            Some(MacroOutputNode::Token(TokenKind::Import, _, _))
+        ));
+        assert_eq!(hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        hooks::reset();
+    }
+
+    fn observe_derive_work(
+        _source: &SourceFile,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        budget: &crate::syntax_resource::SyntaxBudget,
+    ) {
+        if matches!(
+            captures.first(),
+            Some(crate::surface::SurfaceSyntaxCapture::Declaration(_))
+        ) {
+            DERIVE_WORK.with(|slot| slot.borrow_mut().push(budget.consumed()));
+        }
+    }
+
+    #[test]
+    fn derive_list_work_refusals_leave_owners_unchanged_and_retry() {
+        use crate::{
+            parser::{
+                DeclarationExpansionFailure, G1_CAPTURE_OBSERVER, ProjectionError, ResourceFailure,
+            },
+            syntax::SyntaxOwner,
+            syntax_resource::SyntaxBudget,
+        };
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/derives/main.ash");
+        let (source, tree, selected) = parse_selected_fixture(&path);
+        assert!(tree.parse_diagnostics().is_empty());
+        let owner_imports = vec![
+            Vec::new();
+            selected
+                .iter()
+                .map(|selection| selection.owner)
+                .max()
+                .unwrap()
+                + 1
+        ];
+        let span = selected[0].import_span;
+        let original = SyntaxOwner {
+            owner: None,
+            declaration: span,
+            import_span: span,
+        };
+        let mut owners = vec![original];
+        let mut full = SyntaxBudget::default();
+        DERIVE_WORK.with(|slot| slot.borrow_mut().clear());
+        G1_CAPTURE_OBSERVER.set(Some(observe_derive_work));
+        let module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &owner_imports,
+            &mut owners,
+            &mut full,
+            None,
+        )
+        .expect("the whole list stages with its full allowance");
+        G1_CAPTURE_OBSERVER.set(None);
+        assert_eq!(module.type_declarations.len(), 2);
+        assert_eq!(module.implementations.len(), 4);
+        assert_eq!(owners.len(), 5);
+        let reached = DERIVE_WORK.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(reached.len(), 4);
+        let total = full.consumed();
+        assert!(reached[0] < reached[1] && reached[1] < total);
+        let mut limits = vec![0, reached[0], reached[1], total - 1];
+        limits.sort_unstable();
+        limits.dedup();
+        for limit in limits {
+            let mut owners = vec![original];
+            let mut short = SyntaxBudget::with_limit(limit);
+            let failure = crate::parser::project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &owner_imports,
+                &mut owners,
+                &mut short,
+                None,
+            )
+            .expect_err("a short allowance must refuse before publishing");
+            assert!(match failure {
+                DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit: actual }),
+                    ..
+                }
+                | DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                    ResourceFailure::SyntaxWork { limit: actual },
+                )) => actual == limit,
+                _ => false,
+            });
+            assert_eq!(owners.len(), 1);
+            assert_eq!(
+                (
+                    owners[0].owner,
+                    owners[0].declaration,
+                    owners[0].import_span
+                ),
+                (original.owner, original.declaration, original.import_span)
+            );
+        }
+        let mut owners = vec![original];
+        let mut exact = SyntaxBudget::with_limit(total);
+        let module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &owner_imports,
+            &mut owners,
+            &mut exact,
+            None,
+        )
+        .expect("the same tree and selections succeed at the exact allowance");
+        assert_eq!(module.implementations.len(), 4);
+        assert_eq!(exact.consumed(), total);
+        assert_eq!(owners.len(), 5);
+    }
+
+    #[test]
+    fn forwarded_source_nominal_siblings_preserve_real_core_origins() {
+        let compiled = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/derive-source-forward/main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("ordinary source siblings and the forwarded declaration compile together");
+        let registry = match &compiled.core {
+            CompiledCore::Pure(program) => program.registry(),
+            CompiledCore::Effect(program, _) => program.registry(),
+        };
+        let nominals = registry
+            .nominals()
+            .iter()
+            .filter(|item| ["First", "Second", "Third"].contains(&item.spelling.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            nominals
+                .iter()
+                .map(|item| item.spelling.as_str())
+                .collect::<Vec<_>>(),
+            ["First", "Second", "Third"]
+        );
+        assert!(
+            nominals
+                .iter()
+                .all(|item| matches!(item.origin, Origin::Source(_)))
+        );
+        let constructors = registry
+            .constructors()
+            .iter()
+            .filter(|item| ["First", "Second", "Other", "Third"].contains(&item.spelling.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            constructors
+                .iter()
+                .map(|item| item.spelling.as_str())
+                .collect::<Vec<_>>(),
+            ["First", "Second", "Other", "Third"]
+        );
+        assert!(
+            constructors
+                .iter()
+                .all(|item| matches!(item.origin, Origin::Source(_)))
+        );
+        assert_eq!(
+            constructors[1].origin.primary_span(),
+            constructors[2].origin.primary_span(),
+            "the real forwarded sibling constructors share the full primary Source span"
+        );
+        assert_eq!(constructors[1].owner, nominals[1].id);
+        assert_eq!(constructors[2].owner, nominals[1].id);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
     }
 
     fn observe_s3_transfer(

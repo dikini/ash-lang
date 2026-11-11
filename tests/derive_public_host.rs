@@ -33,6 +33,18 @@ fn fixed_indexed_derives_execute_for_one_two_and_three_constructors() {
 }
 
 #[test]
+fn derive_without_optional_name_reports_missing_second_capture() {
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/derive-host-subject/main.ash");
+    let program = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the host receives the declaration and no second capture");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn fixed_mixed_expansions_report_the_first_authored_rejection() {
     for (name, message) in [
         ("derive_first.ash", "derive rejected"),

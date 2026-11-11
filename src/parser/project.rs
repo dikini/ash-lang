@@ -37,10 +37,13 @@ use super::{
 #[cfg(test)]
 type G1CaptureObserver =
     fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget);
+#[cfg(test)]
+type StagedModuleObserver = fn(&SourceFile, &SurfaceModule);
 
 #[cfg(test)]
 std::thread_local! {
     pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<G1CaptureObserver>> = const { std::cell::Cell::new(None) };
+    pub(crate) static STAGED_MODULE_OBSERVER: std::cell::Cell<Option<StagedModuleObserver>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -2906,6 +2909,12 @@ fn prepare_deriving_outputs<'a>(
             captures,
             span,
         };
+        #[cfg(test)]
+        G1_CAPTURE_OBSERVER.with(|observer| {
+            if let Some(observe) = observer.get() {
+                observe(source, &invocation.captures, budget);
+            }
+        });
         let output = prepare_staged_output(
             invocation,
             false,
@@ -3522,7 +3531,14 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         pending.push(next);
     }
     *owners = staged_owners;
-    Ok(module.finish(span))
+    let module = module.finish(span);
+    #[cfg(test)]
+    STAGED_MODULE_OBSERVER.with(|observer| {
+        if let Some(observe) = observer.get() {
+            observe(source, &module);
+        }
+    });
+    Ok(module)
 }
 
 // Evaluate each actual outer escape through its checked defining-module

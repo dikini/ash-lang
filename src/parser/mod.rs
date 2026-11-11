@@ -16,6 +16,8 @@ pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
 #[cfg(test)]
 pub(crate) use project::G1_CAPTURE_OBSERVER;
+#[cfg(test)]
+pub(crate) use project::STAGED_MODULE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
 #[cfg(test)]
 pub(crate) use project::project_declaration_expansions;

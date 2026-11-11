@@ -41690,6 +41690,152 @@ mod registry_order_tests {
     }
 
     #[test]
+    fn exact_span_ties_keep_registry_identity_owner_order_and_payload_guards() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            None,
+            DuplicateNominal,
+            WrongConstructorOwner,
+            WrongConstructorVector,
+            WrongConstructorSlot,
+            InvalidPayload,
+            DataRepresentation,
+            UnequalNominalOverlap,
+            UnequalConstructorOverlap,
+            ReversedNominals,
+            ReversedConstructors,
+            ForeignSource,
+        }
+        let file = SourceFile::new("tie-guards.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let foreign = SourceFile::new("foreign-tie-guards.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let foreign_span = foreign.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let first = crate::types::NominalTypeId::new(file.id(), 0);
+        let second = crate::types::NominalTypeId::new(file.id(), 1);
+        for expansion in [false, true] {
+            let origin = |primary| {
+                if expansion {
+                    Origin::Expansion {
+                        invocation: primary,
+                        definition: span(11, 12),
+                    }
+                } else {
+                    Origin::Source(primary)
+                }
+            };
+            for mutation in [
+                Mutation::None,
+                Mutation::DuplicateNominal,
+                Mutation::WrongConstructorOwner,
+                Mutation::WrongConstructorVector,
+                Mutation::WrongConstructorSlot,
+                Mutation::InvalidPayload,
+                Mutation::DataRepresentation,
+                Mutation::UnequalNominalOverlap,
+                Mutation::UnequalConstructorOverlap,
+                Mutation::ReversedNominals,
+                Mutation::ReversedConstructors,
+                Mutation::ForeignSource,
+            ] {
+                let nominal = |id, spelling: &str| ResolvedNominalType {
+                    id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: spelling.into(),
+                    constructors: vec![ConstructorId::new(id, 0)].into_boxed_slice(),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: origin(span(0, 10)),
+                };
+                let constructor = |owner, spelling: &str| ResolvedConstructor {
+                    id: ConstructorId::new(owner, 0),
+                    owner,
+                    spelling: spelling.into(),
+                    payload: None,
+                    origin: origin(span(0, 10)),
+                };
+                let mut nominals = vec![nominal(first, "First"), nominal(second, "Second")];
+                let mut constructors = vec![
+                    constructor(first, "FirstValue"),
+                    constructor(second, "SecondValue"),
+                ];
+                match mutation {
+                    Mutation::None => {}
+                    Mutation::DuplicateNominal => nominals[1].id = first,
+                    Mutation::WrongConstructorOwner => constructors[1].owner = first,
+                    Mutation::WrongConstructorVector => {
+                        nominals[1].constructors =
+                            vec![ConstructorId::new(first, 0)].into_boxed_slice()
+                    }
+                    Mutation::WrongConstructorSlot => {
+                        let wrong = ConstructorId::new(second, 1);
+                        nominals[1].constructors = vec![wrong].into_boxed_slice();
+                        constructors[1].id = wrong;
+                    }
+                    Mutation::InvalidPayload => {
+                        constructors[1].payload =
+                            Some(Type::Variable(crate::types::TypeVariableId::new(777)))
+                    }
+                    Mutation::DataRepresentation => nominals[1].representation = Some(Type::Int),
+                    Mutation::UnequalNominalOverlap => {
+                        nominals[1].origin = origin(span(0, 9));
+                        constructors[1].origin = origin(span(0, 9));
+                    }
+                    Mutation::UnequalConstructorOverlap => {
+                        constructors[1].origin = origin(span(0, 9))
+                    }
+                    Mutation::ReversedNominals => {
+                        nominals[0].origin = origin(span(5, 10));
+                        nominals[1].origin = origin(span(0, 4));
+                        constructors[0].origin = origin(span(5, 6));
+                        constructors[1].origin = origin(span(1, 2));
+                    }
+                    Mutation::ReversedConstructors => {
+                        constructors[0].origin = origin(span(5, 6));
+                        constructors[1].origin = origin(span(1, 2));
+                    }
+                    Mutation::ForeignSource => {
+                        nominals[1].origin = origin(foreign_span);
+                        constructors[1].origin = origin(foreign_span);
+                    }
+                }
+                let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                    nominals,
+                    constructors,
+                ));
+                let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(registry);
+                let root = builder
+                    .unit(Type::Unit, Origin::Source(span(0, 1)))
+                    .unwrap();
+                let program = builder.finish(root).unwrap();
+                let fallback = Validator::new(&program, &[&file, &foreign]);
+                let modules = Validator::new_modules(
+                    &program,
+                    &[&file, &foreign],
+                    &[
+                        (first.module(), file.id()),
+                        (ModuleId::from(foreign.id()), foreign.id()),
+                    ],
+                )
+                .unwrap();
+                for result in [fallback.validate_registry(), modules.validate_registry()] {
+                    if matches!(mutation, Mutation::None) {
+                        assert!(
+                            result.is_ok(),
+                            "expansion={expansion}, {mutation:?}: {result:?}"
+                        );
+                    } else {
+                        assert_eq!(
+                            result.unwrap_err().reason(),
+                            ValidationReason::Registry,
+                            "expansion={expansion}, {mutation:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn contextual_range_checks_preserve_ordinary_order_and_reject_overlap() {
         let file = SourceFile::new("contextual-ranges.ash", "AAAAA BBBBB").unwrap();
         let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
