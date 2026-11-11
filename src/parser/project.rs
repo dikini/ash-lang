@@ -2800,6 +2800,30 @@ fn charge_derive_name(
     Ok(())
 }
 
+fn add_derive_subject_cause(
+    name: &mut SurfaceName,
+    origin: &crate::syntax::MacroOrigin,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+    let (live, capacity) = name.diagnostic.as_deref().map_or((0, 0), |location| {
+        (location.related.len(), location.related.capacity())
+    });
+    budget.charge_units(1 + usize::from(name.diagnostic.is_none()))?;
+    let grows = live == capacity;
+    if grows {
+        budget.charge_units(live.saturating_add(1).saturating_add(live))?;
+    }
+    let location = name
+        .diagnostic
+        .get_or_insert_with(|| Box::new(crate::syntax::DiagnosticLocation::new(name.span.into())));
+    if grows {
+        location.related.reserve_exact(1);
+    }
+    location.related.push(origin.clone());
+    Ok(())
+}
+
 // Construct the original subject once, then invoke each listed derive in its
 // authored order. Their outputs remain queued until the whole list succeeds.
 #[allow(clippy::too_many_arguments)]
@@ -2892,20 +2916,7 @@ fn prepare_deriving_outputs<'a>(
         };
         // Preserve the actual subject name as a related cause without
         // changing the listed name's context or its enclosing frames.
-        crate::syntax::charge_type_origin_copy(&target_origin, 0, budget)?;
-        let related = name
-            .diagnostic
-            .as_deref()
-            .map_or(0, |location| location.related.len());
-        budget.charge_units(
-            related
-                .saturating_add(2)
-                .saturating_add(usize::from(name.diagnostic.is_none())),
-        )?;
-        let location = name.diagnostic.get_or_insert_with(|| {
-            Box::new(crate::syntax::DiagnosticLocation::new(name.span.into()))
-        });
-        location.related.push(target_origin.clone());
+        add_derive_subject_cause(&mut name, &target_origin, budget)?;
         crate::syntax::charge_selected(selection, budget)?;
         budget.charge_units(3)?;
         let mut captures = Vec::with_capacity(2);
@@ -20853,6 +20864,51 @@ mod tests {
             ))
         ));
         (source, tree, output)
+    }
+
+    #[test]
+    fn derive_subject_cause_prepays_reached_related_growth_and_retries() {
+        use crate::syntax::{DiagnosticLocation, MacroOrigin};
+        use crate::syntax_resource::SyntaxBudget;
+
+        let source =
+            SourceFile::new("derive-cause.ash", "type Color = Red\nderiving (marker)\n").unwrap();
+        let target = source.span(ByteRange::new(5, 10).unwrap()).unwrap();
+        let listed = source.span(ByteRange::new(27, 33).unwrap()).unwrap();
+        let origin = MacroOrigin::Source(target);
+        let mut location = DiagnosticLocation::new(listed.into());
+        location.related = vec![origin.clone(), origin.clone(), origin.clone()];
+        location.related.shrink_to_fit();
+        assert_eq!(location.related.len(), location.related.capacity());
+        let name = SurfaceName {
+            text: "marker".into(),
+            span: listed,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: Some(Box::new(location)),
+        };
+        let original = name.diagnostic.clone();
+        let mut measured_name = name.clone();
+        let mut measured = SyntaxBudget::default();
+        add_derive_subject_cause(&mut measured_name, &origin, &mut measured).unwrap();
+        let used = measured.consumed();
+        assert!(used >= 9, "the reached growth retains four and moves three");
+        assert_eq!(measured_name.diagnostic.as_ref().unwrap().related.len(), 4);
+        for limit in [0, used - 1] {
+            let mut short_name = name.clone();
+            let mut short = SyntaxBudget::with_limit(limit);
+            assert!(matches!(
+                add_derive_subject_cause(&mut short_name, &origin, &mut short),
+                Err(ResourceFailure::SyntaxWork { limit: found }) if found == limit
+            ));
+            assert_eq!(short_name.diagnostic, original);
+        }
+        let mut exact_name = name;
+        let mut exact = SyntaxBudget::with_limit(used);
+        add_derive_subject_cause(&mut exact_name, &origin, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
+        assert_eq!(exact_name.diagnostic, measured_name.diagnostic);
     }
 
     #[test]

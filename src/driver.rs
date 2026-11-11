@@ -512,6 +512,7 @@ impl SyntaxExpansionFailure {
         location: &crate::syntax::DiagnosticLocation,
         budget: &mut crate::syntax_resource::SyntaxBudget,
     ) -> Result<(), ResourceFailure> {
+        budget.charge_units(location.frames.len())?;
         crate::syntax::charge_diagnostic_location_copy(location, budget)?;
         self.invocation_location = Some(Box::new(location.clone()));
         Ok(())
@@ -5035,6 +5036,7 @@ mod tests {
         static DERIVE_MODULE_ORDER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
         static INDEXED_TRANSFERRED: RefCell<Vec<(Vec<crate::surface::SurfaceSyntaxCapture>, Vec<crate::syntax::MacroOutputNode>)>> = const { RefCell::new(Vec::new()) };
         static DERIVE_WORK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+        static BOUNDED_OUTPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
     fn observe_derive_input(
@@ -5117,6 +5119,9 @@ mod tests {
             .unwrap();
         let used = measured.consumed();
         assert!(used > 1);
+        let mut prior_copy = SyntaxBudget::default();
+        crate::syntax::charge_diagnostic_location_copy(&location, &mut prior_copy).unwrap();
+        assert_eq!(used, prior_copy.consumed() + location.frames.len());
         assert_eq!(rejection.invocation_location.take().unwrap(), location);
         for limit in [0, used - 1] {
             let mut short = SyntaxBudget::with_limit(limit);
@@ -5133,6 +5138,51 @@ mod tests {
             .unwrap();
         assert_eq!(exact.consumed(), used);
         assert_eq!(rejection.invocation_location.as_deref(), Some(&*location));
+    }
+
+    fn observe_bounded_output(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        _output: &[crate::syntax::MacroOutputNode],
+    ) {
+        if selection.declaration.name.text == "repeat" {
+            BOUNDED_OUTPUTS.set(BOUNDED_OUTPUTS.get() + 1);
+        }
+    }
+
+    #[test]
+    fn checked_derive_recursion_stops_at_existing_bound_and_closes_hosts() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        BOUNDED_OUTPUTS.set(0);
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_bounded_output));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/derive-bounded/main.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let failure = result.expect_err("recursive derived output must not publish a module");
+        let reason = failure.reason_code();
+        assert!(
+            reason == "internal.resource.structural-depth"
+                || reason == "internal.resource.syntax-work",
+            "the existing syntax bound must refuse the repeated output: {failure:?}"
+        );
+        let completed = BOUNDED_OUTPUTS.get();
+        let attempts = hooks::TRANSFER_ATTEMPTS.get();
+        assert!(completed > 1, "the real checked derive must recur");
+        assert_eq!(attempts, completed + hooks::TRANSFER_FAILURES.get());
+        assert!(hooks::ROOT_CLOSES.get() >= attempts);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        println!(
+            "{reason}; {completed} completed outputs, {attempts} transfer attempts, {} root closes, {} transformer drops",
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get()
+        );
+        hooks::reset();
     }
 
     #[test]
