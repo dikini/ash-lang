@@ -110,6 +110,23 @@ superseded where the later retained checkpoints say so.
   delivered scope is held on D6 [#219](https://github.com/dikini/ash-lang/issues/219),
   which still needs the checked procedural transformer Import-output refusal.
 
+### Introduced module-constructor candidate
+
+The focused [#306](https://github.com/dikini/ash-lang/issues/306) candidate
+retains the existing module constructor identities under their admitted
+declaration-template introductions. The original no-Derive generated and
+handwritten controls both return 42 on the candidate. The unchanged I09
+nested graph advances beyond its constructor lookup and then stops at the
+separate introduced nominal lookup in
+[#308](https://github.com/dikini/ash-lang/issues/308). A generated Newtype
+constructor likewise reaches a later Core registry refusal; its handwritten
+control returns 42. These later results do not establish the nested or
+generated Newtype runtime criteria.
+
+Focused identity, context, visibility, duplicate and resource checks, review,
+retention and acceptance remain required for #306. The bounded #308 repair is
+separately authorized and remains outside this candidate.
+
 ### Connected derive and checked-host candidate
 
 **Candidate:** Draft [PR #307](https://github.com/dikini/ash-lang/pull/307)

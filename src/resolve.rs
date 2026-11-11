@@ -21854,6 +21854,320 @@ mod tests {
         project_module(&source, &tree).expect("the declaration fixture should project")
     }
 
+    fn staged_module_constructor_fixture() -> (SurfaceModule, Vec<crate::syntax::SyntaxOwner>) {
+        use crate::parser::{
+            finish_module_from_checkpoint_with_syntax, parse_module_header,
+            project_declaration_expansions, project_module_retaining_templates,
+        };
+        use crate::syntax::SelectedSyntax;
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new(
+            "constructor-forms.ash",
+            concat!(
+                "pub syntax declaration: (spawn) => {\n",
+                "type Generated = Generated\n",
+                "newtype Wrapped = Wrapped(Int)\n",
+                "type Several =\n",
+                "First\n",
+                "| Second\n",
+                "| Third\n",
+                "| Fourth\n",
+                "probe : Unit -> Int\n",
+                "probe () = match Generated {\n",
+                "Generated => 42\n",
+                "}\n",
+                "wrapped : Unit -> Int\n",
+                "wrapped () = match Wrapped(42) {\n",
+                "Wrapped(value) => value\n",
+                "}\n",
+                "shadow : Unit -> Int\n",
+                "shadow () = {\n",
+                "newtype Generated = Generated(Int)\n",
+                "match Generated(42) {\n",
+                "Generated(value) => value\n",
+                "}\n",
+                "}\n",
+                "bad : Unit -> Int\n",
+                "bad () = {\n",
+                "newtype Generated = Generated(Int)\n",
+                "Missing\n",
+                "}\n",
+                "}\n",
+                "pub syntax declaration: (other) => {\n",
+                "type Other = Other\n",
+                "}\n",
+            ),
+        )
+        .unwrap();
+        let tree = parse(lex(&forms).unwrap());
+        let selected: Vec<_> = project_module_retaining_templates(&forms, &tree)
+            .expect("the definition templates should project")
+            .syntax_declarations
+            .into_iter()
+            .map(|declaration| SelectedSyntax {
+                name: declaration.name.text.clone(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            })
+            .collect();
+        let caller = SourceFile::new("constructor-caller.ash", "spawn\nother\n").unwrap();
+        let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) =
+            finish_module_from_checkpoint_with_syntax(checkpoint, budget, Some(&caller), &selected);
+        assert!(tree.parse_diagnostics().is_empty());
+        let mut owners = Vec::new();
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut owners,
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .expect("the actual declaration stager should emit the fixture");
+        (module, owners)
+    }
+
+    #[test]
+    fn introduced_module_constructors_resolve_actual_staged_ids_and_restore_scopes() {
+        let (surface, owners) = staged_module_constructor_fixture();
+        let mut resolver = Resolver::new(ModuleId::new(7_101));
+        let identities = resolver
+            .install_nominal_identities(&surface.type_declarations)
+            .expect("staged declarations install their original IDs");
+        assert_eq!(identities.len(), 4);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+
+        for (declaration, identity) in surface.type_declarations.iter().zip(&identities) {
+            for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors) {
+                let name = &constructor.name;
+                assert_ne!(name.introduction, 0);
+                assert_eq!(owners[name.introduction - 1].owner, Some(0));
+                assert!(name.introduced_at.is_some());
+                assert_eq!(resolver.constructor_names.get(&name.text), Some(id));
+                assert_eq!(
+                    resolver.lexical_constructor_scopes[0]
+                        .get(&(name.text.clone(), name.introduction)),
+                    Some(id),
+                );
+                assert_eq!(id.owner(), identity.id);
+            }
+        }
+        assert_ne!(
+            surface.type_declarations[0].constructors[0]
+                .name
+                .introduction,
+            surface.type_declarations[3].constructors[0]
+                .name
+                .introduction,
+        );
+
+        for (definition_index, declaration_index) in [(0, 0), (1, 1)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected an equational generated function")
+            };
+            let SurfaceExprKind::Match(source_match) = &function.equations[0].body.kind else {
+                panic!("expected a generated match")
+            };
+            let SurfacePatternKind::Constructor { name: pattern, .. } =
+                &source_match.arms[0].pattern.kind
+            else {
+                panic!("expected a constructor pattern")
+            };
+            let source_name = &surface.type_declarations[declaration_index].constructors[0].name;
+            assert_eq!(pattern.member().introduction, source_name.introduction);
+            let source_scrutinee = if declaration_index == 1 {
+                let SurfaceExprKind::Apply(application) = &source_match.scrutinee.kind else {
+                    panic!("the newtype constructor has a payload")
+                };
+                &application.function
+            } else {
+                &source_match.scrutinee
+            };
+            let SurfaceExprKind::Name(reference) = &source_scrutinee.kind else {
+                panic!("expected the original constructor reference")
+            };
+            assert_eq!(reference.member().introduction, source_name.introduction);
+            let resolved = resolver
+                .resolve_expr(&function.equations[0].body)
+                .expect("the actual staged expression and pattern should resolve");
+            let ResolvedExprKind::Match(resolved_match) = resolved.kind else {
+                panic!("expected a resolved match")
+            };
+            let ResolvedPatternKind::Constructor { constructor, .. } =
+                resolved_match.arms[0].pattern.kind
+            else {
+                panic!("expected a resolved constructor pattern")
+            };
+            assert_eq!(constructor, identities[declaration_index].constructors[0]);
+            let scrutinee = if declaration_index == 1 {
+                let ResolvedExprKind::Apply(application) = &resolved_match.scrutinee.kind else {
+                    panic!("the newtype constructor is applied to its payload")
+                };
+                &application.function
+            } else {
+                &resolved_match.scrutinee
+            };
+            let ResolvedExprKind::Constructor(occurrence) = &scrutinee.kind else {
+                panic!("expected the constructor expression")
+            };
+            assert_eq!(occurrence.constructor, constructor);
+            assert_eq!(occurrence.spelling, source_name.text);
+            assert_eq!(occurrence.origin, Origin::Source(reference.span()));
+            assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        }
+
+        // A term in the existing lexical scope keeps its normal precedence.
+        let SurfaceDefinitionKind::Equational(probe) = &surface.definitions[0].kind else {
+            panic!("expected the generated probe")
+        };
+        let SurfaceExprKind::Match(probe_match) = &probe.equations[0].body.kind else {
+            panic!("expected the generated match")
+        };
+        let SurfaceExprKind::Name(reference) = &probe_match.scrutinee.kind else {
+            panic!("expected the generated constructor reference")
+        };
+        let name = reference.member();
+        let binder = resolver.allocate_contextual_binder(name).unwrap();
+        let key = (name.text.clone(), name.introduction);
+        resolver.scopes[0].insert(
+            key.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+        );
+        let term = resolver.resolve_expr(&probe_match.scrutinee).unwrap();
+        let ResolvedExprKind::Occurrence(occurrence) = term.kind else {
+            panic!("the lexical term must keep precedence over the constructor")
+        };
+        assert_eq!(occurrence.term, ResolvedTermName::Global(binder.id));
+        resolver.scopes[0].remove(&key);
+
+        let SurfaceDefinitionKind::Equational(shadow) = &surface.definitions[2].kind else {
+            panic!("expected the local newtype control")
+        };
+        let resolved = resolver.resolve_expr(&shadow.equations[0].body).unwrap();
+        let ResolvedExprKind::Block(block) = resolved.kind else {
+            panic!("expected the resolved local block")
+        };
+        let ResolvedLocalDeclaration::Newtype(local_owner) = block.declarations[0] else {
+            panic!("expected the local newtype")
+        };
+        let ResolvedExprKind::Match(local_match) = &block.result.kind else {
+            panic!("expected the local match")
+        };
+        let ResolvedPatternKind::Constructor { constructor, .. } = local_match.arms[0].pattern.kind
+        else {
+            panic!("expected the local constructor pattern")
+        };
+        assert_eq!(constructor.owner(), local_owner);
+        assert_ne!(constructor, identities[0].constructors[0]);
+        let ResolvedExprKind::Apply(application) = &local_match.scrutinee.kind else {
+            panic!("the local constructor is applied to its payload")
+        };
+        let ResolvedExprKind::Constructor(occurrence) = &application.function.kind else {
+            panic!("expected the local constructor expression")
+        };
+        assert_eq!(occurrence.constructor, constructor);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+
+        let SurfaceDefinitionKind::Equational(bad) = &surface.definitions[3].kind else {
+            panic!("expected the local failure control")
+        };
+        assert_eq!(
+            resolver
+                .resolve_expr(&bad.equations[0].body)
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownConstructor,
+        );
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        let generated = &surface.type_declarations[0].constructors[0].name;
+        assert_eq!(
+            resolver.lexical_constructor_scopes[0]
+                .get(&(generated.text.clone(), generated.introduction)),
+            Some(&identities[0].constructors[0]),
+        );
+    }
+
+    #[test]
+    fn introduced_module_constructor_reservation_is_atomic_and_retryable() {
+        let (surface, _) = staged_module_constructor_fixture();
+        let module = ModuleId::new(7_102);
+        let mut measured = Resolver::with_type_work(module, TypeWorkBudget::unbounded());
+        measured
+            .install_nominal_identities(&surface.type_declarations)
+            .unwrap();
+        let work = measured.type_work.used();
+        assert!(work > 0);
+        assert!(measured.lexical_constructor_scopes[0].len() > 4);
+        for prefix in [0, 11] {
+            let mut short =
+                Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work - 1));
+            short.type_work.charge(prefix).unwrap();
+            let error = match short.install_nominal_identities(&surface.type_declarations) {
+                Ok(_) => panic!("a short budget must refuse before publishing the frame"),
+                Err(error) => error,
+            };
+            assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+            assert_eq!(short.type_work.used(), prefix);
+            assert!(short.lexical_constructor_scopes.is_empty());
+            for _ in 0..2 {
+                let mut exact =
+                    Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work));
+                exact.type_work.charge(prefix).unwrap();
+                let identities = exact
+                    .install_nominal_identities(&surface.type_declarations)
+                    .expect("a fresh exact retry must retain the complete frame");
+                assert_eq!(exact.type_work.used(), prefix + work);
+                assert_eq!(exact.lexical_constructor_scopes.len(), 1);
+                assert_eq!(
+                    exact.lexical_constructor_scopes[0].len(),
+                    measured.lexical_constructor_scopes[0].len()
+                );
+                assert_eq!(identities.len(), surface.type_declarations.len());
+            }
+        }
+        let ordinary = declaration_fixture("ordinary-constructors.ash", "type Plain = Plain\n");
+        let mut plain = Resolver::with_type_work(module, TypeWorkBudget::with_limit(0));
+        plain
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert!(plain.lexical_constructor_scopes.is_empty());
+        assert_eq!(plain.type_work.used(), 0);
+
+        let mut mixed_declarations = surface.type_declarations.clone();
+        mixed_declarations.extend(ordinary.type_declarations.iter().cloned());
+        let mut mixed = Resolver::new(module);
+        let ids = mixed
+            .install_nominal_identities(&mixed_declarations)
+            .unwrap();
+        let source_name = &ordinary.type_declarations[0].constructors[0].name;
+        assert_eq!(source_name.introduction, 0);
+        assert_eq!(
+            mixed
+                .constructor_reference(&SurfaceReference::Unqualified(source_name.clone()))
+                .unwrap(),
+            ids.last().unwrap().constructors[0],
+        );
+        assert!(!mixed.lexical_constructor_scopes[0].contains_key(&(source_name.text.clone(), 0)));
+
+        // A fresh module cannot see an introduced constructor from another one.
+        let introduced = &surface.type_declarations[0].constructors[0].name;
+        assert_eq!(
+            plain
+                .constructor_reference(&SurfaceReference::Unqualified(introduced.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownConstructor,
+        );
+    }
+
     #[test]
     fn lexical_method_lookup_and_parameter_registry_have_exact_work_boundaries() {
         for (interface_count, method_count, parameter_count) in
