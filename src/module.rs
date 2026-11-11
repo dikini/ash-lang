@@ -1577,6 +1577,7 @@ struct StagedSyntax {
     body: ModuleBody,
     import_span: Option<Span>,
     needs_quote_dependency: bool,
+    needs_generator_dependency: bool,
 }
 
 enum ModuleBody {
@@ -1586,12 +1587,17 @@ enum ModuleBody {
 
 impl StagedSyntax {
     fn parsed(mut surface: SurfaceModule, import_span: Option<Span>) -> Self {
+        let needs_generator_dependency = surface
+            .syntax_declarations
+            .iter()
+            .any(|declaration| declaration.contains_generators);
         Self {
             imports: std::mem::take(&mut surface.imports),
             span: surface.span,
             body: ModuleBody::Parsed(surface),
             import_span,
             needs_quote_dependency: false,
+            needs_generator_dependency,
         }
     }
 }
@@ -1613,6 +1619,7 @@ impl StagedModule {
             body,
             import_span,
             needs_quote_dependency,
+            needs_generator_dependency: _,
         } = self.surface;
         let mut completed_owners = None;
         let mut completed_sites = Vec::new();
@@ -2202,7 +2209,8 @@ fn discover_graph_with_budget(
                 {
                     staged[module_index].dependencies.rotate_left(1);
                 }
-                if staged[module_index].surface.needs_quote_dependency
+                if (staged[module_index].surface.needs_quote_dependency
+                    || staged[module_index].surface.needs_generator_dependency)
                     && !staged[module_index]
                         .dependencies
                         .iter()
@@ -2979,6 +2987,7 @@ fn parse_graph_module(
             import_span,
         })?;
     let needs_quote_dependency = lexed.needs_quote_dependency();
+    let needs_generator_dependency = lexed.needs_generator_dependency();
     let (tokens, lexical, _, lexical_failure) = lexed.into_parts();
     if let Some(resource) = lexical_failure {
         return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
@@ -3034,6 +3043,7 @@ fn parse_graph_module(
             body: ModuleBody::Header(checkpoint),
             import_span,
             needs_quote_dependency,
+            needs_generator_dependency,
         },
     ))
 }
@@ -3433,6 +3443,7 @@ mod tests {
                 body: ModuleBody::Header(checkpoint),
                 import_span: None,
                 needs_quote_dependency: false,
+                needs_generator_dependency: false,
             },
             dependencies: Vec::new(),
             relative_edges: Vec::new(),

@@ -66,6 +66,44 @@ fn graph_at(entry: &Path, mode: BodyMode, limit: usize) -> Result<HeaderGraph, G
 }
 
 #[test]
+fn generator_definition_admits_canonical_builtin_before_source_census() {
+    let tree = Tree::new();
+    let entry = tree.write(
+        "entry.ash",
+        "import forms (syntax make)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let forms = tree.write(
+        "forms.ash",
+        "pub syntax declaration: (make) => {} with { $g from 0 step next }\n",
+    );
+    let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let form_index = graph
+        .pending
+        .iter()
+        .position(|module| module.canonical_path == forms)
+        .unwrap();
+    let staged = &graph.pending[form_index];
+    assert!(staged.surface.needs_generator_dependency);
+    assert!(!staged.surface.needs_quote_dependency);
+    assert!(staged.surface.imports.is_empty());
+    let edge = staged
+        .dependencies
+        .iter()
+        .find(|edge| edge.target().is_builtin_compiler_syntax())
+        .unwrap();
+    assert!(edge.is_compiler_private());
+    let builtin_index = graph
+        .pending
+        .iter()
+        .position(|module| module.id == edge.target())
+        .unwrap();
+    assert!(builtin_index < form_index);
+    let builtin = &graph.pending[builtin_index];
+    let (_, bytes) = graph.source_work().unwrap();
+    assert!(bytes >= builtin.source.text().len() + staged.source.text().len());
+}
+
+#[test]
 fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     use std::{cell::RefCell, sync::Arc};
 

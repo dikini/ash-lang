@@ -2581,11 +2581,23 @@ pub(crate) fn generator_adapter_definition(
         };
         match &generator.step {
             SurfaceReference::Unqualified(name) => {
-                charge_type_name_copy(name, 0, budget).map_err(resource)?
+                charge_type_name_copy(name, 0, budget).map_err(resource)?;
+                if let Some(location) = name.diagnostic.as_deref() {
+                    budget
+                        .charge_units(location.frames.len())
+                        .map_err(resource)?;
+                }
             }
             SurfaceReference::Qualified(qualified) => {
                 charge_type_name_copy(&qualified.qualifier, 0, budget).map_err(resource)?;
                 charge_type_name_copy(&qualified.member, 0, budget).map_err(resource)?;
+                for name in [&qualified.qualifier, &qualified.member] {
+                    if let Some(location) = name.diagnostic.as_deref() {
+                        budget
+                            .charge_units(location.frames.len())
+                            .map_err(resource)?;
+                    }
+                }
             }
         }
         let mut step = generator.step.clone();
@@ -2617,6 +2629,10 @@ pub(crate) fn generator_adapter_definition(
                 let generator = &generators[*binding];
                 let seed = match &generator.seed.kind {
                     SurfaceExprKind::TemplateSplice(name) => {
+                        charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
+                        budget
+                            .charge_units(indices.len().saturating_mul(3))
+                            .map_err(resource)?;
                         let SurfaceSyntaxCapture::Expression(capture) =
                             capture_by_name_at(name, matcher, captures, indices)
                                 .map_err(|_| MacroParseFailure::Invalid)?
