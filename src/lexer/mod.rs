@@ -161,12 +161,31 @@ enum DelimiterContext {
     File,
     Paren,
     Brace,
+    TemplateRepeat { emits_line_end: bool },
 }
 
 impl DelimiterContext {
     const fn emits_line_end(self) -> bool {
-        matches!(self, Self::File | Self::Brace)
+        match self {
+            Self::File | Self::Brace => true,
+            Self::Paren => false,
+            Self::TemplateRepeat { emits_line_end } => emits_line_end,
+        }
     }
+}
+
+// Only the declaration form has a template in which repetition may contain
+// whole declarations. The matcher precedes the arrow and keeps ordinary
+// parenthesis newline rules.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeclarationHeader {
+    None,
+    Pub,
+    Syntax,
+    Declaration,
+    Opening,
+    Matcher,
+    Arrow,
 }
 
 /// Lexes one admitted source file.
@@ -191,6 +210,9 @@ pub(crate) fn lex_with_budget(
     let mut diagnostics = Vec::new();
     let mut contexts = vec![DelimiterContext::File];
     let mut logical_line_has_token = false;
+    let mut declaration_header = DeclarationHeader::None;
+    let mut declaration_template_depth = None;
+    let mut template_escape_depth = None;
     let mut needs_quote_dependency = false;
     macro_rules! charge_syntax {
         () => {
@@ -225,6 +247,9 @@ pub(crate) fn lex_with_budget(
                     span: checked_span(source, start, offset)?,
                 });
                 logical_line_has_token = false;
+                if contexts.len() == 1 {
+                    declaration_header = DeclarationHeader::None;
+                }
             }
             continue;
         }
@@ -397,7 +422,57 @@ pub(crate) fn lex_with_budget(
                 continue;
             }
         };
-        update_delimiter_contexts(&mut contexts, &kind);
+        let at_file = contexts.len() == 1;
+        let previous_is_dollar = tokens
+            .last()
+            .is_some_and(|previous: &Token| previous.kind == TokenKind::Dollar);
+        declaration_header = match (declaration_header, &kind) {
+            (DeclarationHeader::None, TokenKind::Pub) if at_file && !logical_line_has_token => {
+                DeclarationHeader::Pub
+            }
+            (DeclarationHeader::Pub, TokenKind::SyntaxKeyword) if at_file => {
+                DeclarationHeader::Syntax
+            }
+            (DeclarationHeader::Syntax, TokenKind::Identifier(name))
+                if at_file && name == "declaration" =>
+            {
+                DeclarationHeader::Declaration
+            }
+            (DeclarationHeader::Declaration, TokenKind::Colon) if at_file => {
+                DeclarationHeader::Opening
+            }
+            (DeclarationHeader::Opening, TokenKind::LeftParen) if at_file => {
+                DeclarationHeader::Matcher
+            }
+            (DeclarationHeader::Matcher, TokenKind::FatArrow) if at_file => {
+                DeclarationHeader::Arrow
+            }
+            (DeclarationHeader::Matcher, _) => DeclarationHeader::Matcher,
+            (DeclarationHeader::Arrow, TokenKind::LeftBrace) if at_file => {
+                declaration_template_depth = Some(contexts.len() + 1);
+                DeclarationHeader::None
+            }
+            _ => DeclarationHeader::None,
+        };
+        let in_template = declaration_template_depth.is_some();
+        if in_template
+            && template_escape_depth.is_none()
+            && previous_is_dollar
+            && kind == TokenKind::LeftBrace
+        {
+            template_escape_depth = Some(contexts.len() + 1);
+        }
+        let template_repeat = in_template
+            && template_escape_depth.is_none()
+            && previous_is_dollar
+            && kind == TokenKind::LeftParen;
+        update_delimiter_contexts(&mut contexts, &kind, template_repeat);
+        if template_escape_depth.is_some_and(|depth| contexts.len() < depth) {
+            template_escape_depth = None;
+        }
+        if declaration_template_depth.is_some_and(|depth| contexts.len() < depth) {
+            declaration_template_depth = None;
+        }
         logical_line_has_token = true;
         if matches!(&kind, TokenKind::LeftBrace)
             && tokens.last().is_some_and(|previous: &Token| {
@@ -511,11 +586,26 @@ fn scan_identifier_like(text: &str, start: usize) -> usize {
     end
 }
 
-fn update_delimiter_contexts(contexts: &mut Vec<DelimiterContext>, kind: &TokenKind) {
+fn update_delimiter_contexts(
+    contexts: &mut Vec<DelimiterContext>,
+    kind: &TokenKind,
+    template_repeat: bool,
+) {
     match kind {
+        TokenKind::LeftParen if template_repeat => {
+            let emits_line_end = contexts
+                .last()
+                .is_some_and(|context| context.emits_line_end());
+            contexts.push(DelimiterContext::TemplateRepeat { emits_line_end });
+        }
         TokenKind::LeftParen => contexts.push(DelimiterContext::Paren),
         TokenKind::LeftBrace => contexts.push(DelimiterContext::Brace),
-        TokenKind::RightParen if contexts.last() == Some(&DelimiterContext::Paren) => {
+        TokenKind::RightParen
+            if matches!(
+                contexts.last(),
+                Some(DelimiterContext::Paren | DelimiterContext::TemplateRepeat { .. })
+            ) =>
+        {
             let _ = contexts.pop();
         }
         TokenKind::RightBrace if contexts.last() == Some(&DelimiterContext::Brace) => {

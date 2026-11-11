@@ -17,17 +17,18 @@
 
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
-checks are recorded in the delivery plan. The verified retaining commit before
-the G1 candidate is `b8cad02c9f296b539076195fb12811e69e1d64f5`, tree
-`a7753f6009613fdaaee9b5b5a5bc701e42ea9b29`. Recheck refs and worker ownership
-before dispatch. The plan records the earlier retained squash commits, their
+checks are recorded in the delivery plan. The E4 checkpoint was retained by
+[PR #298](https://github.com/dikini/ash-lang/pull/298) at
+`17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`, tree
+`2a9235f9c52c39376a12c724fbfa18394b04a419`. Recheck refs and worker ownership
+before dispatch. The plan records earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
 The reviewed work structure is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206)
 as seven workstreams and 45 child issues. All 112 native blocking links still
-match the reviewed graph. D1 #214, S1 #215 and D8 #232 are closed; 42 child
-issues remain open. The user has authorized delivery and squash merges into the retaining
-branch; Main remains separate.
+match the reviewed graph. The retained acceptance records below identify the
+closed units; later connected criteria remain open. The user has authorized
+delivery and squash merges into the retaining branch; Main remains separate.
 
 The active `/root` orchestrator inherits its launching model/effort and owns
 integration. Planning uses GPT 6.1 Sol Max; development uses GPT 6.1 Terra Max;
@@ -73,11 +74,54 @@ cases, prerequisites and hard boundaries.
 The reviewed original 45-unit delivery prediction is **142 points**. C1–C4's
 recorded planning scope is **8 predicted points**, giving **150 points** for
 the full scope. Preserve these fixed predictions and all original DAG edges.
-D1, S1 and D8 account for ten fully closed predicted points; the 42 open units
-total 132 original points and include retained partial work. These figures do
-not measure remaining effort or grant partial acceptance credit. Earlier
+D1, S1 and D8 account for ten original predicted points; the later retained
+acceptances below add completed units. These figures do not measure remaining
+effort or grant partial acceptance credit. Earlier
 partial-delivery records below describe their state at the time and are
 superseded where the later retained checkpoints say so.
+
+### Later retained acceptances
+
+- D2 [#216](https://github.com/dikini/ash-lang/issues/216), D7
+  [#217](https://github.com/dikini/ash-lang/issues/217) and H1
+  [#220](https://github.com/dikini/ash-lang/issues/220) are closed on their
+  original focused criteria, supported by the D8 checkpoint in
+  [PR #295](https://github.com/dikini/ash-lang/pull/295), retained at
+  `ac3a70d3bd2e24fd316d7bee3b98c08458ccdee1`.
+- H2 [#224](https://github.com/dikini/ash-lang/issues/224) and H3
+  [#229](https://github.com/dikini/ash-lang/issues/229) are closed on their
+  original focused context and refusal criteria using retained evidence and D8.
+- E4 [#242](https://github.com/dikini/ash-lang/issues/242) is closed after the
+  independently reviewed E4 checkpoint and the retained PR #298 tree above.
+  E1 [#226](https://github.com/dikini/ash-lang/issues/226) and E2
+  [#239](https://github.com/dikini/ash-lang/issues/239) remain partial.
+- S3 [#221](https://github.com/dikini/ash-lang/issues/221) is closed on its
+  original focused host-transfer criteria. The exact I16 mutation and other
+  later connected cases remain at their original gates.
+
+### Connected I19 capture and repetition delivery
+
+The current candidate connects the retained extended definition and template,
+category-aware matching, nested capture lookup, repeated output, and the
+ordinary module collector. The unchanged I19 main, counts, and binder graphs
+execute to 128, 42, and 42; their handwritten controls match. The fixed
+missing-driver, unequal-driver, empty-plus, trailing-separator, and ambiguous
+definition cases reach their specific causes. Fresh incomplete and
+two-declaration capture mutations reject at the caller boundary. The candidate
+also exercises the shared ledger and atomic collector on actual repeated and
+caller-authored declaration output. These candidate results await independent
+final review and retaining-tree verification; they do not by themselves close
+the remaining original issues.
+
+The earlier empty-template producer and Identifier-only structured matcher
+were insufficient for the connected graph. A further attempted nested
+invocation exposed an invalid cross-source span join; the projector now uses
+the existing enclosing occurrence for the aggregate invocation while retaining
+the caller and definition origins on their original nodes. Repetition escapes,
+direct protected quoted-AST copying, and the separately tracked downstream
+origin and nominal-context gaps remain outside this delivery. The next fresh
+full-workspace checkpoint is V7; focused verification and independent review
+apply to this candidate before retention.
 
 **Delivered:** Thirteen earlier reviewed squash deliveries establish D1/S1,
 partial declaration selection/matching/admission, type/pattern capture producers,

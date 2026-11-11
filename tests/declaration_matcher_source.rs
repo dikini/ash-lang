@@ -37,7 +37,7 @@ fn rejects_the_fixed_repetition_separator_follow_ambiguity() {
     let following_separator = text.rfind(", tail").unwrap();
     assert!(
         tree.parse_diagnostics().iter().any(|diagnostic| {
-            diagnostic.reason == ParseReason::ExpectedForm
+            diagnostic.reason == ParseReason::MatcherRepetitionAmbiguous
                 && diagnostic.primary.span().range().start() as usize == following_separator
         }),
         "{:?}",

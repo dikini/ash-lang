@@ -89,6 +89,15 @@ fn parse_precedence(
 fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExpression {
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
+    if parser.at_forwarded_declaration() {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Expression);
+        let _ = parser.bump();
+        parser.finish();
+        return CompletedExpression {
+            start_event,
+            depth: 0,
+        };
+    }
     if parser.in_template && parser.at(&TokenKind::Dollar) {
         let _ = parser.bump();
         if matches!(parser.current(), Some(TokenKind::Identifier(_))) {

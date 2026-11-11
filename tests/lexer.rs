@@ -40,6 +40,41 @@ fn syntax_is_a_keyword_and_dollar_is_a_token() {
 }
 
 #[test]
+fn declaration_template_repetition_retains_its_declaration_line_ends() {
+    let text = "pub syntax declaration: (make) $( $name:ident\n ),* => {\n    $(\n        pub $name : Unit -> Int\n        $name () = (40 +\n            2)\n    )*\n}\n";
+    let source = SourceFile::new("template-lines.ash", text).unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty());
+    let line_end_after = |fragment: &str| {
+        let end = text.find(fragment).unwrap() + fragment.len() - 1;
+        lexed.tokens.iter().any(|token| {
+            token.kind == TokenKind::LineEnd && token.span.range().start() as usize == end
+        })
+    };
+    assert!(!line_end_after("$name:ident\n"));
+    assert!(line_end_after("Unit -> Int\n"));
+    assert!(!line_end_after("(40 +\n"));
+}
+
+#[test]
+fn repetition_line_end_policy_stays_with_its_own_declaration_template() {
+    let text = "pub syntax declaration : word => {\n$( x\ny )*\n}\npub syntax declaration: (real) $( $x:ident\n),* => {\n$( ${ syntax { $( a\nb )* } }\n$x\n)*\n}\n";
+    let source = SourceFile::new("template-contexts.ash", text).unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty());
+    let line_end_after = |fragment: &str| {
+        let end = text.find(fragment).unwrap() + fragment.len() - 1;
+        lexed.tokens.iter().any(|token| {
+            token.kind == TokenKind::LineEnd && token.span.range().start() as usize == end
+        })
+    };
+    assert!(!line_end_after("$( x\n"));
+    assert!(!line_end_after("$x:ident\n"));
+    assert!(!line_end_after("$( a\n"));
+    assert!(line_end_after("$x\n"));
+}
+
+#[test]
 fn recognizes_recursion_reserved_words() {
     let source = SourceFile::new("recursion-words.ash", "rec and record android")
         .expect("the token source should fit");
