@@ -425,3 +425,88 @@ fn literal_template_output_is_checked_while_discarded_input_is_not() {
     let failure = compile_path(configuration()).expect_err("generated output is checked");
     assert!(failure.reason_code().starts_with("type."), "{failure:?}");
 }
+
+#[test]
+fn introduced_and_handwritten_duplicate_globals_keep_both_sources() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("forms.ash"),
+        "pub syntax declaration: (sink) $item:declaration => {\n    main : Unit -> Int\n    main () = 42\n}\n",
+    )
+    .unwrap();
+    let introduced = "sink {\ndiscarded : Unit -> Int\ndiscarded () = true\n}\n";
+    let handwritten = "main : Unit -> Int\nmain () = 41\n";
+    for declarations in [
+        format!("{handwritten}{introduced}"),
+        format!("{introduced}{handwritten}"),
+    ] {
+        fs::write(
+            fixture.0.join("main.ash"),
+            format!("import forms (syntax sink)\n{declarations}"),
+        )
+        .unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.0.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("ordinary duplicate detection rejects the repeated global");
+        assert_eq!(failure.reason_code(), "resolve.duplicate-global");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source", "{json}");
+        let labels = json["labels"].as_array().unwrap();
+        for path in ["forms.ash", "main.ash"] {
+            assert!(
+                labels.iter().any(|label| {
+                    label["path"]
+                        .as_str()
+                        .is_some_and(|source| source.ends_with(path))
+                }),
+                "{json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn imported_literal_globals_preserve_public_and_private_access() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("forms.ash"),
+        "pub syntax declaration: (make) $name:ident => {\n    pub published : Unit -> Int\n    published () = 42\n    hidden : Unit -> Int\n    hidden () = 7\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("generated.ash"),
+        "import forms (syntax make)\nmake ignored\n",
+    )
+    .unwrap();
+    for entry in [
+        "import generated (published)\nmain : Unit -> Int\nmain () = published(())\n",
+        "import generated as Generated\nmain : Unit -> Int\nmain () = Generated.published(())\n",
+    ] {
+        fs::write(fixture.0.join("main.ash"), entry).unwrap();
+        let program = compile_path(RunConfiguration {
+            entry: fixture.0.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("an importer can use the public literal global");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+    for entry in [
+        "import generated (hidden)\nmain : Unit -> Int\nmain () = 42\n",
+        "import generated as Generated\nmain : Unit -> Int\nmain () = Generated.hidden(())\n",
+    ] {
+        fs::write(fixture.0.join("main.ash"), entry).unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.0.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("an importer cannot access the private literal global");
+        assert_eq!(failure.reason_code(), "resolve.unavailable-export");
+    }
+}

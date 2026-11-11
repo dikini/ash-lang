@@ -4297,11 +4297,11 @@ mod tests {
 
     #[test]
     fn unknown_capture_diagnostic_prepays_its_name_and_retained_location() {
-        let source = SourceFile::new("capture.ash", "missing").unwrap();
+        let source = SourceFile::new("capture.ash", "missing caller definition").unwrap();
         let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
         let frame = Arc::new(ExpansionFrame {
-            invocation: span,
-            definition: span,
+            invocation: source.span(ByteRange::new(8, 14).unwrap()).unwrap(),
+            definition: source.span(ByteRange::new(15, 25).unwrap()).unwrap(),
         });
         let mut location = DiagnosticLocation::new(span.into());
         location.add_frame(&frame);
@@ -4327,6 +4327,26 @@ mod tests {
         assert_eq!(diagnostics[0].primary.span(), span);
         let retained = diagnostics[0].primary.diagnostic_location().unwrap();
         assert!(Arc::ptr_eq(&retained.frames[0], &frame));
+        let view = crate::presentation::compile_parse_diagnostic(&diagnostics[0], &[&source])
+            .expect("the retained source frame is presentable");
+        let mut json = Vec::new();
+        crate::presentation::write_json(&mut json, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        for (relationship, start, end) in [
+            ("unknown_template_capture", 0, 7),
+            ("syntax_invocation", 8, 14),
+            ("syntax_definition", 15, 25),
+        ] {
+            assert!(
+                labels.iter().any(|label| {
+                    label["relationship"] == relationship
+                        && label["byte_start"] == start
+                        && label["byte_end"] == end
+                }),
+                "{json}"
+            );
+        }
         assert!(matches!(
             unknown_capture_failure(&name, Some(&mut SyntaxBudget::with_limit(cost - 1))),
             crate::parser::MacroParseFailure::Syntax {

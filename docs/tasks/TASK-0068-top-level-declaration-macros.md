@@ -20,7 +20,10 @@ is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpu
 checks are recorded in the delivery plan. The E4 checkpoint was retained by
 [PR #298](https://github.com/dikini/ash-lang/pull/298) at
 `17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`, tree
-`2a9235f9c52c39376a12c724fbfa18394b04a419`. Recheck refs and worker ownership
+`2a9235f9c52c39376a12c724fbfa18394b04a419`. I19 was subsequently retained by
+[PR #299](https://github.com/dikini/ash-lang/pull/299) at
+`6e089e2e0c299c5ac158301bd132e28dd94f9f2e`, tree
+`86e8d1a258e6fc1ea04790dc5d224c33facb10fc`. Recheck refs and worker ownership
 before dispatch. The plan records earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
@@ -98,10 +101,18 @@ superseded where the later retained checkpoints say so.
 - S3 [#221](https://github.com/dikini/ash-lang/issues/221) is closed on its
   original focused host-transfer criteria. The exact I16 mutation and other
   later connected cases remain at their original gates.
+- D3 [#218](https://github.com/dikini/ash-lang/issues/218), D4
+  [#222](https://github.com/dikini/ash-lang/issues/222), D5
+  [#223](https://github.com/dikini/ash-lang/issues/223), and G1
+  [#228](https://github.com/dikini/ash-lang/issues/228) are closed on their
+  original focused criteria after the I19 delivery and independent readback.
+  G2 [#231](https://github.com/dikini/ash-lang/issues/231) remains open: its
+  delivered scope is held on D6 [#219](https://github.com/dikini/ash-lang/issues/219),
+  which still needs the checked procedural transformer Import-output refusal.
 
 ### Connected I19 capture and repetition delivery
 
-The current candidate connects the retained extended definition and template,
+The retained I19 delivery connects the extended definition and template,
 category-aware matching, nested capture lookup, repeated output, and the
 ordinary module collector. The unchanged I19 main, counts, and binder graphs
 execute to 128, 42, and 42; their handwritten controls match. The fixed
@@ -109,9 +120,8 @@ missing-driver, unequal-driver, empty-plus, trailing-separator, and ambiguous
 definition cases reach their specific causes. Fresh incomplete and
 two-declaration capture mutations reject at the caller boundary. The candidate
 also exercises the shared ledger and atomic collector on actual repeated and
-caller-authored declaration output. These candidate results await independent
-final review and retaining-tree verification; they do not by themselves close
-the remaining original issues.
+caller-authored declaration output. PR #299 was independently reviewed and its
+retained tree and issue acceptance records were verified.
 
 The earlier empty-template producer and Identifier-only structured matcher
 were insufficient for the connected graph. A further attempted nested
@@ -119,9 +129,21 @@ invocation exposed an invalid cross-source span join; the projector now uses
 the existing enclosing occurrence for the aggregate invocation while retaining
 the caller and definition origins on their original nodes. Repetition escapes,
 direct protected quoted-AST copying, and the separately tracked downstream
-origin and nominal-context gaps remain outside this delivery. The next fresh
-full-workspace checkpoint is V7; focused verification and independent review
-apply to this candidate before retention.
+origin and nominal-context gaps remain separate. The next fresh full-workspace
+checkpoint is V7.
+
+### Downstream diagnostic and global origin repairs
+
+The current candidate addresses the separately authorized
+[#263](https://github.com/dikini/ash-lang/issues/263) and
+[#287](https://github.com/dikini/ash-lang/issues/287) boundaries. An unknown
+matcher capture now reaches ordinary syntax diagnostics with its source span
+and spelling. A literal global introduced by a declaration template retains
+its invocation and definition origin through ordinary binder allocation. The
+original public-driver graphs and their focused controls are exercised; the
+candidate still requires independent review, retaining verification, and
+issue acceptance. The separately authorized #277 repair and the remaining
+original integrated gates are outside this candidate.
 
 **Delivered:** Thirteen earlier reviewed squash deliveries establish D1/S1,
 partial declaration selection/matching/admission, type/pattern capture producers,
