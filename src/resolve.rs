@@ -6698,7 +6698,14 @@ impl Resolver<'_, '_> {
                     "imported capture type scan exceeded its work budget",
                 )
             })? {
-                self.retain_type_nominals_with(ty, summary, span, true, owner)?;
+                self.retain_type_nominals_inner(
+                    ty,
+                    summary,
+                    span,
+                    true,
+                    owner,
+                    owner.map(|owner| owner.graph),
+                )?;
             }
             for effect in exported
                 .capture
@@ -6943,6 +6950,18 @@ impl Resolver<'_, '_> {
         span: crate::source::Span,
         external_capture_facts: bool,
         owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_inner(scheme, summary, span, external_capture_facts, owner, None)
+    }
+
+    fn retain_type_nominals_inner(
+        &mut self,
+        scheme: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        external_capture_facts: bool,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+        checked_capture_graph: Option<&[Arc<crate::resolved::CheckedModule>]>,
     ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
@@ -7203,14 +7222,59 @@ impl Resolver<'_, '_> {
                     .and_then(|owner| owner.nominal_summary(id))
                     .unwrap_or(summary)
             };
-            let exported = if source.nominal_fact(id).is_none()
-                && let Some(private) = owner.and_then(|owner| owner.private_nominal(id))
-            {
-                private
-            } else {
-                Self::scheme_nominal_fact(source, id, span)?
-            };
-            self.retain_scheme_nominal_fact(exported, span)?;
+            if source.nominal_fact(id).is_none() {
+                if let Some(private) = owner.and_then(|owner| owner.private_nominal(id)) {
+                    self.retain_scheme_nominal_fact(private, span)?;
+                    continue;
+                }
+                // A checked helper's capture types can refer to private facts
+                // of other already retained modules. This metadata-only path
+                // never adds a source name or admits a constructor family.
+                if let Some(graph) = checked_capture_graph {
+                    let mut captured = None;
+                    for checked in graph {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "checked capture owner scan exceeded its work budget",
+                            )
+                        })?;
+                        if checked.module() == id.module() {
+                            // The checked lookup reaches the nominal registry,
+                            // its parameter registry and the export summary.
+                            self.type_work.charge(3).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "checked capture nominal lookup exceeded its work budget",
+                                )
+                            })?;
+                            captured = checked.syntax_nominal_fact(id);
+                            break;
+                        }
+                    }
+                    if let Some(captured) = captured {
+                        let prepared = self
+                            .imported
+                            .prepare_checked_capture_nominal_merge(
+                                crate::resolved::ImportedNominalFactRef {
+                                    constructors: &[],
+                                    access: ImportedTypeAccess::Hidden,
+                                    ..captured
+                                },
+                                &mut self.type_work,
+                                &mut self.constraint_work,
+                            )
+                            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                        self.imported
+                            .commit_nominal_merge(prepared)
+                            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                        continue;
+                    }
+                }
+            }
+            self.retain_scheme_nominal_fact(Self::scheme_nominal_fact(source, id, span)?, span)?;
         }
         Ok(())
     }

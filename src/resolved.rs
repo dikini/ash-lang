@@ -3018,6 +3018,70 @@ impl ImportedFacts {
         Ok(prepared)
     }
 
+    /// Prepare a hidden fact reached through an authenticated checked capture.
+    /// This path pays the additional metadata copies and reached table growth
+    /// before using the same validation, materialization and merge as imports.
+    pub(crate) fn prepare_checked_capture_nominal_merge(
+        &mut self,
+        candidate: ImportedNominalFactRef<'_>,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<PreparedImportedNominalMerge, ImportedNominalMergeFailure> {
+        let validated = self.validate_nominal_merge(candidate, constraint_work)?;
+        if !matches!(validated.action, ValidatedImportedNominalAction::Noop) {
+            type_work
+                .charge(candidate.display_spelling.map_or(0, str::len))
+                .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+        }
+        if matches!(validated.action, ValidatedImportedNominalAction::Insert) {
+            for parameter in candidate.parameters {
+                type_work
+                    .charge(
+                        parameter
+                            .spelling
+                            .len()
+                            .checked_add(1)
+                            .ok_or(ImportedNominalMergeFailure::TypeResource)?,
+                    )
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                if !matches!(parameter.origin, Origin::Source(_)) {
+                    charge_retained_origin(&parameter.origin, type_work)
+                        .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                }
+            }
+            if !matches!(candidate.origin, Origin::Source(_)) {
+                charge_retained_origin(candidate.origin, type_work)
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+            }
+            if let Some(provenance) = candidate.representation_provenance {
+                type_work
+                    .charge(1 + usize::from(provenance.diagnostics.is_some()))
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+            }
+            let order_moves = if self.nominal_order.len() == self.nominal_order.capacity() {
+                self.nominal_order.len()
+            } else {
+                0
+            };
+            let map_moves = if self.nominals.len() == self.nominals.capacity() {
+                self.nominals.len()
+            } else {
+                0
+            };
+            type_work
+                .charge(
+                    order_moves
+                        .checked_add(map_moves)
+                        .and_then(|work| work.checked_add(2))
+                        .ok_or(ImportedNominalMergeFailure::TypeResource)?,
+                )
+                .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+        }
+        let prepared = self.materialize_nominal_merge(validated, type_work)?;
+        self.reserve_prepared_nominal_merges(std::slice::from_ref(&prepared))?;
+        Ok(prepared)
+    }
+
     pub(crate) fn validate_nominal_merge<'candidate>(
         &self,
         candidate: ImportedNominalFactRef<'candidate>,

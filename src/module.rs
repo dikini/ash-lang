@@ -925,7 +925,7 @@ mod presentation_tests {
                 "missing-path-segments",
             ),
         ] {
-            let (source, mut surface) = parse_surface_module(
+            let (source, mut surface, needs_generator_dependency) = parse_surface_module(
                 Path::new("entry.ash"),
                 input.into(),
                 None,
@@ -950,7 +950,7 @@ mod presentation_tests {
                     membership: HashSet::new(),
                 },
                 source,
-                surface: StagedSyntax::parsed(surface, None),
+                surface: StagedSyntax::parsed(surface, None, needs_generator_dependency),
                 dependencies: Vec::new(),
                 relative_edges: Vec::new(),
                 state: VisitState::Active,
@@ -1586,11 +1586,11 @@ enum ModuleBody {
 }
 
 impl StagedSyntax {
-    fn parsed(mut surface: SurfaceModule, import_span: Option<Span>) -> Self {
-        let needs_generator_dependency = surface
-            .syntax_declarations
-            .iter()
-            .any(|declaration| declaration.contains_generators);
+    fn parsed(
+        mut surface: SurfaceModule,
+        import_span: Option<Span>,
+        needs_generator_dependency: bool,
+    ) -> Self {
         Self {
             imports: std::mem::take(&mut surface.imports),
             span: surface.span,
@@ -2968,8 +2968,12 @@ fn parse_graph_module(
     mode: BodyMode,
 ) -> Result<(SourceFile, StagedSyntax), LoadGraphError> {
     if matches!(mode, BodyMode::Complete) {
-        let (source, surface) = parse_surface_module(path, text, import_span, syntax_budget)?;
-        return Ok((source, StagedSyntax::parsed(surface, import_span)));
+        let (source, surface, needs_generator_dependency) =
+            parse_surface_module(path, text, import_span, syntax_budget)?;
+        return Ok((
+            source,
+            StagedSyntax::parsed(surface, import_span, needs_generator_dependency),
+        ));
     }
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
         LoadGraphError::SourceModel {
@@ -3109,7 +3113,7 @@ fn parse_surface_module(
     text: String,
     import_span: Option<Span>,
     syntax_budget: &mut SyntaxBudget,
-) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
+) -> Result<(SourceFile, SurfaceModule, bool), LoadGraphError> {
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
         LoadGraphError::SourceModel {
             path: path.to_path_buf(),
@@ -3125,6 +3129,7 @@ fn parse_surface_module(
             operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
+    let needs_generator_dependency = lexed.needs_generator_dependency();
     let (tree, header_imports) = parse_with_budget_and_header(&source, lexed, syntax_budget);
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -3157,7 +3162,7 @@ fn parse_surface_module(
             });
         }
     };
-    Ok((source, surface))
+    Ok((source, surface, needs_generator_dependency))
 }
 
 fn resolve_import(

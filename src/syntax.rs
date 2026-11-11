@@ -2617,7 +2617,12 @@ pub(crate) fn generator_adapter_definition(
         }
         Ok(expr(SurfaceExprKind::Name(step), generator.span))
     }
-    let mut declarations = Vec::with_capacity(plan.actions.len().saturating_add(plan.results));
+    let mut declarations = Vec::with_capacity(
+        plan.actions
+            .len()
+            .saturating_mul(2)
+            .saturating_add(plan.results),
+    );
     for action in &plan.actions {
         match action {
             GeneratorAction::Enter {
@@ -2745,9 +2750,11 @@ pub(crate) fn generator_adapter_definition(
                     }),
                     span,
                 );
+                let witness_name = format!("\0ash_generator_witness_{target}");
+                declarations.push(local(binder(witness_name.clone(), span), witness, span));
                 declarations.push(local(
                     binder(state(*target), span),
-                    call(witness, seed, span),
+                    call(reference(witness_name, span, 0), seed, span),
                     span,
                 ));
             }
