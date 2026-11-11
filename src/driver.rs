@@ -502,10 +502,21 @@ pub struct SyntaxExpansionFailure {
     pub(crate) related: Vec<crate::syntax::MacroOrigin>,
     pub(crate) invocation: Span,
     pub(crate) definition: Span,
+    pub(crate) invocation_location: Option<Box<crate::syntax::DiagnosticLocation>>,
     pub(crate) teardown: Option<crate::eval::ResourceFailure>,
 }
 
 impl SyntaxExpansionFailure {
+    fn retain_invocation_location(
+        &mut self,
+        location: &crate::syntax::DiagnosticLocation,
+        budget: &mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(), ResourceFailure> {
+        crate::syntax::charge_diagnostic_location_copy(location, budget)?;
+        self.invocation_location = Some(Box::new(location.clone()));
+        Ok(())
+    }
+
     /// Returns the first host teardown failure, if cleanup was incomplete.
     #[must_use]
     pub const fn teardown(&self) -> Option<crate::eval::ResourceFailure> {
@@ -1675,7 +1686,7 @@ where
                         &checked,
                         &mut transformer_entries,
                         constraint_work,
-                        Some(budget),
+                        Some(&mut *budget),
                         Some(owners),
                     )
                     .and_then(|(output, fresh_count)| match output {
@@ -1686,7 +1697,12 @@ where
                             }
                             Ok((nodes, fresh_count))
                         }
-                        crate::syntax::TransformerOutput::Rejected(failure) => {
+                        crate::syntax::TransformerOutput::Rejected(mut failure) => {
+                            if let Some(location) = caller.diagnostic.as_deref() {
+                                failure
+                                    .retain_invocation_location(location, budget)
+                                    .map_err(quote_resource_failure)?;
+                            }
                             Err(FileFailure::from(PipelineFailure::SyntaxExpansion(failure)))
                         }
                         crate::syntax::TransformerOutput::SyntaxRejected(failure) => {
@@ -5071,6 +5087,52 @@ mod tests {
             }
         }
         DERIVE_MODULE_ORDER.with(|slot| *slot.borrow_mut() = Some(order));
+    }
+
+    #[test]
+    fn rejected_generated_derive_location_is_paid_and_retryable() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let mut failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives/generated_failure.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the nested checked derive rejects");
+        let FileFailure::Pipeline(context) = &mut failure else {
+            panic!("the checked host produces a pipeline failure");
+        };
+        let PipelineFailure::SyntaxExpansion(rejection) = context.failure.as_mut() else {
+            panic!("the authored rejection remains intact");
+        };
+        let location = rejection
+            .invocation_location
+            .take()
+            .expect("the real invocation location is retained");
+        assert!(!location.related.is_empty());
+        assert!(!location.frames.is_empty());
+        let mut measured = SyntaxBudget::default();
+        rejection
+            .retain_invocation_location(&location, &mut measured)
+            .unwrap();
+        let used = measured.consumed();
+        assert!(used > 1);
+        assert_eq!(rejection.invocation_location.take().unwrap(), location);
+        for limit in [0, used - 1] {
+            let mut short = SyntaxBudget::with_limit(limit);
+            assert!(matches!(
+                rejection.retain_invocation_location(&location, &mut short),
+                Err(ResourceFailure::SyntaxWork { limit: found }) if found == limit
+            ));
+            assert!(rejection.invocation_location.is_none());
+            assert_eq!(rejection.message(), "first derive rejected");
+        }
+        let mut exact = SyntaxBudget::with_limit(used);
+        rejection
+            .retain_invocation_location(&location, &mut exact)
+            .unwrap();
+        assert_eq!(exact.consumed(), used);
+        assert_eq!(rejection.invocation_location.as_deref(), Some(&*location));
     }
 
     #[test]

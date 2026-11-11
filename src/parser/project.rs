@@ -2861,7 +2861,7 @@ fn prepare_deriving_outputs<'a>(
         .filter(|token| matches!(token.kind, TokenKind::Identifier(_)))
     {
         charge_derive_name(token, budget)?;
-        let name = surface_name(token)?;
+        let mut name = surface_name(token)?;
         contexts.charge_selection_search(&name.text, name.introduction, budget)?;
         let selected_syntax = contexts.select(&name);
         let Some(selection) = selected_syntax
@@ -2890,6 +2890,22 @@ fn prepare_deriving_outputs<'a>(
                 resource: None,
             });
         };
+        // Preserve the actual subject name as a related cause without
+        // changing the listed name's context or its enclosing frames.
+        crate::syntax::charge_type_origin_copy(&target_origin, 0, budget)?;
+        let related = name
+            .diagnostic
+            .as_deref()
+            .map_or(0, |location| location.related.len());
+        budget.charge_units(
+            related
+                .saturating_add(2)
+                .saturating_add(usize::from(name.diagnostic.is_none())),
+        )?;
+        let location = name.diagnostic.get_or_insert_with(|| {
+            Box::new(crate::syntax::DiagnosticLocation::new(name.span.into()))
+        });
+        location.related.push(target_origin.clone());
         crate::syntax::charge_selected(selection, budget)?;
         budget.charge_units(3)?;
         let mut captures = Vec::with_capacity(2);

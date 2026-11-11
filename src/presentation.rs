@@ -1582,6 +1582,13 @@ fn compile_syntax_expansion_failure<'a>(
             value: FactValue::Text(failure.message()),
         }],
     };
+    if let Some(location) = failure.invocation_location.as_deref() {
+        append_diagnostic_locations(
+            &mut diagnostic,
+            std::iter::once((location, failure.primary_span())),
+            sources,
+        )?;
+    }
     add_syntax_teardown(
         &mut diagnostic,
         failure.teardown(),

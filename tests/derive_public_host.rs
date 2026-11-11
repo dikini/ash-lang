@@ -108,3 +108,116 @@ fn fixed_derive_lists_preserve_authored_and_nested_failure_order() {
         assert!(rejection.teardown().is_none(), "{name}");
     }
 }
+
+#[test]
+fn fixed_derive_failures_retain_subject_and_nested_expansion_origins() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    fn label_matches(
+        labels: &[serde_json::Value],
+        relationship: &str,
+        suffix: &str,
+        expected: &str,
+    ) -> bool {
+        labels.iter().any(|label| {
+            let Some(path) = label["path"].as_str() else {
+                return false;
+            };
+            if label["relationship"] != relationship || !path.ends_with(suffix) {
+                return false;
+            }
+            let text = std::fs::read_to_string(path).unwrap();
+            let start = label["byte_start"].as_u64().unwrap() as usize;
+            let end = label["byte_end"].as_u64().unwrap() as usize;
+            &text[start..end] == expected
+        })
+    }
+
+    for (entry, message, subject_file, subject) in [
+        (
+            "ordered_first.ash",
+            "first derive rejected",
+            "ordered_first.ash",
+            "Color",
+        ),
+        (
+            "ordered_second.ash",
+            "second derive rejected",
+            "ordered_second.ash",
+            "Color",
+        ),
+        (
+            "generated_order.ash",
+            "second derive rejected",
+            "generated_order.ash",
+            "Source",
+        ),
+        (
+            "generated_failure.ash",
+            "first derive rejected",
+            "generated_failure_forms.ash",
+            "Generated",
+        ),
+    ] {
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the selected derive rejects");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("{entry}: expected an authored rejection: {failure:?}");
+        };
+        assert_eq!(rejection.message(), message);
+        assert!(rejection.teardown().is_none());
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("{entry}: exactly one diagnostic");
+        };
+        let mut output = Vec::new();
+        write_json(&mut output, diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "syntax.rejected");
+        let labels = json["labels"].as_array().unwrap();
+        assert!(
+            label_matches(labels, "syntax_cause", subject_file, subject),
+            "{entry}: {json}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label["relationship"] == "syntax_definition"
+                    && label["path"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("ordering_forms.ash")),
+            "{entry}: {json}"
+        );
+        if entry == "generated_failure.ash" {
+            assert!(
+                label_matches(
+                    labels,
+                    "syntax_cause",
+                    "generated_failure_forms.ash",
+                    "first_failure"
+                ),
+                "{json}"
+            );
+            assert!(
+                label_matches(labels, "syntax_invocation", entry, "spawn_failure"),
+                "{json}"
+            );
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label["relationship"] == "syntax_definition"
+                        && label["path"]
+                            .as_str()
+                            .unwrap()
+                            .ends_with("generated_failure_forms.ash")),
+                "{json}"
+            );
+        }
+    }
+}

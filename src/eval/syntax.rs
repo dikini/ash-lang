@@ -1677,6 +1677,7 @@ impl<'inv> SyntaxHost<'inv> {
                 related,
                 invocation: self.frame.invocation,
                 definition: self.frame.definition,
+                invocation_location: None,
                 teardown: None,
             },
         ))
