@@ -1464,9 +1464,9 @@ impl StagedModule {
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
-        quote_owner: Option<crate::syntax::SyntaxOwner>,
-        next_quote_ordinal: &mut usize,
+        quote: (Option<crate::syntax::SyntaxOwner>, &mut usize),
     ) -> Result<LoadedModule, LoadGraphError> {
+        let (quote_owner, next_quote_ordinal) = quote;
         let StagedSyntax {
             imports,
             span,
@@ -1695,8 +1695,7 @@ impl HeaderGraph {
             owner_imports,
             owners,
             transformer,
-            quote_owner,
-            &mut self.next_quote_ordinal,
+            (quote_owner, &mut self.next_quote_ordinal),
         ) {
             Ok(module) => {
                 self.loaded.push(module);

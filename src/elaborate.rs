@@ -17699,8 +17699,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 } => {
                     let function = values.pop().ok_or_else(invalid_state)?;
                     self.schedule_application_argument(
-                        whole_span,
-                        function_span,
+                        (whole_span, function_span),
                         argument,
                         recursive_call,
                         quote_site,
@@ -19521,14 +19520,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
     fn schedule_application_argument<'a>(
         &mut self,
-        whole_span: Span,
-        function_span: Span,
+        spans: (Span, Span),
         argument: &'a ResolvedExpr,
         recursive_call: bool,
         quote_site: Option<usize>,
         function: TypedNode,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
+        let (whole_span, function_span) = spans;
         let mut function = TypedNodeOwner::new(function);
         let source_function_ty = function.take_type();
         let mut function_ty =

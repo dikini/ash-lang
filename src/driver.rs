@@ -2040,7 +2040,7 @@ where
                     constraint_work,
                     primary_work,
                     rewrite_work,
-                    syntax_budget.as_deref_mut(),
+                    syntax_budget,
                     &mut quote_resource,
                 )
             } else {
@@ -2682,9 +2682,7 @@ fn prepare_transformer_entry(
     .map_err(PipelineFailure::Validation)
     .map_err(FileFailure::from)?;
     if !quote_sites.is_empty() {
-        let budget = syntax_work
-            .as_deref_mut()
-            .ok_or_else(internal_file_failure)?;
+        let budget = syntax_work.ok_or_else(internal_file_failure)?;
         budget
             .charge_units(quote_sites.len())
             .map_err(quote_resource_failure)?;
@@ -2975,9 +2973,7 @@ where
     let quote_guards = if quote_sites.is_empty() {
         Arc::from([])
     } else {
-        let budget = syntax_work
-            .as_deref_mut()
-            .ok_or_else(internal_file_failure)?;
+        let budget = syntax_work.ok_or_else(internal_file_failure)?;
         budget
             .charge_units(quote_sites.len().saturating_mul(3).saturating_add(1))
             .map_err(quote_resource_failure)?;
