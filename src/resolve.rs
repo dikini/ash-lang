@@ -10185,6 +10185,10 @@ impl Resolver<'_, '_> {
 
         let mut first_constructors = HashMap::new();
         let mut identities = Vec::with_capacity(type_declarations.len());
+        let mut constructor_count = 0usize;
+        let mut introduced_count = 0usize;
+        let mut introduced_bytes = 0usize;
+        let mut introduced_anchor = None;
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
                 let _ = validate_newtype_shape(declaration)?;
@@ -10235,11 +10239,77 @@ impl Resolver<'_, '_> {
                 self.constructor_names
                     .insert(constructor.name.text.clone(), id);
                 owned.push(id);
+                constructor_count = constructor_count.saturating_add(1);
+                if constructor.name.introduction != 0 {
+                    introduced_count = introduced_count.saturating_add(1);
+                    introduced_bytes = introduced_bytes.saturating_add(constructor.name.text.len());
+                    introduced_anchor.get_or_insert(constructor.name.span);
+                }
             }
             identities.push(NominalDeclarationIdentity {
                 id: *owner,
                 constructors: owned,
             });
+        }
+        if let Some(anchor) = introduced_anchor {
+            // Module installation precedes all block-local constructor frames.
+            // Preserve that base for the resolver's lifetime, but allocate it
+            // only for already admitted, nonzero introductions. Existing spelling
+            // conflicts and ConstructorId allocation have already completed.
+            let live_frames = self.lexical_constructor_scopes.len();
+            let frame_work = if live_frames == self.lexical_constructor_scopes.capacity() {
+                live_frames.saturating_mul(2).saturating_add(1)
+            } else {
+                1
+            };
+            let work = type_declarations
+                .len()
+                .saturating_add(constructor_count)
+                .saturating_add(introduced_count.saturating_mul(4))
+                .saturating_add(introduced_bytes.saturating_mul(2))
+                .saturating_add(frame_work);
+            self.type_work.charge(work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    anchor,
+                    "introduced module constructor retention exceeded its type-work budget",
+                )
+            })?;
+            let mut scope = HashMap::new();
+            scope.try_reserve(introduced_count).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    anchor,
+                    "introduced module constructor storage could not be reserved",
+                )
+            })?;
+            for (declaration, identity) in type_declarations.iter().zip(&identities) {
+                for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors)
+                {
+                    let name = &constructor.name;
+                    if name.introduction != 0 {
+                        let spelling = try_clone_resolution_string(
+                            &name.text,
+                            name.span,
+                            "introduced module constructor name storage could not be reserved",
+                        )?;
+                        scope.insert((spelling, name.introduction), *id);
+                    }
+                }
+            }
+            if !scope.is_empty() {
+                debug_assert!(self.lexical_constructor_scopes.is_empty());
+                self.lexical_constructor_scopes
+                    .try_reserve(1)
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            anchor,
+                            "module constructor scope storage could not be reserved",
+                        )
+                    })?;
+                self.lexical_constructor_scopes.push(scope);
+            }
         }
         Ok(identities)
     }
