@@ -2726,7 +2726,9 @@ fn evaluate_generator_transformer(
     budget.charge().map_err(quote_resource_failure)?;
     crate::eval::evaluate_transformer_with_owners(
         &entry,
-        captures,
+        // Reached seed captures have already been incorporated into the
+        // checked adapter. Its Input is used only for the invocation origin.
+        &[],
         source,
         caller,
         introduction,

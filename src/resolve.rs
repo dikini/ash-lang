@@ -7241,9 +7241,10 @@ impl Resolver<'_, '_> {
                             )
                         })?;
                         if checked.module() == id.module() {
-                            // The checked lookup reaches the nominal registry,
-                            // its parameter registry and the export summary.
-                            self.type_work.charge(3).map_err(|()| {
+                            // The checked lookup reaches the nominal map and
+                            // vector twice, the parameter map, and both export
+                            // summary lookup alternatives.
+                            self.type_work.charge(7).map_err(|()| {
                                 error(
                                     ResolveReason::TypeResourceExhausted,
                                     span,

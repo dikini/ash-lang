@@ -3044,6 +3044,13 @@ impl ImportedFacts {
                             .ok_or(ImportedNominalMergeFailure::TypeResource)?,
                     )
                     .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                // Pay the reached Kind inspection and the later sizing walk
+                // before that walk constructs the combined clone tariff.
+                type_work
+                    .charge(1)
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                charge_kind_with_charge(&parameter.kind, || type_work.charge(2))
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
                 if !matches!(parameter.origin, Origin::Source(_)) {
                     charge_retained_origin(&parameter.origin, type_work)
                         .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
