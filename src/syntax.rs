@@ -2277,6 +2277,9 @@ pub(crate) enum GeneratorAction {
 }
 
 pub(crate) struct GeneratorPlan {
+    /// Every lexical clause needs a checked step shape, including when its
+    /// owning repetition produces no runtime instances.
+    pub(crate) shapes: Vec<(Arc<[crate::surface::SurfaceTemplateGenerator]>, usize)>,
     pub(crate) actions: Vec<GeneratorAction>,
     pub(crate) results: usize,
 }
@@ -2488,6 +2491,7 @@ pub(crate) fn generator_adapter_definition(
             plan.actions
                 .len()
                 .saturating_mul(512)
+                .saturating_add(plan.shapes.len().saturating_mul(512))
                 .saturating_add(plan.results.saturating_mul(256))
                 .saturating_add(1024),
         )
@@ -2619,12 +2623,192 @@ pub(crate) fn generator_adapter_definition(
         // the referenced names retain their defining spans and introduction.
         Ok(expr(SurfaceExprKind::Name(step), span))
     }
+    fn step_shape(
+        generator: &SurfaceTemplateGenerator,
+        definition_introduction: usize,
+        builtin_introduction: usize,
+        label: &str,
+        index: usize,
+        seed: Option<SurfaceExpr>,
+        span: Span,
+        budget: &mut SyntaxBudget,
+    ) -> Result<SurfaceExpr, MacroParseFailure> {
+        let probe = format!("\0ash_generator_{label}_probe_{index}");
+        let checked_next = format!("\0ash_generator_{label}_state_{index}");
+        let checked_fragment = format!("\0ash_generator_{label}_fragment_{index}");
+        let application = call(
+            step_reference(generator, definition_introduction, span, budget)?,
+            reference(probe.clone(), span, 0),
+            span,
+        );
+        let checked_pattern = SurfacePattern {
+            kind: SurfacePatternKind::Tuple(vec![
+                binder(checked_next.clone(), span),
+                binder(checked_fragment.clone(), span),
+            ]),
+            span,
+            diagnostic: None,
+        };
+        let origin = invoke(
+            "invocation_origin",
+            builtin_introduction,
+            reference("\0ash_generator_input".into(), span, 0),
+            span,
+        );
+        let checked_node = invoke(
+            "ExpressionNode",
+            builtin_introduction,
+            pair(reference(checked_fragment, span, 0), origin, span),
+            span,
+        );
+        let wildcard = SurfacePattern {
+            kind: SurfacePatternKind::Wildcard,
+            span,
+            diagnostic: None,
+        };
+        let checked_result = if let Some(seed) = seed {
+            // The seed is checked in a never-called function and a
+            // never-selected arm; its actual expression remains unchanged.
+            let seed = expr(
+                SurfaceExprKind::Block(SurfaceBlock {
+                    declarations: Vec::new(),
+                    result: Box::new(seed),
+                    span,
+                }),
+                span,
+            );
+            let pattern = |value| SurfacePattern {
+                kind: SurfacePatternKind::Boolean(value),
+                span,
+                diagnostic: None,
+            };
+            expr(
+                SurfaceExprKind::Match(SurfaceMatchExpr {
+                    scrutinee: Box::new(expr(SurfaceExprKind::Boolean(true), span)),
+                    arms: vec![
+                        SurfaceMatchArm {
+                            pattern: pattern(true),
+                            body: reference(checked_next, span, 0),
+                            span,
+                        },
+                        SurfaceMatchArm {
+                            pattern: pattern(false),
+                            body: seed,
+                            span,
+                        },
+                    ],
+                }),
+                span,
+            )
+        } else {
+            reference(checked_next, span, 0)
+        };
+        let false_body = expr(
+            SurfaceExprKind::Block(SurfaceBlock {
+                declarations: vec![
+                    local(checked_pattern, application, span),
+                    local(wildcard, checked_node, span),
+                ],
+                result: Box::new(checked_result),
+                span,
+            }),
+            span,
+        );
+        let boolean_pattern = |value| SurfacePattern {
+            kind: SurfacePatternKind::Boolean(value),
+            span,
+            diagnostic: None,
+        };
+        let choice = expr(
+            SurfaceExprKind::Match(SurfaceMatchExpr {
+                scrutinee: Box::new(expr(SurfaceExprKind::Boolean(true), span)),
+                arms: vec![
+                    SurfaceMatchArm {
+                        pattern: boolean_pattern(true),
+                        body: reference(probe.clone(), span, 0),
+                        span,
+                    },
+                    SurfaceMatchArm {
+                        pattern: boolean_pattern(false),
+                        body: false_body,
+                        span,
+                    },
+                ],
+            }),
+            span,
+        );
+        Ok(expr(
+            SurfaceExprKind::Function(FunctionExpr {
+                parameter: binder(probe, span),
+                body: SurfaceBlock {
+                    declarations: Vec::new(),
+                    result: Box::new(choice),
+                    span,
+                },
+            }),
+            span,
+        ))
+    }
     let mut declarations = Vec::with_capacity(
         plan.actions
             .len()
             .saturating_mul(2)
+            .saturating_add(plan.shapes.len())
             .saturating_add(plan.results),
     );
+    for (index, (generators, binding)) in plan.shapes.iter().enumerate() {
+        // Checking this local function establishes the ordinary step shape.
+        // Its body is never applied, including for a zero-count repetition.
+        let generator = &generators[*binding];
+        let candidate = match &generator.seed.kind {
+            SurfaceExprKind::TemplateSplice(name) => {
+                charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
+                match capture_by_name_with_depth(name, matcher, captures, &[]) {
+                    Ok((SurfaceSyntaxCapture::Expression(capture), 0))
+                        if matches!(capture.quote_sites, CapturedQuoteSites::Empty) =>
+                    {
+                        Some(&capture.expression)
+                    }
+                    Ok((SurfaceSyntaxCapture::Expression(_), 0)) => None,
+                    Ok((SurfaceSyntaxCapture::Repeated(_), depth)) if depth > 0 => None,
+                    _ => return Err(MacroParseFailure::Invalid),
+                }
+            }
+            SurfaceExprKind::Integer(_) | SurfaceExprKind::Boolean(_) | SurfaceExprKind::Unit => {
+                Some(&generator.seed)
+            }
+            _ => None,
+        };
+        let seed = if let Some(candidate) = candidate {
+            if charge_new_expression_copy(candidate, 0, false, budget)
+                .map_err(resource)?
+                .is_some()
+            {
+                // The block, match, arms and their boxed children are new.
+                budget.charge_units(12).map_err(resource)?;
+                Some(candidate.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let witness = step_shape(
+            generator,
+            definition_introduction,
+            builtin_introduction,
+            "shape",
+            index,
+            seed,
+            span,
+            budget,
+        )?;
+        declarations.push(local(
+            binder(format!("\0ash_generator_shape_{index}"), span),
+            witness,
+            span,
+        ));
+    }
     for action in &plan.actions {
         match action {
             GeneratorAction::Enter {
@@ -2681,88 +2865,18 @@ pub(crate) fn generator_adapter_definition(
                     }),
                     span,
                 );
-                // Both match arms are checked ordinarily. The false arm is
-                // never evaluated, but relates the seed and next-state types
-                // and requires an ExpressionFragment even when no step is
-                // reached by the template's iterations.
-                let probe = format!("\0ash_generator_probe_{target}");
-                let checked_next = format!("\0ash_generator_checked_state_{target}");
-                let checked_fragment = format!("\0ash_generator_checked_fragment_{target}");
-                let application = call(
-                    step_reference(generator, definition_introduction, span, budget)?,
-                    reference(probe.clone(), span, 0),
-                    span,
-                );
-                let checked_pattern = SurfacePattern {
-                    kind: SurfacePatternKind::Tuple(vec![
-                        binder(checked_next.clone(), span),
-                        binder(checked_fragment.clone(), span),
-                    ]),
-                    span,
-                    diagnostic: None,
-                };
-                let origin = invoke(
-                    "invocation_origin",
+                // Apply a separate witness to this real seed, preserving the
+                // ordinary seed/input/next-state relation for each instance.
+                let witness = step_shape(
+                    generator,
+                    definition_introduction,
                     builtin_introduction,
-                    reference("\0ash_generator_input".into(), span, 0),
+                    "entry",
+                    *target,
+                    None,
                     span,
-                );
-                let checked_node = invoke(
-                    "ExpressionNode",
-                    builtin_introduction,
-                    pair(reference(checked_fragment, span, 0), origin, span),
-                    span,
-                );
-                let wildcard = SurfacePattern {
-                    kind: SurfacePatternKind::Wildcard,
-                    span,
-                    diagnostic: None,
-                };
-                let false_body = expr(
-                    SurfaceExprKind::Block(SurfaceBlock {
-                        declarations: vec![
-                            local(checked_pattern, application, span),
-                            local(wildcard, checked_node, span),
-                        ],
-                        result: Box::new(reference(checked_next, span, 0)),
-                        span,
-                    }),
-                    span,
-                );
-                let boolean_pattern = |value| SurfacePattern {
-                    kind: SurfacePatternKind::Boolean(value),
-                    span,
-                    diagnostic: None,
-                };
-                let choice = expr(
-                    SurfaceExprKind::Match(SurfaceMatchExpr {
-                        scrutinee: Box::new(expr(SurfaceExprKind::Boolean(true), span)),
-                        arms: vec![
-                            SurfaceMatchArm {
-                                pattern: boolean_pattern(true),
-                                body: reference(probe.clone(), span, 0),
-                                span,
-                            },
-                            SurfaceMatchArm {
-                                pattern: boolean_pattern(false),
-                                body: false_body,
-                                span,
-                            },
-                        ],
-                    }),
-                    span,
-                );
-                let witness = expr(
-                    SurfaceExprKind::Function(FunctionExpr {
-                        parameter: binder(probe, span),
-                        body: SurfaceBlock {
-                            declarations: Vec::new(),
-                            result: Box::new(choice),
-                            span,
-                        },
-                    }),
-                    span,
-                );
+                    budget,
+                )?;
                 let witness_name = format!("\0ash_generator_witness_{target}");
                 declarations.push(local(binder(witness_name.clone(), span), witness, span));
                 declarations.push(local(
@@ -4381,6 +4495,15 @@ fn capture_by_name_at<'a, 'name>(
     captures: &'a [SurfaceSyntaxCapture],
     indices: &[usize],
 ) -> Result<&'a SurfaceSyntaxCapture, CaptureLookupFailure<'name>> {
+    capture_by_name_with_depth(name, matcher, captures, indices).map(|(capture, _)| capture)
+}
+
+fn capture_by_name_with_depth<'a, 'name>(
+    name: &'name SurfaceName,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &'a [SurfaceSyntaxCapture],
+    indices: &[usize],
+) -> Result<(&'a SurfaceSyntaxCapture, usize), CaptureLookupFailure<'name>> {
     fn find(
         parts: &[SurfaceSyntaxMatcherPart],
         name: &SurfaceName,
@@ -4425,7 +4548,7 @@ fn capture_by_name_at<'a, 'name>(
             .get(*index)
             .ok_or(CaptureLookupFailure::Invalid(name.span))?;
     }
-    Ok(capture)
+    Ok((capture, repetitions))
 }
 
 #[derive(Clone, Copy)]
@@ -4941,9 +5064,48 @@ pub(crate) fn prepare_generator_template(
     budget: &mut SyntaxBudget,
 ) -> Result<(Vec<MacroOutputNode>, GeneratorPlan), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
+    fn record<'a>(
+        bindings: &'a Arc<[crate::surface::SurfaceTemplateGenerator]>,
+        names: &mut Vec<&'a SurfaceName>,
+        shapes: &mut Vec<(Arc<[crate::surface::SurfaceTemplateGenerator]>, usize)>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        let resource = |error| MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        };
+        for (index, binding) in bindings.iter().enumerate() {
+            let names_live = names.len();
+            let shapes_live = shapes.len();
+            let names_work = if names_live == names.capacity() {
+                names_live.saturating_mul(2).saturating_add(1)
+            } else {
+                1
+            };
+            let shapes_work = if shapes_live == shapes.capacity() {
+                shapes_live.saturating_mul(2).saturating_add(1)
+            } else {
+                1
+            };
+            // Retain the Arc as well as the two list entries and any moves.
+            budget
+                .charge_units(names_work.saturating_add(shapes_work).saturating_add(1))
+                .map_err(resource)?;
+            if names_live == names.capacity() {
+                names.reserve_exact(1);
+            }
+            if shapes_live == shapes.capacity() {
+                shapes.reserve_exact(1);
+            }
+            names.push(&binding.name);
+            shapes.push((Arc::clone(bindings), index));
+        }
+        Ok(())
+    }
     fn collect<'a>(
         nodes: &'a [MacroOutputNode],
         names: &mut Vec<&'a SurfaceName>,
+        shapes: &mut Vec<(Arc<[crate::surface::SurfaceTemplateGenerator]>, usize)>,
         depth: usize,
         budget: &mut SyntaxBudget,
     ) -> Result<(), MacroParseFailure> {
@@ -4957,29 +5119,18 @@ pub(crate) fn prepare_generator_template(
                 MacroOutputNode::Group(_, children, _) => collect(
                     children,
                     names,
+                    shapes,
                     type_depth(depth, 1).map_err(resource)?,
                     budget,
                 )?,
                 MacroOutputNode::TemplateRepeat(repeat) => {
                     if let Some(bindings) = &repeat.generators {
-                        for binding in bindings.iter() {
-                            let live = names.len();
-                            budget
-                                .charge_units(if live == names.capacity() {
-                                    live.saturating_mul(2).saturating_add(1)
-                                } else {
-                                    1
-                                })
-                                .map_err(resource)?;
-                            if live == names.capacity() {
-                                names.reserve_exact(1);
-                            }
-                            names.push(&binding.name);
-                        }
+                        record(bindings, names, shapes, budget)?;
                     }
                     collect(
                         &repeat.body,
                         names,
+                        shapes,
                         type_depth(depth, 1).map_err(resource)?,
                         budget,
                     )?;
@@ -4995,17 +5146,11 @@ pub(crate) fn prepare_generator_template(
         .as_deref()
         .ok_or(MacroParseFailure::Invalid)?;
     let mut names = Vec::new();
+    let mut shapes = Vec::new();
     if let Some(bindings) = &selection.declaration.generators {
-        budget
-            .charge_units(bindings.len())
-            .map_err(|error| MacroParseFailure::Syntax {
-                diagnostics: Vec::new(),
-                resource: Some(error),
-            })?;
-        names.reserve_exact(bindings.len());
-        names.extend(bindings.iter().map(|binding| &binding.name));
+        record(bindings, &mut names, &mut shapes, budget)?;
     }
-    collect(template, &mut names, 0, budget)?;
+    collect(template, &mut names, &mut shapes, 0, budget)?;
     if charge_template_inner(
         template,
         &selection.declaration.matcher,
@@ -5020,6 +5165,7 @@ pub(crate) fn prepare_generator_template(
     let mut output = template.to_vec();
     let mut planner = GeneratorPlanner {
         plan: GeneratorPlan {
+            shapes,
             actions: Vec::new(),
             results: 0,
         },

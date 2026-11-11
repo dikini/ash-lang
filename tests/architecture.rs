@@ -577,6 +577,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/syntax.rs::TemplateRepeat.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::GeneratorAction.Enter.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::GeneratorAction.Advance.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorPlan.shapes", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::GeneratorPlan.actions", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::ActiveGenerator.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::GeneratorPlanner.plan", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
