@@ -2517,6 +2517,7 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
     static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -2729,7 +2730,9 @@ fn evaluate_generator_transformer(
         crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
             .map_err(quote_resource_failure)?;
     budget.charge().map_err(quote_resource_failure)?;
-    crate::eval::evaluate_transformer_with_owners(
+    #[cfg(test)]
+    let lifecycle_before = generator_lifecycle_counters();
+    let evaluated = crate::eval::evaluate_transformer_with_owners(
         &entry,
         // Reached seed captures have already been incorporated into the
         // checked adapter. Its Input is used only for the invocation origin.
@@ -2741,14 +2744,30 @@ fn evaluate_generator_transformer(
         Arc::clone(&frame),
         Some(&mut *budget),
         Some(owners),
-    )
-    .map_err(|cause| {
+    );
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_LIFECYCLE_OBSERVER.get() {
+        observe(lifecycle_before, generator_lifecycle_counters());
+    }
+    evaluated.map_err(|cause| {
         FileFailure::from(PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
             cause,
             invocation: frame.invocation,
             definition: selection.declaration.span,
         }))
     })
+}
+
+#[cfg(test)]
+fn generator_lifecycle_counters() -> [usize; 5] {
+    use crate::eval::machine_test_hooks as hooks;
+    [
+        hooks::TRANSFER_ATTEMPTS.get(),
+        hooks::TRANSFER_FAILURES.get(),
+        hooks::ROOT_CLOSES.get(),
+        hooks::TRANSFORMER_DROPS.get(),
+        hooks::ACTIVE_ROOT_DROPS.get(),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5294,6 +5313,8 @@ mod tests {
         static GENERATOR_OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static GENERATOR_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static GENERATOR_PLAN: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_TRANSFERS: Cell<usize> = const { Cell::new(0) };
+        static GENERATOR_LIFECYCLES: RefCell<Vec<[usize; 5]>> = const { RefCell::new(Vec::new()) };
     }
 
     fn observe_generator_owner(
@@ -5334,7 +5355,7 @@ mod tests {
         entry: &crate::core::validate::ValidatedMacroEntry,
         evaluation: &crate::eval::Evaluation,
     ) {
-        use crate::core::{EffectExprKind, PureExprKind};
+        use crate::core::{EffectExprKind, PureComputation, PureExprKind};
         let (first, number) = GENERATOR_BINDERS.with(|slot| slot.borrow().unwrap());
         GENERATOR_TRACE.with(|slot| {
             let mut output = slot.borrow_mut();
@@ -5343,8 +5364,30 @@ mod tests {
                 let Some(expression) = entry.program.node(*node) else {
                     continue;
                 };
-                let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &expression.kind
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                    application,
+                ))) = &expression.kind
                 else {
+                    continue;
+                };
+                let mut function = application.function();
+                let variable = loop {
+                    let Some(function_expression) = entry.program.node(function) else {
+                        break None;
+                    };
+                    match &function_expression.kind {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                            break Some(variable);
+                        }
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::TypeApplication(application),
+                        )) => {
+                            function = application.function();
+                        }
+                        _ => break None,
+                    }
+                };
+                let Some(variable) = variable else {
                     continue;
                 };
                 let name = if variable.binder() == first {
@@ -5361,15 +5404,26 @@ mod tests {
         });
     }
 
+    fn observe_generator_lifecycle(before: [usize; 5], after: [usize; 5]) {
+        GENERATOR_LIFECYCLES.with(|slot| {
+            slot.borrow_mut()
+                .push(std::array::from_fn(|index| after[index] - before[index]));
+        });
+    }
+
     fn observe_generator_output(
         selection: &crate::syntax::SelectedSyntax,
         _captures: &[crate::surface::SurfaceSyntaxCapture],
         output: &[crate::syntax::MacroOutputNode],
     ) {
         use crate::{surface::SurfaceExprKind, syntax::MacroOutputNode};
-        if selection.declaration.name.text != "make_constants" {
+        if !matches!(
+            selection.declaration.name.text.as_str(),
+            "make_constants" | "mixed_depth"
+        ) {
             return;
         }
+        GENERATOR_TRANSFERS.set(GENERATOR_TRANSFERS.get() + 1);
         GENERATOR_OUTPUT.with(|slot| {
             let mut values = slot.borrow_mut();
             for node in output {
@@ -5414,7 +5468,10 @@ mod tests {
         GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
         GENERATOR_ORDER.with(|slot| slot.borrow_mut().clear());
         GENERATOR_PLAN.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
         GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
         hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_generator_trace));
         TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
         STAGED_MODULE_OBSERVER.set(Some(observe_generator_order));
@@ -5426,6 +5483,7 @@ mod tests {
         })
         .expect("the unchanged I17 graph compiles");
         GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
         hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
         STAGED_MODULE_OBSERVER.set(None);
@@ -5462,11 +5520,11 @@ mod tests {
             GENERATOR_ORDER.with(|slot| slot.borrow().clone()),
             ["first", "second", "third"]
         );
-        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
-        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
-        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
-        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
-        assert!(hooks::ROOT_CLOSES.get() >= 1);
+        assert_eq!(GENERATOR_TRANSFERS.get(), 1);
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0]]
+        );
 
         // A separate ordinary consumer calls every unchanged generated output
         // after expansion's host has transferred and closed its root.
@@ -5497,6 +5555,11 @@ mod tests {
         use crate::eval::machine_test_hooks as hooks;
 
         hooks::reset();
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
         let source = TestSource::write(concat!(
             "import forms (syntax make_constants)\n",
             "make_constants starting_at 0 names first, second, third\n",
@@ -5512,12 +5575,83 @@ mod tests {
         source.write_sibling("forms.ash", &fs::read_to_string(forms).unwrap());
         let compiled = compile_path(source.configuration())
             .expect("both independent generator invocations compile");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
-        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 2);
-        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
-        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
-        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
-        assert!(hooks::ROOT_CLOSES.get() >= 2);
+        assert_eq!(GENERATOR_TRANSFERS.get(), 2);
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            [
+                "true", "0", "false", "1", "false", "2", "true", "3", "false", "4", "false", "5"
+            ]
+        );
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0], [1, 0, 1, 1, 0]]
+        );
+        hooks::reset();
+    }
+
+    #[test]
+    fn mixed_depth_generator_restores_each_outer_cached_value() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        GENERATOR_TRACE.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_generator_trace));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        let compiled = compile_path(RunConfiguration {
+            entry: fixtures.join("mixed_depth.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged mixed-depth graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "546210");
+        assert_eq!(
+            GENERATOR_TRACE.with(|slot| slot.borrow().clone()),
+            ["next_number"; 6]
+        );
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            ["0", "1", "2", "3", "4", "5"]
+        );
+        assert_eq!(GENERATOR_TRANSFERS.get(), 1);
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0]]
+        );
+
+        // These eight ordinary calls expose the repeated outer values on both
+        // sides of each nested repetition, after the host root is closed.
+        let consumer = TestSource::write(concat!(
+            "import original (left_before, first, second, left_after, right_before, third, fourth, right_after)\n",
+            "main : Unit -> Int\n",
+            "main () = match (left_before(()) == 0, first(()) == 1, second(()) == 2, left_after(()) == 0, right_before(()) == 3, third(()) == 4, fourth(()) == 5, right_after(()) == 3) {\n",
+            "    (true, true, true, true, true, true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        consumer.write_sibling(
+            "original.ash",
+            &fs::read_to_string(fixtures.join("mixed_depth.ash")).unwrap(),
+        );
+        consumer.write_sibling(
+            "forms.ash",
+            &fs::read_to_string(fixtures.join("forms.ash")).unwrap(),
+        );
+        let compiled =
+            compile_path(consumer.configuration()).expect("the mixed-depth outputs remain usable");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
         hooks::reset();
     }
 

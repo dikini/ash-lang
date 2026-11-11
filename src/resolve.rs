@@ -17940,15 +17940,8 @@ mod tests {
         );
     }
 
-    struct ObservedCheckedCapture {
-        publication: Arc<crate::resolved::CheckedGlobalScheme>,
-        owner: ModuleId,
-        graph: Vec<Arc<crate::resolved::CheckedModule>>,
-        span: Span,
-    }
-
     std::thread_local! {
-        static OBSERVED_CHECKED_CAPTURE: std::cell::RefCell<Option<ObservedCheckedCapture>> = const { std::cell::RefCell::new(None) };
+        static OBSERVED_CHECKED_CAPTURE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     }
 
     fn observe_checked_capture(
@@ -17962,42 +17955,10 @@ mod tests {
         if publication.spelling != "is_first" {
             return;
         }
-        OBSERVED_CHECKED_CAPTURE.with(|observed| {
-            *observed.borrow_mut() = Some(ObservedCheckedCapture {
-                publication: Arc::clone(publication),
-                owner: owner.owner.module(),
-                graph: owner.graph.to_vec(),
-                span,
-            });
-        });
+        // Exercise the exact live checked owner and graph synchronously. Keeping
+        // any Arc beyond this callback would change their normal uniqueness.
         CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
-    }
-
-    #[test]
-    fn checked_helper_capture_retains_actual_hidden_nominal_with_shared_work() {
-        use crate::driver::{RunConfiguration, compile_path, execute};
-
-        OBSERVED_CHECKED_CAPTURE.with(|observed| *observed.borrow_mut() = None);
-        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_checked_capture)));
-        let compiled = compile_path(RunConfiguration {
-            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("docs/design/macros/fixtures/generators/main.ash"),
-            roots: crate::module::ModuleRoots::empty(),
-        })
-        .expect("the original checked generator graph compiles");
-        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
-        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
-        let observed = OBSERVED_CHECKED_CAPTURE.with(|slot| {
-            slot.borrow_mut()
-                .take()
-                .expect("the actual checked private helper was reached")
-        });
-        let owner = observed
-            .graph
-            .iter()
-            .find(|checked| checked.module() == observed.owner)
-            .expect("the selected owner is retained in the checked graph");
-        let defining = observed
+        let defining = owner
             .graph
             .iter()
             .find(|checked| {
@@ -18016,18 +17977,9 @@ mod tests {
             .unwrap()
             .id;
         let original = defining.syntax_nominal_fact(identity).unwrap();
-        assert!(owner.exports().nominal_fact(identity).is_none());
+        assert!(owner.owner.exports().nominal_fact(identity).is_none());
         assert!(defining.exports().nominal_fact(identity).is_none());
 
-        let publication = &observed.publication;
-        let mut copies = TypeWorkBudget::unbounded();
-        let exported = ExportedGlobal {
-            publication: Some(Arc::clone(publication)),
-            binder: publication.binder,
-            scheme: publication.scheme.clone_with_budget(&mut copies).unwrap(),
-            capture: publication.capture.clone_with_budget(&mut copies).unwrap(),
-            origin: publication.origin.clone(),
-        };
         let run = |limit, graph: &[Arc<crate::resolved::CheckedModule>]| {
             let mut resolver = Resolver::with_budgets(
                 ModuleId::new(90_311),
@@ -18036,16 +17988,19 @@ mod tests {
             );
             resolver.type_work.charge(17).unwrap();
             let result = resolver.retain_imported_global_from_owner(
-                &exported,
-                owner.exports(),
-                observed.span,
+                exported,
+                owner.owner.exports(),
+                span,
                 &mut CaptureGraphVisits::default(),
-                Some(SyntaxOwnerLookup { owner, graph }),
+                Some(SyntaxOwnerLookup {
+                    owner: owner.owner,
+                    graph,
+                }),
             );
             (result, resolver)
         };
 
-        let (result, mut measured) = run(usize::MAX, &observed.graph);
+        let (result, mut measured) = run(usize::MAX, owner.graph);
         result.expect("the real capture closure is retained");
         let used = measured.type_work.used();
         assert!(used > 17);
@@ -18077,13 +18032,13 @@ mod tests {
                 .all(|id| measured.imported.constructor(*id).is_none())
         );
 
-        let (short, _) = run(used - 1, &observed.graph);
+        let (short, _) = run(used - 1, owner.graph);
         assert_eq!(
             short.unwrap_err().reason,
             ResolveReason::TypeResourceExhausted
         );
         for _ in 0..2 {
-            let (exact, resolver) = run(used, &observed.graph);
+            let (exact, resolver) = run(used, owner.graph);
             exact.expect("a fresh exact-work replay retains the same checked fact");
             assert_eq!(resolver.type_work.used(), used);
             assert_eq!(
@@ -18091,29 +18046,50 @@ mod tests {
                 ImportedTypeAccess::Hidden
             );
         }
-
-        let missing = observed
-            .graph
-            .iter()
-            .filter(|checked| checked.module() != defining.module())
-            .cloned()
-            .collect::<Vec<_>>();
-        let (missing, _) = run(usize::MAX, &missing);
-        assert_eq!(missing.unwrap_err().reason, ResolveReason::InternalState);
-
+        {
+            let missing = owner
+                .graph
+                .iter()
+                .filter(|checked| checked.module() != defining.module())
+                .cloned()
+                .collect::<Vec<_>>();
+            let (missing_result, _) = run(usize::MAX, &missing);
+            assert_eq!(
+                missing_result.unwrap_err().reason,
+                ResolveReason::InternalState
+            );
+        }
         measured.type_work = TypeWorkBudget::unbounded();
         measured
             .retain_imported_global_from_owner(
-                &exported,
-                owner.exports(),
-                observed.span,
+                exported,
+                owner.owner.exports(),
+                span,
                 &mut CaptureGraphVisits::default(),
-                Some(SyntaxOwnerLookup {
-                    owner,
-                    graph: &observed.graph,
-                }),
+                Some(owner),
             )
             .expect("the repeated actual helper route retains equal metadata");
+        OBSERVED_CHECKED_CAPTURE_WORK.set(Some(used));
+    }
+
+    #[test]
+    fn checked_helper_capture_retains_actual_hidden_nominal_with_shared_work() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+
+        OBSERVED_CHECKED_CAPTURE_WORK.set(None);
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_checked_capture)));
+        let compiled = compile_path(RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/generators/main.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .expect("the original checked generator graph compiles");
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        assert!(
+            OBSERVED_CHECKED_CAPTURE_WORK.get().is_some(),
+            "the actual checked private helper was reached"
+        );
     }
 
     #[test]
