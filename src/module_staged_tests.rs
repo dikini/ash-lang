@@ -1553,6 +1553,90 @@ fn g1_imported_graph_shares_budget_exact_short_and_fresh_retry() {
 }
 
 #[test]
+fn i19_fixed_main_graph_shares_budget_through_the_final_consumer() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static AT_DECLARATION: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+        let [SurfaceSyntaxCapture::Declaration(packet)] = captures else {
+            return;
+        };
+        assert!(source.display_path().ends_with("captures/main.ash"));
+        assert_eq!(
+            source.text(),
+            include_str!("../docs/design/macros/fixtures/captures/main.ash")
+        );
+        assert!(!packet.contents.is_empty());
+        AT_DECLARATION.set(Some(budget.consumed()));
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/design/macros/fixtures/captures/main.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    AT_DECLARATION.set(None);
+    G1_CAPTURE_OBSERVER.set(Some(observe));
+    let result = compile_staged_graph_for_test(&mut measured);
+    G1_CAPTURE_OBSERVER.set(None);
+    let program = result.expect("the fixed I19 graph reaches the ordinary consumer");
+    let at_declaration = AT_DECLARATION
+        .get()
+        .expect("the caller declaration was captured");
+    let total = measured.syntax_budget.consumed();
+    assert!(at_declaration > header_work + 17 && total > at_declaration);
+    assert_eq!(execute(&program).unwrap().value_display(), "128");
+
+    let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+    assert_eq!(short.syntax_budget.consumed(), header_work);
+    short.syntax_budget.charge_units(17).unwrap();
+    AT_DECLARATION.set(None);
+    G1_CAPTURE_OBSERVER.set(Some(observe));
+    let result = compile_staged_graph_for_test(&mut short);
+    G1_CAPTURE_OBSERVER.set(None);
+    let failure = match result {
+        Ok(_) => panic!("one-short I19 graph must refuse"),
+        Err(failure) => failure,
+    };
+    assert_eq!(AT_DECLARATION.get(), Some(at_declaration));
+    assert!(short.syntax_budget.consumed() >= at_declaration);
+    assert!(short.syntax_budget.consumed() < total);
+    assert!(short.pending.is_empty() && short.loaded.is_empty() && short.completed.is_none());
+    let FileFailure::Graph(diagnostic) = &failure else {
+        panic!("expected graph error: {failure:?}");
+    };
+    let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+        panic!("expected syntax shortage");
+    };
+    assert_eq!(
+        syntax.resource,
+        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+    );
+
+    for _ in 0..2 {
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work);
+        graph.syntax_budget.charge_units(17).unwrap();
+        AT_DECLARATION.set(None);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_staged_graph_for_test(&mut graph);
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the exact I19 graph allowance succeeds");
+        assert_eq!(AT_DECLARATION.get(), Some(at_declaration));
+        assert_eq!(graph.syntax_budget.consumed(), total);
+        assert_eq!(execute(&program).unwrap().value_display(), "128");
+    }
+}
+
+#[test]
 fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},
