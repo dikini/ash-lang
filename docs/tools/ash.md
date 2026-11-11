@@ -685,6 +685,12 @@ fixed at `Type`, and the current language does not infer function kinds from
 use. This is a phase-dependent language constraint rather than a permanent
 restriction on future declaration-local inference.
 
+Explicit type parameters emitted by a declaration template retain their syntax
+contexts when references in the declaration are resolved. The
+`declaration_type_capture` tests exercise the public driver with generated and
+handwritten globals, nominal types, interfaces, implementations and effects,
+and check that an unrelated caller type is not captured.
+
 The executable test `tool_higher_kinded_example_has_exact_cli_observation`
 runs a higher-kinded interface, implementation, constrained global, and
 operational global through the same command-line path:

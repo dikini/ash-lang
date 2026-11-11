@@ -146,7 +146,7 @@ retention and issue acceptance readback completed.
 
 ### Downstream definition-context nominal classification
 
-**Delivered in the candidate:** The separately authorized
+**Delivered:** The separately authorized
 [#277](https://github.com/dikini/ash-lang/issues/277) repair authenticates an
 introduced unqualified type reference using its existing definition context
 before retaining an otherwise implicit free parameter. The original graph
@@ -155,15 +155,28 @@ and execute to 42. The original 40-application and 46-tuple capture graph also
 executes to 42; one additional tuple retains the structural-depth refusal.
 The retained nominal identity, parameter kind and hidden summary fact remain
 available without exposing constructors. Explicit parameters and row tails
-keep their existing discovery rules.
+keep their existing discovery rules. The repair was retained at
+`8defbbaf98e1cdac0eaaf18deb600148ee19f94c` and accepted.
 
-**Remaining:** The original integrated macro gates and the separate introduced
-generic-binder failure in [#301](https://github.com/dikini/ash-lang/issues/301)
-remain open. The latter was reproduced independently on the prior compiler;
-its handwritten generic control succeeds. The fixed I09 generic derive, I17
-main generator and original I22 categories and nested graphs stop earlier at
-their existing projection or parsing boundaries, so those runs do not establish
-whether they encounter #301 after those boundaries are resolved.
+### Downstream explicit parameter contexts
+
+**Candidate:** The separately authorized
+[#301](https://github.com/dikini/ash-lang/issues/301) repair registers the
+already allocated explicit parameters using their retained source contexts.
+The original generated global and handwritten control execute to 42, as do
+isolated generated and handwritten interface, higher-kinded interface,
+implementation, nominal, effect and operational-global controls. An unrelated
+caller type remains unbound. These observations await final review and retention.
+
+**Remaining:** The original integrated macro gates remain open. The fixed I03,
+I04 and I08 graphs currently stop while parsing their shared template source.
+An explicit method-parameter consumer reaches the separate Core ordering guard
+recorded in [#303](https://github.com/dikini/ash-lang/issues/303); a row-parameter
+consumer reaches the source-coordinate refusal in
+[#304](https://github.com/dikini/ash-lang/issues/304). Their handwritten controls
+execute to 42. The fixed I09 generic derive, I17 main generator and original I22
+categories and nested graphs stop earlier at their existing projection or parsing
+boundaries; no result for their later paths is inferred.
 
 **Awaiting:** Independent candidate review and QA, retaining verification,
 and the author acceptance record with independent readback.
