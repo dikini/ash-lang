@@ -52,9 +52,10 @@ syntax_declaration ::=
       { declaration_matcher_item }
       "=>" ( declaration_template_block | "using" identifier ) ;
 matcher_item ::= matcher_literal | "$" identifier ":" ( "expr" | "ident" ) ;
+declaration_capture_name ::= identifier | upper_identifier | reserved_word ;
 declaration_matcher_item ::=
     matcher_literal
-  | "$" ( identifier | upper_identifier ) ":" ( "ident" | "expr" | "type" | "pattern" | "declaration" )
+  | "$" declaration_capture_name ":" ( "ident" | "expr" | "type" | "pattern" | "declaration" )
   | "(" { declaration_matcher_item } ")"
   | "{" { declaration_matcher_item | line_end } "}"
   | "$" "(" { declaration_matcher_item } ")" [ repetition_separator ] ( "*" | "+" ) ;
@@ -67,7 +68,7 @@ template_element ::=
 declaration_template_block ::= "{" { declaration_template_element } "}" ;
 declaration_template_element ::=
     template_token
-  | "$" ( identifier | upper_identifier )
+  | "$" declaration_capture_name
   | "$" "(" { declaration_template_element | line_end } ")" [ repetition_separator ] ( "*" | "+" )
   | "$" "{" expression "}"
   | "$" block
@@ -78,6 +79,7 @@ syntax_invocation ::= identifier syntax_matcher_input ;
 matcher_literal ::= /one permitted literal token/ ;
 repetition_separator ::= /one permitted non-delimiter token/ ;
 template_token ::= /one token other than a group delimiter or "$"/ ;
+reserved_word ::= /a reserved word listed in lexical structure/ ;
 syntax_matcher_input ::= /input accepted by the selected syntax matcher/ ;
 
 type_declaration ::=

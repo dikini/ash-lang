@@ -2097,8 +2097,52 @@ fn check_completed_quote_depth(
 enum QuoteMode {
     Ordinary,
     Template,
+    DeclarationTemplate,
     Escape,
     Quote,
+}
+
+// This vocabulary is used only for declaration-macro capture metanames.
+fn declaration_metaname(kind: &TokenKind) -> Option<&str> {
+    Some(match kind {
+        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => name,
+        TokenKind::True => "true",
+        TokenKind::False => "false",
+        TokenKind::Fn => "fn",
+        TokenKind::Let => "let",
+        TokenKind::Rec => "rec",
+        TokenKind::And => "and",
+        TokenKind::Type => "type",
+        TokenKind::Newtype => "newtype",
+        TokenKind::Effect => "effect",
+        TokenKind::Match => "match",
+        TokenKind::Perform => "perform",
+        TokenKind::Handle => "handle",
+        TokenKind::With => "with",
+        TokenKind::Resume => "resume",
+        TokenKind::Resource => "resource",
+        TokenKind::Region => "region",
+        TokenKind::Using => "using",
+        TokenKind::Hook => "hook",
+        TokenKind::Register => "register",
+        TokenKind::Cleanup => "cleanup",
+        TokenKind::Discard => "discard",
+        TokenKind::Retain => "retain",
+        TokenKind::Import => "import",
+        TokenKind::SyntaxKeyword => "syntax",
+        TokenKind::As => "as",
+        TokenKind::Pub => "pub",
+        TokenKind::Opaque => "opaque",
+        TokenKind::Interface => "interface",
+        TokenKind::Impl => "impl",
+        TokenKind::Where => "where",
+        TokenKind::IntType => "Int",
+        TokenKind::BytesType => "Bytes",
+        TokenKind::StringType => "String",
+        TokenKind::BoolType => "Bool",
+        TokenKind::UnitType => "Unit",
+        _ => return None,
+    })
 }
 
 pub(crate) struct Parser<'tokens> {

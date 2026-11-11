@@ -102,6 +102,13 @@ The capture retains the caller's contexts and origins until it is consumed as
 one module declaration. It cannot be used as an expression, type, pattern, or
 local declaration.
 
+A declaration matcher may use a reserved word after `$` as a capture's
+metaname, and its declaration template may read that capture with the same
+spelling, including inside a repetition. The metaname does not change keyword
+lexing: an `ident` capture still matches an identifier, and ordinary names,
+expression-macro matchers and ordinary quotation variables keep their existing
+rules.
+
 Matchers can contain balanced groups and nested `*` or `+` repetitions with an
 optional single-token separator. Captures retain their source order and nested
 shape. A variable-length capture stops at the next applicable literal,

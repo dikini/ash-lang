@@ -330,6 +330,13 @@ ordinary imports and the `using` transformer target are still checked as
 definition dependencies. Ordinary Ash checking and error propagation handle
 generated-program meaning.
 
+A declaration-macro capture binding may use a reserved word as its metaname
+after `$`; its declaration template may read that capture using the same
+spelling, including in repetitions. This does not change keyword lexing,
+the identifiers consumed by `ident` captures, expression-macro matchers,
+derive or generator binding names, or ordinary escaped-code and quotation
+variables.
+
 Declarative matching supports the companion's caller-selected declaration name
 and type captures. Variable-length derives use procedural syntax traversal;
 the declarative derive form binds the subject name. Implementation must not

@@ -13,8 +13,11 @@ implemented.
 The following productions add a public declaration syntax definition to module
 syntax. `identifier`, `upper_identifier`, `expression`, `block`, `line_end`, and
 `qualified_term_reference` use the existing Ash grammar. A `macro_name` after
-`$` can be lowercase or uppercase; this applies to these declaration templates
-and does not change the accepted expression-macro matcher grammar. The
+`$` can be lowercase or uppercase. A declaration capture binding can also use
+a reserved word as its metaname; a declaration template can read that capture
+using the same spelling, including in repetitions. This does not change the
+accepted expression-macro matcher grammar, derive or generator binding names,
+ordinary variables or the identifier consumed by an `ident` capture. The
 `matcher_literal`, `template_literal` and `repetition_separator` lexical
 classes are defined immediately below.
 
@@ -29,8 +32,9 @@ declaration_syntax_definition ::=
   { matcher_item } "=>"
   ( declaration_template [ generator_clause ] | "using" identifier ) ;
 macro_name ::= identifier | upper_identifier ;
+capture_name ::= macro_name | reserved_word ;
 matcher_item ::= matcher_capture | matcher_repeat | matcher_group | matcher_literal ;
-matcher_capture ::= "$" macro_name ":" fragment_kind ;
+matcher_capture ::= "$" capture_name ":" fragment_kind ;
 fragment_kind ::= "ident" | "expr" | "type" | "pattern" | "declaration" ;
 matcher_repeat ::=
   "$" "(" { matcher_item } ")" [ repetition_separator ] repetition_operator ;
@@ -43,7 +47,7 @@ repetition_separator ::= /repetition-separator-token/ ;
 declaration_template ::= "{" { template_item } "}" ;
 template_item ::= template_splice | template_escape | template_repeat | template_group
   | template_literal | line_end ;
-template_splice ::= "$" macro_name ;
+template_splice ::= "$" capture_name ;
 template_escape ::= "$" ( block | inline_escape_body ) ;
 inline_escape_body ::= "{" expression "}" ;
 template_repeat ::=
@@ -58,6 +62,7 @@ generator_clause ::=
 generator_binding ::= "$" macro_name "from" seed_expression "step" step_reference ;
 step_reference ::= identifier | qualified_term_reference ;
 seed_expression ::= /ash-expression-with-capture-splices/ ;
+reserved_word ::= /a reserved word listed in lexical structure/ ;
 ```
 
 A matcher literal is an Ash token other than `$`, `=>`, a logical line end,

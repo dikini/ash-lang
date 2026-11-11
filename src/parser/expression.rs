@@ -113,7 +113,10 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
     }
     if parser.quote_mode != QuoteMode::Ordinary && parser.at(&TokenKind::Dollar) {
         if parser.nth(1) == Some(&TokenKind::LeftBrace)
-            && matches!(parser.quote_mode, QuoteMode::Template | QuoteMode::Quote)
+            && matches!(
+                parser.quote_mode,
+                QuoteMode::Template | QuoteMode::DeclarationTemplate | QuoteMode::Quote
+            )
         {
             grammar::syntax_escape(parser);
         } else {

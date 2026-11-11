@@ -554,10 +554,15 @@ fn validate_node_shape_with_admission(
     tokens: &[Token],
     admission: Option<&std::collections::HashSet<usize>>,
 ) -> Result<(), ProjectionError> {
-    let mut pending = vec![node];
-    while let Some(node) = pending.pop() {
-        validate_shallow_shape(node, tokens, admission)?;
-        pending.extend(child_nodes(node));
+    let mut pending = vec![(node, false)];
+    while let Some((node, declaration_metanames)) = pending.pop() {
+        let declaration_metanames = match node.kind {
+            NodeKind::SyntaxDeclaration => is_declaration_syntax(node, tokens),
+            NodeKind::SyntaxEscape => false,
+            _ => declaration_metanames,
+        };
+        validate_shallow_shape(node, tokens, admission, declaration_metanames)?;
+        pending.extend(child_nodes(node).map(|child| (child, declaration_metanames)));
     }
     Ok(())
 }
@@ -566,6 +571,7 @@ fn validate_shallow_shape(
     node: &ConcreteNode,
     tokens: &[Token],
     admission: Option<&std::collections::HashSet<usize>>,
+    declaration_metanames: bool,
 ) -> Result<(), ProjectionError> {
     let mut shape = ShapeCursor::with_admission(node, tokens, admission);
     match node.kind {
@@ -707,10 +713,11 @@ fn validate_shallow_shape(
         NodeKind::SyntaxCapture => {
             shape.token(&TokenKind::Dollar)?;
             shape.token_matching(|kind| {
-                matches!(
-                    kind,
-                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-                )
+                declaration_metanames && super::declaration_metaname(kind).is_some()
+                    || matches!(
+                        kind,
+                        TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                    )
             })?;
             shape.token(&TokenKind::Colon)?;
             shape.token_matching(
@@ -1724,7 +1731,10 @@ fn validate_shallow_shape(
         NodeKind::TemplateSplice | NodeKind::EscapeCaptureRead | NodeKind::QuoteHole => {
             shape.token(&TokenKind::Dollar)?;
             shape.token_matching(|kind| {
-                matches!(kind, TokenKind::Identifier(_))
+                node.kind == NodeKind::TemplateSplice
+                    && declaration_metanames
+                    && super::declaration_metaname(kind).is_some()
+                    || matches!(kind, TokenKind::Identifier(_))
                     || node.kind != NodeKind::QuoteHole
                         && matches!(kind, TokenKind::UpperIdentifier(_))
             })?;
@@ -2147,7 +2157,11 @@ fn project_syntax_declaration(
                 }
                 let kind = syntax_capture_kind(&parts[3].kind, declaration)?;
                 matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                    name: surface_name(parts[1])?,
+                    name: if declaration {
+                        surface_declaration_metaname(parts[1])?
+                    } else {
+                        surface_name(parts[1])?
+                    },
                     kind,
                 });
             }
@@ -2341,7 +2355,7 @@ fn project_matcher_items(
                     InternalReason::UnexpectedShape,
                 ))?;
                 SurfaceSyntaxMatcherPart::Capture {
-                    name: surface_name(name)?,
+                    name: surface_declaration_metaname(name)?,
                     kind: syntax_capture_kind(&kind.kind, true)?,
                 }
             }
@@ -2420,15 +2434,9 @@ fn charge_matcher_items(
                     InternalReason::UnexpectedShape,
                 ))?;
                 let _ = syntax_capture_kind(&kind.kind, true)?;
-                let text = match &name.kind {
-                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
-                    _ => {
-                        return Err(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        )
-                        .into());
-                    }
-                };
+                let text = super::declaration_metaname(&name.kind).ok_or(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                )?;
                 budget.charge()?;
                 budget.charge_units(text.len())?;
             }
@@ -6960,6 +6968,7 @@ fn capture_contents_with_escapes(
         escapes: Option<&[(usize, SurfaceName)]>,
         index: usize,
         quoted_dollar: bool,
+        declaration_metanames: bool,
         token: &Token,
         output: &mut Vec<MacroOutputNode>,
         contains_protected_type: &mut bool,
@@ -6986,14 +6995,29 @@ fn capture_contents_with_escapes(
                     InternalReason::UnexpectedShape,
                 ))?;
             if tokens.originals.is_none() {
-                let bytes = match &next.kind {
-                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text.len(),
-                    _ => return malformed(InternalReason::UnexpectedShape),
-                };
+                let text = if declaration_metanames {
+                    super::declaration_metaname(&next.kind)
+                } else {
+                    match &next.kind {
+                        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    }
+                }
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let bytes = text.len();
                 charge_expression_allocation(bytes.saturating_add(1), tokens.expression_budget)?;
             }
             *position += 1;
-            output.push(MacroOutputNode::Splice(surface_name(next)?));
+            let name = if declaration_metanames {
+                surface_declaration_metaname(next)?
+            } else {
+                surface_name(next)?
+            };
+            output.push(MacroOutputNode::Splice(name));
         } else if let Some(original) = originals.get(&index) {
             *contains_protected_type |= match original {
                 MacroOutputNode::ForwardedType(..) => true,
@@ -7176,6 +7200,7 @@ fn capture_contents_with_escapes(
                     escapes,
                     index,
                     quoted_dollar,
+                    allow_repetition,
                     token,
                     &mut output,
                     &mut contains_protected_type,
@@ -10347,6 +10372,28 @@ fn add_projection_frames_with_expression_budget(
         }
     }
     Ok(())
+}
+
+fn surface_declaration_metaname(
+    token: ProjectionToken<'_>,
+) -> Result<SurfaceName, ProjectionError> {
+    if matches!(
+        token.kind,
+        TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+    ) {
+        return surface_name(token);
+    }
+    let text = super::declaration_metaname(&token.kind).ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
+    Ok(SurfaceName {
+        text: text.to_owned(),
+        span: token.span,
+        introduction: 0,
+        introduced_at: None,
+        written: true,
+        diagnostic: None,
+    })
 }
 
 fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionError> {
