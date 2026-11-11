@@ -222,6 +222,12 @@ fn fixed_declaration_keyword_capture_keeps_its_spelling_and_span() {
 }
 
 #[test]
+fn fixed_handwritten_determination_control_executes() {
+    let program = compile_path(fixture("declarations", "control_relation.ash")).unwrap();
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn keyword_metanames_are_confined_to_declaration_captures_and_template_reads() {
     for word in [
         "fn",

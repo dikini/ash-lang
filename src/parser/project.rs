@@ -4868,6 +4868,11 @@ fn charge_projection_preflight_with_expression(
         vec![root]
     };
     while let Some(node) = pending.pop() {
+        if node.kind == NodeKind::InterfaceDeclaration && tokens.construction.is_some() {
+            // The determination clause proves each original token extent,
+            // then reads its two side edges and the `where` token again.
+            budget.charge_units(node.children.len().saturating_add(5))?;
+        }
         // Nominal and resource projection retain additional parameter/name copies.
         if matches!(
             node.kind,
@@ -6116,10 +6121,44 @@ fn project_interface_determination(
     if where_index >= arrow_index || arrow_index >= brace_index {
         return malformed(InternalReason::UnexpectedShape);
     }
-    let determinant = project_determination_side(&direct[where_index + 1..arrow_index])?;
-    let dependent = project_determination_side(&direct[arrow_index + 1..brace_index])?;
-    let span = direct[where_index]
-        .span
+    // A captured interface name does not prevent the literal determination
+    // from retaining its own definition extents. Use those extents only if
+    // the entire clause has compatible originals in authored order.
+    let mut previous: Option<Span> = None;
+    let original_extents = tokens.construction.is_some()
+        && direct[where_index..brace_index].iter().all(|token| {
+            let Some(span) = tokens.original_span(*token) else {
+                return false;
+            };
+            if let Some(crate::syntax::MacroOutputNode::Identifier(name, _)) = token.original
+                && name.span != span
+            {
+                return false;
+            }
+            let ordered = previous.is_none_or(|before| {
+                before.source() == span.source() && before.range().end() <= span.range().start()
+            });
+            previous = Some(span);
+            ordered
+        });
+    let determinant = project_determination_side(
+        &direct[where_index + 1..arrow_index],
+        tokens,
+        original_extents,
+    )?;
+    let dependent = project_determination_side(
+        &direct[arrow_index + 1..brace_index],
+        tokens,
+        original_extents,
+    )?;
+    let where_span = if original_extents {
+        tokens
+            .original_span(direct[where_index])
+            .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?
+    } else {
+        direct[where_index].span
+    };
+    let span = where_span
         .cover(dependent.span)
         .ok_or(ProjectionError::MalformedTree(InternalReason::ForeignSpan))?;
     Ok(Some(SurfaceInterfaceDetermination {
@@ -6130,15 +6169,17 @@ fn project_interface_determination(
 }
 
 fn project_determination_side(
-    tokens: &[ProjectionToken<'_>],
+    side: &[ProjectionToken<'_>],
+    tokens: &ProjectionTokens<'_>,
+    original_extents: bool,
 ) -> Result<SurfaceDeterminationSide, ProjectionError> {
-    let first = tokens.first().ok_or(ProjectionError::MalformedTree(
+    let first = side.first().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?;
-    let last = tokens.last().ok_or(ProjectionError::MalformedTree(
+    let last = side.last().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?;
-    let parameters = tokens
+    let parameters = side
         .iter()
         .filter(|token| token.is_upper_identifier())
         .map(|token| surface_name(*token))
@@ -6146,9 +6187,17 @@ fn project_determination_side(
     if parameters.is_empty() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    let span = first
-        .span
-        .cover(last.span)
+    let side_span = |token: ProjectionToken<'_>| {
+        if original_extents {
+            tokens
+                .original_span(token)
+                .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))
+        } else {
+            Ok(token.span)
+        }
+    };
+    let span = side_span(*first)?
+        .cover(side_span(*last)?)
         .ok_or(ProjectionError::MalformedTree(InternalReason::ForeignSpan))?;
     Ok(SurfaceDeterminationSide {
         parameters: parameters.into_boxed_slice(),
@@ -20788,6 +20837,157 @@ mod tests {
             ))
         ));
         (source, tree, output)
+    }
+
+    #[test]
+    fn generated_determination_uses_only_complete_ordered_original_extents() {
+        use crate::syntax::{MacroOrigin, MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+
+        let text = "pub interface Convert<A, B> where A -> B {\n    convert : A -> B\n}\n";
+        let (definition, _, output) = structured_declarations(text);
+        let caller = SourceFile::new("caller.ash", "call\n").unwrap();
+        let occurrence = caller.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let bound = definition
+            .span(ByteRange::new(0, text.len() as u32).unwrap())
+            .unwrap();
+        let parsed = super::super::parse_macro_tree_inner(
+            &caller,
+            occurrence,
+            output,
+            &SyntaxContexts::new(&[], &[], &[]),
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut SyntaxBudget::default(),
+        )
+        .unwrap();
+        let root = validated_macro_root(&caller, &parsed.tree).unwrap();
+        let interface = child_nodes(root).next().unwrap();
+        assert_eq!(interface.kind, NodeKind::InterfaceDeclaration);
+        let direct = interface
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ConcreteElement::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let where_at = direct
+            .iter()
+            .position(|index| parsed.tree.tokens[*index].kind == TokenKind::Where)
+            .unwrap();
+        let arrow_at = direct
+            .iter()
+            .position(|index| parsed.tree.tokens[*index].kind == TokenKind::Arrow)
+            .unwrap();
+        let determinant = direct[where_at + 1];
+        let dependent = direct[arrow_at + 1];
+        let project = |originals: &std::collections::HashMap<usize, MacroOutputNode>| {
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(originals),
+                occurrence: Some(occurrence),
+                construction: Some((bound, 0)),
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: false,
+                expression_budget: None,
+                quote_sites: None,
+            };
+            project_interface_determination(interface, &tokens)
+                .unwrap()
+                .unwrap()
+        };
+        let actual = project(&parsed.original_nodes);
+        let start = text.find("where A -> B").unwrap() as u32;
+        let expected = definition
+            .span(ByteRange::new(start, start + "where A -> B".len() as u32).unwrap())
+            .unwrap();
+        assert_eq!(actual.span, expected);
+        assert_eq!(
+            actual.determinant.span,
+            actual.determinant.parameters[0].span
+        );
+        assert_eq!(actual.dependent.span, actual.dependent.parameters[0].span);
+        assert_eq!(actual.determinant.parameters[0].text, "A");
+        assert_eq!(actual.dependent.parameters[0].text, "B");
+
+        let mut captured = parsed.original_nodes.clone();
+        let MacroOutputNode::Identifier(name, _) = captured.get_mut(&determinant).unwrap() else {
+            panic!("determinant is an identifier");
+        };
+        name.introduction = 7;
+        let result = project(&captured);
+        assert_eq!(result.span, occurrence);
+        assert_eq!(result.determinant.span, occurrence);
+        assert_eq!(result.dependent.span, occurrence);
+        assert_eq!(result.determinant.parameters[0].introduction, 7);
+
+        let mut mismatched = parsed.original_nodes.clone();
+        let MacroOutputNode::Identifier(name, _) = mismatched.get_mut(&determinant).unwrap() else {
+            panic!("determinant is an identifier");
+        };
+        name.span = occurrence;
+        let result = project(&mismatched);
+        assert_eq!(result.span, occurrence);
+        assert_eq!(result.determinant.span, occurrence);
+        assert_eq!(result.dependent.span, occurrence);
+
+        let mut reordered = parsed.original_nodes.clone();
+        let (a_span, b_span) = match (
+            reordered.get(&determinant).unwrap(),
+            reordered.get(&dependent).unwrap(),
+        ) {
+            (
+                MacroOutputNode::Identifier(_, MacroOrigin::Source(a)),
+                MacroOutputNode::Identifier(_, MacroOrigin::Source(b)),
+            ) => (*a, *b),
+            _ => panic!("both literals retain source origins"),
+        };
+        for (index, span) in [(determinant, b_span), (dependent, a_span)] {
+            let MacroOutputNode::Identifier(name, origin) = reordered.get_mut(&index).unwrap()
+            else {
+                unreachable!()
+            };
+            name.span = span;
+            *origin = MacroOrigin::Source(span);
+        }
+        let result = project(&reordered);
+        assert_eq!(result.span, occurrence);
+        assert_eq!(result.determinant.span, occurrence);
+        assert_eq!(result.dependent.span, occurrence);
+
+        let tokens = ProjectionTokens {
+            tokens: &parsed.tree.tokens,
+            originals: Some(&parsed.original_nodes),
+            occurrence: Some(occurrence),
+            construction: Some((bound, 0)),
+            construction_extents: false,
+            admission_identifiers: Some(&parsed.admission_identifiers),
+            frame: None,
+            name_frame: None,
+            staging_frames: None,
+            preserve_name_diagnostic: false,
+            expression_budget: None,
+            quote_sites: None,
+        };
+        let mut measured = SyntaxBudget::default();
+        charge_generated_projection(interface, &tokens, &mut measured).unwrap();
+        let used = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            charge_generated_projection(interface, &tokens, &mut short),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut exact = SyntaxBudget::with_limit(used);
+        charge_generated_projection(interface, &tokens, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
     }
 
     fn output_definition_name(definition: &SurfaceDefinition) -> &SurfaceName {
