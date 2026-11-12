@@ -3201,7 +3201,9 @@ fn prepare_staged_output(
     let mut actual_expression = false;
     let output = match &invocation.selection.declaration.implementation {
         SurfaceSyntaxImplementation::Template => {
-            if invocation.selection.declaration.contains_generators {
+            if invocation.selection.declaration.contains_generators
+                || invocation.selection.declaration.template_escapes.is_some()
+            {
                 let (mut output, plan) = match crate::syntax::prepare_generator_template(
                     &invocation.selection,
                     template_captures,
@@ -3407,36 +3409,74 @@ fn apply_generator_results(
                 let index = name.text["\0ash_generator_result_".len()..]
                     .parse::<usize>()
                     .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
-                let Some(MacroOutputNode::Expression(capture, origin)) = results.get(index) else {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                };
-                if !matches!(
-                    capture.quote_sites,
-                    crate::surface::CapturedQuoteSites::Empty
-                ) {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
+                let selected = results.get(index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                match selected {
+                    MacroOutputNode::Expression(capture, origin) => {
+                        if !matches!(
+                            capture.quote_sites,
+                            crate::surface::CapturedQuoteSites::Empty
+                        ) || crate::syntax::charge_new_expression_copy(
+                            &capture.expression,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )? != Some(false)
+                            || crate::syntax::charge_new_expression_retention(
+                                capture, depth, budget,
+                            )? != Some(false)
+                        {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::Identifier(name, origin) => {
+                        crate::syntax::charge_type_name_copy(name, depth, budget)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedType(capture, origin) => {
+                        crate::syntax::charge_new_type_copy(
+                            &capture.ty,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )?;
+                        crate::syntax::charge_new_type_retention(capture, depth, budget)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedPattern(capture, origin) => {
+                        if crate::syntax::charge_new_pattern_copy(
+                            &capture.pattern,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )? != Some(false)
+                            || crate::syntax::charge_new_pattern_retention(capture, depth, budget)?
+                                != Some(false)
+                        {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedDeclaration(_, origin) => {
+                        budget.charge()?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    _ => {
+                        return Err(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                        );
+                    }
                 }
-                if crate::syntax::charge_new_expression_copy(
-                    &capture.expression,
-                    crate::syntax::type_depth(depth, 1)?,
-                    false,
-                    budget,
-                )?
-                .is_none()
-                    || crate::syntax::charge_new_expression_retention(capture, depth, budget)?
-                        .is_none()
-                {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
                 budget.charge()?;
-                *node = MacroOutputNode::Expression(capture.clone(), origin.clone());
+                *node = selected.clone();
             }
             _ => {}
         }

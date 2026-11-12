@@ -87,13 +87,22 @@ fn check_declaration_contents(
     contents: &[MacroOutputNode],
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), RuntimeFailure> {
+    check_declaration_contents_at(contents, 0, budget)
+}
+
+fn check_declaration_contents_at(
+    contents: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), RuntimeFailure> {
     // The capture retains one Arc layer before any delimiter groups.
+    let prefix = crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?;
     budget
         .charge_units(contents.len())
         .map_err(syntax_failure)?;
     let mut pending = contents
         .iter()
-        .map(|node| (node, 1usize))
+        .map(|node| (node, prefix))
         .collect::<Vec<_>>();
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(syntax_failure)?;
@@ -112,6 +121,14 @@ fn check_declaration_contents(
                 budget
                     .charge_units(children.len())
                     .map_err(syntax_failure)?;
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(syntax_failure)?;
+                    pending.reserve_exact(children.len());
+                }
                 pending.extend(children.iter().map(|child| (child, depth)));
             }
             _ => return Err(RuntimeFailure::InvalidControlState),
@@ -1786,11 +1803,34 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if self.constructors.get("DeclarationNode") == Some(&tag) {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    }
                 }
                 let (value, origin) = pair(payload, heap)?;
+                if self.syntax_work.is_some()
+                    && self.constructors.get("DeclarationNode") == Some(&tag)
+                {
+                    let CompilerSyntaxHandleKind::Declaration(index) =
+                        self.admitted_handle(value)?
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let capture = self
+                        .declarations
+                        .get(index)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    let prefix = depth.saturating_add(groups.len());
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the declaration route owns a budget");
+                    check_declaration_contents_at(&capture.contents, prefix, budget)?;
+                    budget.charge_units(2).map_err(syntax_failure)?; // retained Arc and output slot
+                    reserve_type_push(&mut output, Some(budget), true)?;
+                    let capture = capture.clone();
+                    let origin = self.copy_origin(origin, prefix)?;
+                    output.push(MacroOutputNode::ForwardedDeclaration(capture, origin));
+                    nodes = rest;
+                    continue;
+                }
                 if self.syntax_work.is_some() && tag == self.constructor("TypeNode")? {
                     let CompilerSyntaxHandleKind::Type(index) = self.admitted_handle(value)? else {
                         return Err(RuntimeFailure::InvalidControlState);

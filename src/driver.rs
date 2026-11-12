@@ -2755,8 +2755,59 @@ fn evaluate_generator_transformer(
         import_span: route.import_span(),
     });
     let builtin_introduction = owners.len();
+    let bindings = checked_terms
+        .get(selection.owner)
+        .ok_or_else(internal_file_failure)?;
+    if bindings.module != selected_owner.module() {
+        return Err(internal_file_failure());
+    }
+    let type_resource = |()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    };
+    checking_work
+        .charge(plan.actions.len())
+        .map_err(type_resource)?;
+    let mut escape_categories = Vec::with_capacity(plan.actions.len());
+    for action in &plan.actions {
+        let category = if let crate::syntax::GeneratorAction::Escape {
+            escapes,
+            descriptor,
+            ..
+        } = action
+        {
+            let escape = escapes.get(*descriptor).ok_or_else(internal_file_failure)?;
+            checking_work
+                .charge(escape.adapter.text.len().saturating_add(1))
+                .map_err(type_resource)?;
+            let fact = bindings
+                .get(&escape.adapter.text)
+                .ok_or_else(internal_file_failure)?;
+            if fact.binder.module() != Some(selected_owner.module())
+                || !fact.scheme.type_parameters.is_empty()
+                || !fact.scheme.requirements.is_empty()
+            {
+                return Err(internal_file_failure());
+            }
+            let result = match fact.scheme.value_type() {
+                crate::types::Type::Function(_, result) => result.as_ref(),
+                crate::types::Type::EffectfulFunction(_, result) => result.value(),
+                _ => return Err(internal_file_failure()),
+            };
+            Some(
+                crate::syntax::escape_result_category(result, builtin, checking_work)
+                    .map_err(type_resource)?
+                    .ok_or_else(internal_file_failure)?,
+            )
+        } else {
+            None
+        };
+        escape_categories.push(category);
+    }
     let definition = crate::syntax::generator_adapter_definition(
         plan,
+        &escape_categories,
         &selection.declaration.matcher,
         captures,
         introduction,
@@ -2888,9 +2939,8 @@ fn evaluate_generator_transformer(
     let lifecycle_before = generator_lifecycle_counters();
     let evaluated = crate::eval::evaluate_transformer_with_owners(
         &entry,
-        // Reached seed captures have already been incorporated into the
-        // checked adapter. Its Input is used only for the invocation origin.
-        &[],
+        // Only selected scalar leaves are exposed through the existing host.
+        &plan.captures,
         source,
         caller,
         introduction,
@@ -5500,6 +5550,14 @@ mod tests {
                         binding,
                         ..
                     } => ("step".to_owned(), generators[*binding].name.text.clone()),
+                    crate::syntax::GeneratorAction::Escape {
+                        escapes,
+                        descriptor,
+                        ..
+                    } => (
+                        "escape".to_owned(),
+                        escapes[*descriptor].adapter.text.clone(),
+                    ),
                 })
                 .collect();
         });

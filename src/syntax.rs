@@ -2280,6 +2280,22 @@ pub(crate) enum GeneratorAction {
         next: usize,
         result: usize,
     },
+    Escape {
+        escapes: Arc<[crate::surface::SurfaceTemplateEscape]>,
+        descriptor: usize,
+        operands: Vec<EscapeOperand>,
+        result: usize,
+    },
+}
+
+pub(crate) enum EscapeOperand {
+    Capture {
+        slot: usize,
+        kind: SurfaceSyntaxCaptureKind,
+    },
+    Generator {
+        result: usize,
+    },
 }
 
 pub(crate) struct GeneratorPlan {
@@ -2288,6 +2304,8 @@ pub(crate) struct GeneratorPlan {
     pub(crate) shapes: Vec<(Arc<[crate::surface::SurfaceTemplateGenerator]>, usize)>,
     pub(crate) actions: Vec<GeneratorAction>,
     pub(crate) results: usize,
+    /// Reached, selected leaves only; the host never opens a repeated capture.
+    pub(crate) captures: Vec<SurfaceSyntaxCapture>,
 }
 
 struct ActiveGenerator {
@@ -2394,11 +2412,11 @@ impl GeneratorPlanner {
         }
     }
 
-    fn read(
+    fn read_result(
         &mut self,
         name: &SurfaceName,
         budget: &mut SyntaxBudget,
-    ) -> Result<Option<MacroOutputNode>, TemplateSubstitutionFailure> {
+    ) -> Result<Option<usize>, TemplateSubstitutionFailure> {
         let mut found = None;
         for (index, active) in self.active.iter().enumerate().rev() {
             let candidate = &active.generators[active.binding].name;
@@ -2441,6 +2459,14 @@ impl GeneratorPlanner {
             item.cached = Some(result);
             result
         };
+        Ok(Some(result))
+    }
+
+    fn marker(
+        result: usize,
+        name: &SurfaceName,
+        budget: &mut SyntaxBudget,
+    ) -> Result<MacroOutputNode, TemplateSubstitutionFailure> {
         let digits = result
             .checked_ilog10()
             .map_or(1, |value| value as usize + 1);
@@ -2460,7 +2486,120 @@ impl GeneratorPlanner {
             written: false,
             diagnostic: None,
         };
-        Ok(Some(MacroOutputNode::Identifier(marker, name.span.into())))
+        Ok(MacroOutputNode::Identifier(marker, name.span.into()))
+    }
+
+    fn read(
+        &mut self,
+        name: &SurfaceName,
+        budget: &mut SyntaxBudget,
+    ) -> Result<Option<MacroOutputNode>, TemplateSubstitutionFailure> {
+        self.read_result(name, budget)?
+            .map(|result| Self::marker(result, name, budget))
+            .transpose()
+    }
+
+    fn escape(
+        &mut self,
+        name: &SurfaceName,
+        escapes: &Arc<[crate::surface::SurfaceTemplateEscape]>,
+        matcher: &[SurfaceSyntaxMatcherPart],
+        captures: &[SurfaceSyntaxCapture],
+        indices: &[usize],
+        budget: &mut SyntaxBudget,
+    ) -> Result<MacroOutputNode, TemplateSubstitutionFailure> {
+        let fail = |error| generator_resource(error, name.span);
+        let mut descriptor = None;
+        for (index, escape) in escapes.iter().enumerate() {
+            budget
+                .charge_units(
+                    name.text
+                        .len()
+                        .min(escape.adapter.text.len())
+                        .saturating_add(1),
+                )
+                .map_err(fail)?;
+            if name.text == escape.adapter.text {
+                descriptor = Some(index);
+                break;
+            }
+        }
+        let descriptor = descriptor.ok_or(TemplateSubstitutionFailure::Invalid(name.span))?;
+        let reads = &escapes[descriptor].reads;
+        budget.charge_units(reads.len()).map_err(fail)?;
+        let mut operands = Vec::with_capacity(reads.len());
+        for read in reads.iter() {
+            charge_matcher_lookup(matcher, read, 0, budget).map_err(fail)?;
+            if let Some(schema) = matcher_capture_schema(matcher, read) {
+                budget
+                    .charge_units(indices.len().saturating_mul(3))
+                    .map_err(fail)?;
+                let capture = capture_by_name_at(read, matcher, captures, indices)
+                    .map_err(|_| TemplateSubstitutionFailure::Invalid(read.span))?;
+                match capture {
+                    SurfaceSyntaxCapture::Identifier(value) => {
+                        charge_type_name_copy(&value.name, 0, budget).map_err(fail)?;
+                        charge_type_origin_copy(&value.origin, 0, budget).map_err(fail)?;
+                    }
+                    SurfaceSyntaxCapture::Expression(value) => {
+                        if !matches!(value.quote_sites, crate::surface::CapturedQuoteSites::Empty)
+                            || charge_new_expression_copy(&value.expression, 1, false, budget)
+                                .map_err(fail)?
+                                != Some(false)
+                            || charge_new_expression_retention(value, 0, budget).map_err(fail)?
+                                != Some(false)
+                        {
+                            return Err(TemplateSubstitutionFailure::Invalid(read.span));
+                        }
+                    }
+                    SurfaceSyntaxCapture::Type(value) => {
+                        charge_new_type_copy(&value.ty, 1, false, budget).map_err(fail)?;
+                        charge_new_type_retention(value, 0, budget).map_err(|error| {
+                            TemplateSubstitutionFailure::Syntax(read.span, error)
+                        })?;
+                    }
+                    SurfaceSyntaxCapture::Pattern(value) => {
+                        if charge_new_pattern_copy(&value.pattern, 1, false, budget)
+                            .map_err(fail)?
+                            != Some(false)
+                            || charge_new_pattern_retention(value, 0, budget).map_err(fail)?
+                                != Some(false)
+                        {
+                            return Err(TemplateSubstitutionFailure::Invalid(read.span));
+                        }
+                    }
+                    SurfaceSyntaxCapture::Declaration(_) => budget.charge().map_err(fail)?,
+                    SurfaceSyntaxCapture::Repeated(_) => {
+                        return Err(TemplateSubstitutionFailure::Invalid(read.span));
+                    }
+                }
+                Self::pay_push(&mut self.plan.captures, budget, read.span)?;
+                let slot = self.plan.captures.len();
+                self.plan.captures.push(capture.clone());
+                operands.push(EscapeOperand::Capture {
+                    slot,
+                    kind: schema.kind,
+                });
+            } else {
+                let result = self
+                    .read_result(read, budget)?
+                    .ok_or(TemplateSubstitutionFailure::Invalid(read.span))?;
+                operands.push(EscapeOperand::Generator { result });
+            }
+        }
+        let result = self.plan.results;
+        self.plan.results = result
+            .checked_add(1)
+            .ok_or(TemplateSubstitutionFailure::Invalid(name.span))?;
+        budget.charge().map_err(fail)?; // retained descriptor Arc
+        Self::pay_push(&mut self.plan.actions, budget, name.span)?;
+        self.plan.actions.push(GeneratorAction::Escape {
+            escapes: Arc::clone(escapes),
+            descriptor,
+            operands,
+            result,
+        });
+        Self::marker(result, name, budget)
     }
 }
 
@@ -2477,6 +2616,7 @@ fn generator_resource(error: ResourceFailure, span: Span) -> TemplateSubstitutio
 /// Construct the ordinary private entry consumed by the staged caller view.
 pub(crate) fn generator_adapter_definition(
     plan: &GeneratorPlan,
+    escape_categories: &[Option<EscapeResultCategory>],
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
     definition_introduction: usize,
@@ -2497,6 +2637,7 @@ pub(crate) fn generator_adapter_definition(
             plan.actions
                 .len()
                 .saturating_mul(512)
+                .saturating_add(plan.captures.len().saturating_mul(512))
                 .saturating_add(plan.shapes.len().saturating_mul(512))
                 .saturating_add(plan.results.saturating_mul(256))
                 .saturating_add(1024),
@@ -2815,7 +2956,10 @@ pub(crate) fn generator_adapter_definition(
             span,
         ));
     }
-    for action in &plan.actions {
+    if escape_categories.len() != plan.actions.len() {
+        return Err(MacroParseFailure::Invalid);
+    }
+    for (action, category) in plan.actions.iter().zip(escape_categories) {
         match action {
             GeneratorAction::Enter {
                 generators,
@@ -2927,6 +3071,66 @@ pub(crate) fn generator_adapter_definition(
                 );
                 declarations.push(local(binder(node(*result), span), expression, span));
             }
+            GeneratorAction::Escape {
+                escapes,
+                descriptor,
+                operands,
+                result,
+            } => {
+                let escape = escapes.get(*descriptor).ok_or(MacroParseFailure::Invalid)?;
+                let mut arguments = Vec::with_capacity(operands.len());
+                for operand in operands {
+                    arguments.push(match operand {
+                        EscapeOperand::Capture {
+                            slot,
+                            kind: SurfaceSyntaxCaptureKind::Identifier,
+                        } => pair(
+                            reference(format!("\0ash_capture_{slot}"), span, 0),
+                            reference(format!("\0ash_capture_origin_{slot}"), span, 0),
+                            span,
+                        ),
+                        EscapeOperand::Capture { slot, .. } => {
+                            reference(format!("\0ash_capture_{slot}"), span, 0)
+                        }
+                        EscapeOperand::Generator { result } => reference(value(*result), span, 0),
+                    });
+                }
+                let argument = match arguments.len() {
+                    0 => expr(SurfaceExprKind::Unit, span),
+                    1 => arguments.pop().ok_or(MacroParseFailure::Invalid)?,
+                    _ => expr(SurfaceExprKind::Tuple(arguments), span),
+                };
+                let application = invoke(
+                    &escape.adapter.text,
+                    definition_introduction,
+                    argument,
+                    span,
+                );
+                declarations.push(local(binder(value(*result), span), application, span));
+                let category = category.ok_or(MacroParseFailure::Invalid)?;
+                let (constructor, fields) = if category == EscapeResultCategory::Identifier {
+                    ("IdentifierNode", reference(value(*result), span, 0))
+                } else {
+                    let origin = invoke(
+                        "invocation_origin",
+                        builtin_introduction,
+                        reference("\0ash_generator_input".into(), span, 0),
+                        span,
+                    );
+                    (
+                        match category {
+                            EscapeResultCategory::Expression => "ExpressionNode",
+                            EscapeResultCategory::Type => "TypeNode",
+                            EscapeResultCategory::Pattern => "PatternNode",
+                            EscapeResultCategory::Declaration => "DeclarationNode",
+                            EscapeResultCategory::Identifier => unreachable!(),
+                        },
+                        pair(reference(value(*result), span, 0), origin, span),
+                    )
+                };
+                let wrapped = invoke(constructor, builtin_introduction, fields, span);
+                declarations.push(local(binder(node(*result), span), wrapped, span));
+            }
         }
     }
     let mut nodes = reference("NoNodes".into(), span, builtin_introduction);
@@ -2944,7 +3148,7 @@ pub(crate) fn generator_adapter_definition(
         invoke("Syntax", builtin_introduction, nodes, span),
         span,
     );
-    let body = expr(
+    let mut body = expr(
         SurfaceExprKind::Block(SurfaceBlock {
             declarations,
             result: Box::new(result),
@@ -2952,6 +3156,131 @@ pub(crate) fn generator_adapter_definition(
         }),
         span,
     );
+    if !plan.captures.is_empty() {
+        fn constructor_pattern(
+            text: &str,
+            payload: SurfacePattern,
+            span: Span,
+            introduction: usize,
+        ) -> SurfacePattern {
+            SurfacePattern {
+                kind: SurfacePatternKind::Constructor {
+                    name: SurfaceReference::Unqualified(name(text.to_owned(), span, introduction)),
+                    payload: Some(Box::new(payload)),
+                },
+                span,
+                diagnostic: None,
+            }
+        }
+        let mut requested = Vec::with_capacity(plan.captures.len());
+        let mut patterns = Vec::with_capacity(plan.captures.len());
+        for (slot, capture) in plan.captures.iter().enumerate() {
+            requested.push(invoke(
+                "capture",
+                builtin_introduction,
+                pair(
+                    reference("\0ash_generator_input".into(), span, 0),
+                    expr(
+                        SurfaceExprKind::Integer(crate::integer::Integer::from_usize(slot)),
+                        span,
+                    ),
+                    span,
+                ),
+                span,
+            ));
+            let (constructor, payload) = match capture {
+                SurfaceSyntaxCapture::Expression(_) => (
+                    "ExpressionCapture",
+                    binder(format!("\0ash_capture_{slot}"), span),
+                ),
+                SurfaceSyntaxCapture::Identifier(_) => (
+                    "IdentifierCapture",
+                    SurfacePattern {
+                        kind: SurfacePatternKind::Tuple(vec![
+                            binder(format!("\0ash_capture_{slot}"), span),
+                            binder(format!("\0ash_capture_origin_{slot}"), span),
+                        ]),
+                        span,
+                        diagnostic: None,
+                    },
+                ),
+                SurfaceSyntaxCapture::Type(_) => {
+                    ("TypeCapture", binder(format!("\0ash_capture_{slot}"), span))
+                }
+                SurfaceSyntaxCapture::Pattern(_) => (
+                    "PatternCapture",
+                    binder(format!("\0ash_capture_{slot}"), span),
+                ),
+                SurfaceSyntaxCapture::Declaration(_) => (
+                    "DeclarationCapture",
+                    binder(format!("\0ash_capture_{slot}"), span),
+                ),
+                SurfaceSyntaxCapture::Repeated(_) => return Err(MacroParseFailure::Invalid),
+            };
+            patterns.push(constructor_pattern(
+                "Captured",
+                constructor_pattern(constructor, payload, span, builtin_introduction),
+                span,
+                builtin_introduction,
+            ));
+        }
+        let (scrutinee, pattern) = if requested.len() == 1 {
+            (
+                requested.pop().ok_or(MacroParseFailure::Invalid)?,
+                patterns.pop().ok_or(MacroParseFailure::Invalid)?,
+            )
+        } else {
+            (
+                expr(SurfaceExprKind::Tuple(requested), span),
+                SurfacePattern {
+                    kind: SurfacePatternKind::Tuple(patterns),
+                    span,
+                    diagnostic: None,
+                },
+            )
+        };
+        let diagnostic = invoke(
+            "MacroDiagnostic",
+            builtin_introduction,
+            expr(
+                SurfaceExprKind::Tuple(vec![
+                    expr(SurfaceExprKind::String("invalid capture".to_owned()), span),
+                    invoke(
+                        "invocation_origin",
+                        builtin_introduction,
+                        reference("\0ash_generator_input".into(), span, 0),
+                        span,
+                    ),
+                    reference("NoOrigins".into(), span, builtin_introduction),
+                ]),
+                span,
+            ),
+            span,
+        );
+        let rejected = invoke("Rejected", builtin_introduction, diagnostic, span);
+        body = expr(
+            SurfaceExprKind::Match(SurfaceMatchExpr {
+                scrutinee: Box::new(scrutinee),
+                arms: vec![
+                    SurfaceMatchArm {
+                        pattern,
+                        body,
+                        span,
+                    },
+                    SurfaceMatchArm {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span,
+                            diagnostic: None,
+                        },
+                        body: rejected,
+                        span,
+                    },
+                ],
+            }),
+            span,
+        );
+    }
     let named_type = |text: &str| SurfaceType {
         kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(name(
             text.into(),
@@ -4393,7 +4722,7 @@ fn validate_template_syntax_inner(
         &mut loan,
         &[],
         None,
-        declaration.template_escapes.as_deref(),
+        declaration.template_escapes.as_ref(),
         placeholders,
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
@@ -5832,6 +6161,7 @@ pub(crate) fn prepare_generator_template(
             shapes,
             actions: Vec::new(),
             results: 0,
+            captures: Vec::new(),
         },
         active: Vec::new(),
         next_state: 0,
@@ -5852,7 +6182,7 @@ pub(crate) fn prepare_generator_template(
         &mut loan,
         &names,
         Some(&mut planner),
-        selection.declaration.template_escapes.as_deref(),
+        selection.declaration.template_escapes.as_ref(),
         None,
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
@@ -5953,7 +6283,7 @@ fn substitute_contents_at(
     budget: &mut Option<&mut SyntaxBudget>,
     generator_names: &[&SurfaceName],
     mut generator: Option<&mut GeneratorPlanner>,
-    escapes: Option<&[crate::surface::SurfaceTemplateEscape]>,
+    escapes: Option<&Arc<[crate::surface::SurfaceTemplateEscape]>>,
     mut admission_identifiers: Option<&mut Vec<SurfaceName>>,
 ) -> Result<(), TemplateSubstitutionFailure> {
     let mut position = 0;
@@ -5967,7 +6297,7 @@ fn substitute_contents_at(
                 indices,
                 indices.len(),
                 generator_names,
-                escapes,
+                escapes.map(Arc::as_ref),
                 None,
             ) {
                 Ok(count) => count,
@@ -6134,6 +6464,17 @@ fn substitute_contents_at(
                 )?;
             }
             MacroOutputNode::TemplateEscape(name) => {
+                if let Some(planner) = generator.as_deref_mut() {
+                    let Some(escapes) = escapes else {
+                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
+                    };
+                    let Some(budget) = budget.as_deref_mut() else {
+                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
+                    };
+                    *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
+                    position += 1;
+                    continue;
+                }
                 let Some(identifiers) = admission_identifiers.as_deref_mut() else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
@@ -6939,6 +7280,11 @@ mod tests {
                     binding,
                     ..
                 } => ("step", generators[*binding].name.text.as_str()),
+                GeneratorAction::Escape {
+                    escapes,
+                    descriptor,
+                    ..
+                } => ("escape", escapes[*descriptor].adapter.text.as_str()),
             })
             .collect::<Vec<_>>();
         assert_eq!(
