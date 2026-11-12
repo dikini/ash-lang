@@ -2241,14 +2241,28 @@ where
                             FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
                                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
                             )))
-                        })?
-                        .ok_or_else(|| {
-                            FileFailure::from(PipelineFailure::Resolution(
-                                crate::resolve::unsupported_syntax_template(
-                                    module.surface().definitions[escape_probes[index]].span,
-                                ),
-                            ))
                         })?;
+                        let category = match category {
+                            Some(category) => category,
+                            // These closed builtin atoms cannot be a syntax
+                            // fragment. Finish the existing expression shell
+                            // and let the full ordinary module check diagnose
+                            // the unchanged initializer against its result.
+                            None if matches!(
+                                result.ty(),
+                                Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit
+                            ) =>
+                            {
+                                crate::syntax::EscapeResultCategory::Expression
+                            }
+                            None => {
+                                return Err(FileFailure::from(PipelineFailure::Resolution(
+                                    crate::resolve::unsupported_syntax_template(
+                                        module.surface().definitions[escape_probes[index]].span,
+                                    ),
+                                )));
+                            }
+                        };
                         checking_type_work.charge(1).map_err(|()| {
                             FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
                                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
@@ -5526,6 +5540,8 @@ mod tests {
         static GENERATOR_PLAN: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
         static GENERATOR_TRANSFERS: Cell<usize> = const { Cell::new(0) };
         static GENERATOR_LIFECYCLES: RefCell<Vec<[usize; 5]>> = const { RefCell::new(Vec::new()) };
+        static ESCAPE_OBSERVATIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static ESCAPE_CHECKED_HELPERS: Cell<usize> = const { Cell::new(0) };
     }
 
     fn observe_generator_owner(
@@ -5638,6 +5654,230 @@ mod tests {
             hooks::TRANSFORMER_DROPS.get() + ordinary_executions
         );
         assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+    }
+
+    fn observe_escape_checked_owner(
+        owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        for action in &plan.actions {
+            let crate::syntax::GeneratorAction::Escape {
+                escapes,
+                descriptor,
+                ..
+            } = action
+            else {
+                panic!("the early categories adapter contains only escapes")
+            };
+            let helper = &escapes[*descriptor].adapter;
+            let scheme = owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == helper.text)
+                .expect("the final defining owner contains the actual escape helper");
+            assert_eq!(scheme.binder.module(), Some(owner.module()));
+            assert_eq!(owner.span().source(), helper.span.source());
+            assert!(scheme.scheme.type_parameters.is_empty());
+            assert!(scheme.scheme.requirements.is_empty());
+            ESCAPE_CHECKED_HELPERS.set(ESCAPE_CHECKED_HELPERS.get() + 1);
+        }
+    }
+
+    fn observe_escape_categories(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{SurfaceExprKind, SurfaceSyntaxCapture},
+            syntax::MacroOutputNode,
+        };
+        let name = selection.declaration.name.text.as_str();
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        match name {
+            "make_expr" | "local_capture" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Expression(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller expression is captured");
+                let [MacroOutputNode::Expression(returned, origin)] = output else {
+                    panic!("{name} returns one quoted Expression: {output:?}")
+                };
+                fn has_caller_fragment(
+                    nodes: &[MacroOutputNode],
+                    original: &crate::surface::SurfaceExpressionCapture,
+                ) -> bool {
+                    nodes.iter().any(|node| match node {
+                        MacroOutputNode::Group(_, children, _) => {
+                            has_caller_fragment(children, original)
+                        }
+                        MacroOutputNode::Expression(fragment, _)
+                        | MacroOutputNode::ForwardedExpression(fragment, _) => {
+                            Arc::ptr_eq(&fragment.contents, &original.contents)
+                                || has_caller_fragment(&fragment.contents, original)
+                        }
+                        _ => false,
+                    })
+                }
+                assert!(
+                    has_caller_fragment(&returned.contents, original),
+                    "{name} retains the caller fragment and its original context: {returned:?}"
+                );
+                assert_eq!(origin.primary().source(), original.expression.span.source());
+                let SurfaceExprKind::Add(addition) = &returned.expression.kind else {
+                    panic!("the returned quote retains its addition")
+                };
+                let (caller, local, local_value) = if name == "make_expr" {
+                    (&addition.left, &addition.right, "100")
+                } else {
+                    (&addition.right, &addition.left, "7")
+                };
+                assert_eq!(caller.span, original.expression.span);
+                let caller_location = caller.diagnostic.as_ref().expect("caller origin");
+                assert_eq!(caller_location.primary.primary(), original.expression.span);
+                assert!(caller_location.captured_expression);
+                assert!(
+                    caller_location
+                        .frames
+                        .iter()
+                        .any(|frame| frame.invocation.source()
+                            == original.expression.span.source()
+                            && frame.definition.source() == selection.declaration.span.source())
+                );
+                let SurfaceExprKind::Integer(value) = &local.kind else {
+                    panic!("the definition quote retains its literal")
+                };
+                assert_eq!(value.to_string(), local_value);
+                assert_eq!(
+                    local
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .primary
+                        .primary()
+                        .source(),
+                    selection.declaration.span.source()
+                );
+                assert_eq!(
+                    addition.operator_span.source(),
+                    selection.declaration.span.source()
+                );
+                eprintln!("{name}: caller fragment and definition literal retain separate origins");
+            }
+            "make_ident" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Identifier(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller identifier is captured");
+                assert_eq!(output.len(), 2);
+                for node in output {
+                    let MacroOutputNode::Identifier(returned, origin) = node else {
+                        panic!("the identifier escape returns identifier and origin")
+                    };
+                    assert_eq!(returned, &original.name);
+                    assert_eq!(origin, &original.origin);
+                }
+            }
+            "make_type" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Type(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller type is captured");
+                assert_eq!(output.len(), 2);
+                for node in output {
+                    let MacroOutputNode::ForwardedType(returned, origin) = node else {
+                        panic!("the type escape returns a protected type")
+                    };
+                    assert_eq!(returned.ty, original.ty);
+                    assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                    assert_eq!(origin.primary().source(), original.ty.span.source());
+                }
+            }
+            "make_pattern" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Pattern(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller pattern is captured");
+                let [MacroOutputNode::ForwardedPattern(returned, origin)] = output else {
+                    panic!("the pattern escape returns a protected pattern")
+                };
+                assert_eq!(returned.pattern, original.pattern);
+                assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                assert_eq!(origin.primary().source(), original.pattern.span.source());
+            }
+            "pass_declaration" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Declaration(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller declaration is captured");
+                let [MacroOutputNode::ForwardedDeclaration(returned, _)] = output else {
+                    panic!("the declaration escape returns a protected declaration")
+                };
+                assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                assert_eq!(returned.contents, original.contents);
+            }
+            _ => return,
+        }
+        ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().push(name.to_owned()));
+    }
+
+    #[test]
+    fn original_escape_categories_retain_captures_after_host_teardown() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+        ESCAPE_CHECKED_HELPERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_escape_checked_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_escape_categories));
+        let compiled = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/early_categories.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged early categories graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_eq!(ESCAPE_CHECKED_HELPERS.get(), 8);
+        assert_eq!(
+            ESCAPE_OBSERVATIONS.with(|slot| slot.borrow().clone()),
+            [
+                "make_expr",
+                "local_capture",
+                "make_ident",
+                "make_type",
+                "make_pattern",
+                "pass_declaration",
+            ]
+        );
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            vec![[1, 0, 1, 1, 0]; 6]
+        );
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "246");
+        assert_generator_cleanup(1);
+        hooks::reset();
     }
 
     fn observe_generator_output(
