@@ -4168,6 +4168,79 @@ fn charge_staged_name_frames(
     charge_frame_additions(frames.len(), previous, budget)
 }
 
+// Reserve the copies made by surface_name for an admitted staged transformer
+// invocation. The ordinary staged-frame search is paid by its caller.
+fn charge_staged_transformer_name(
+    token: ProjectionToken<'_>,
+    name: &SurfaceName,
+    origin: &crate::syntax::MacroOrigin,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    // The caller has already charged two shallow names in the legacy order.
+    // Upgrade one to charge_type_name_copy without charging its text again:
+    // that payer adds one unit, and for a location one unit plus its origins.
+    budget.charge()?;
+    if let Some(location) = name.diagnostic.as_deref() {
+        let depth = crate::syntax::type_depth(0, 1)?;
+        budget.charge()?;
+        crate::syntax::charge_type_origin_copy(&location.primary, depth, budget)?;
+        for related in &location.related {
+            crate::syntax::charge_type_origin_copy(related, depth, budget)?;
+        }
+    }
+    // surface_name also constructs a fresh boxed location with a separate
+    // copy of the original origin.
+    crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+    budget.charge()?;
+
+    let previous = name
+        .diagnostic
+        .as_deref()
+        .filter(|_| token.preserve_name_diagnostic);
+    if let Some(previous) = previous {
+        // Comparing the primary origins may visit both Combined trees. The
+        // previous causes are then copied into a new related vector; the
+        // primary is copied only when the two primary origins differ.
+        let comparison = previous
+            .primary
+            .span_count()
+            .saturating_add(origin.span_count())
+            .saturating_mul(2);
+        budget.charge_units(comparison)?;
+        budget.charge_units(previous.related.len().saturating_add(1).saturating_mul(12))?;
+        crate::syntax::charge_type_origin_copy(&previous.primary, 0, budget)?;
+        for related in &previous.related {
+            crate::syntax::charge_type_origin_copy(related, 0, budget)?;
+        }
+    }
+    let previous_frames = previous.map_or(0, |location| location.frames.len());
+    let added_frames = token
+        .staging_frames
+        .map_or(usize::from(token.name_frame.is_some()), |frames| {
+            frames.len()
+        });
+    // A fresh frame vector can grow while prior and staged frames are merged.
+    budget.charge_units(
+        previous_frames
+            .saturating_add(added_frames)
+            .saturating_mul(12),
+    )?;
+    Ok(())
+}
+
+fn staged_transformer_tokens(tokens: &ProjectionTokens<'_>) -> bool {
+    tokens.originals.is_some()
+        && tokens.occurrence.is_some()
+        && tokens.admission_identifiers.is_some()
+        && tokens.frame.is_some()
+        && tokens.name_frame.is_some()
+        && tokens.staging_frames.is_some()
+        && !tokens.construction_extents
+        && tokens.preserve_name_diagnostic
+        && tokens.expression_budget.is_none()
+        && tokens.quote_sites.is_none()
+}
+
 fn matcher_capture_count(parts: &[SurfaceSyntaxMatcherPart]) -> Result<usize, ProjectionError> {
     let mut count = 0usize;
     for part in parts {
@@ -4787,15 +4860,30 @@ fn charge_declaration_invocation(
         selection.declaration.implementation,
         SurfaceSyntaxImplementation::Template
     );
-    let declaration_transformer = executing
-        && (selection.declaration.matcher.is_empty()
-            || (has_declaration && !has_other_capture)
-            || (!has_declaration && (has_type_or_identifier || has_expression)))
-        && source_projection_tokens(tokens)
+    let staged_identifier_transformer = executing
+        && staged_transformer_tokens(tokens)
+        && !has_structured
+        && !has_declaration
+        && !has_other_capture
         && matches!(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let declaration_transformer = staged_identifier_transformer
+        || executing
+            && (selection.declaration.matcher.is_empty()
+                || (has_declaration && !has_other_capture)
+                || (!has_declaration && (has_type_or_identifier || has_expression)))
+            && source_projection_tokens(tokens)
+            && matches!(
+                selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+    if let Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) = token.original {
+        if staged_identifier_transformer {
+            charge_staged_transformer_name(token, name, origin, budget)?;
+        }
+    }
     let generator_capture = executing
         && template
         && selection.declaration.contains_generators
@@ -4933,8 +5021,13 @@ fn charge_declaration_invocation(
                 InternalReason::TokenOutOfRange,
             ))?;
         match token.original {
-            Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
-                crate::syntax::charge_name(name, budget)?;
+            Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+                if staged_identifier_transformer {
+                    crate::syntax::charge_type_name_copy(name, 0, budget)?;
+                    crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+                } else {
+                    crate::syntax::charge_name(name, budget)?;
+                }
             }
             None => match &token.kind {
                 TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
@@ -15460,6 +15553,256 @@ mod tests {
             super::super::MacroOutputPosition::Declarations,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn staged_identifier_transformer_pays_original_names_and_keeps_causes() {
+        use crate::{
+            syntax::{
+                DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode, SyntaxContexts,
+            },
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "staged-forms.ash",
+            "pub syntax declaration: (sink) $name:ident => using transformer\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("staged-caller.ash", "sink value\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let span = node_span(
+            &source,
+            child_nodes(tree.root().unwrap()).next().unwrap(),
+            &ProjectionTokens::source(tree.tokens()),
+        )
+        .unwrap();
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: selected[0].declaration.span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: selected[0].declaration.span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        for same_primary in [true, false] {
+            let mut parsed = d5_structured_tree(&source, &tree, &contexts);
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let Some(ConcreteElement::Token(name_index)) = node.children.first() else {
+                panic!("the staged invocation has a name")
+            };
+            let name_index = *name_index;
+            let argument = child_nodes(node)
+                .find(|child| child.kind == NodeKind::SyntaxArgument)
+                .unwrap();
+            let argument_index = argument
+                .children
+                .iter()
+                .find_map(|child| match child {
+                    ConcreteElement::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .unwrap();
+            let previous = if same_primary {
+                origin.clone()
+            } else {
+                span.into()
+            };
+            let mut location = DiagnosticLocation::new(previous.clone());
+            location.related.push(span.into());
+            location.frames.push(Arc::clone(&first));
+            let Some(MacroOutputNode::Identifier(name, issued_origin)) =
+                parsed.original_nodes.get_mut(&name_index)
+            else {
+                panic!("the staged name is an Identifier")
+            };
+            name.diagnostic = Some(Box::new(location.clone()));
+            *issued_origin = origin.clone();
+            let Some(MacroOutputNode::Identifier(argument, argument_origin)) =
+                parsed.original_nodes.get_mut(&argument_index)
+            else {
+                panic!("the staged argument is an Identifier")
+            };
+            argument.diagnostic = Some(Box::new(location.clone()));
+            *argument_origin = origin.clone();
+            let frames = [Arc::clone(&first), Arc::clone(&current)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: Some((selected[0].declaration.span, 1)),
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+                expression_budget: None,
+                quote_sites: None,
+            };
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let before = Arc::strong_count(&first);
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            assert!(
+                !charge_declaration_invocation(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    &mut measured,
+                )
+                .unwrap()
+            );
+            let total = measured.consumed();
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            assert_eq!(Arc::strong_count(&first), before);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), total);
+                let projected = project_declaration_invocation_node_inner(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    Some(&mut exact),
+                )
+                .unwrap();
+                assert_eq!(projected.name.text, "sink");
+                assert_eq!(projected.name.introduction, 0);
+                let actual = projected.name.diagnostic.as_deref().unwrap();
+                assert_eq!(actual.primary, origin);
+                assert_eq!(actual.related.len(), if same_primary { 1 } else { 2 });
+                if !same_primary {
+                    assert_eq!(actual.related[0], previous);
+                }
+                assert_eq!(actual.related.last(), Some(&MacroOrigin::Source(span)));
+                assert_eq!(actual.frames.len(), 2);
+                assert!(Arc::ptr_eq(&actual.frames[0], &first));
+                assert!(Arc::ptr_eq(&actual.frames[1], &current));
+                let [SurfaceSyntaxCapture::Identifier(capture)] = projected.captures.as_slice()
+                else {
+                    panic!("the real Identifier argument remains a capture")
+                };
+                assert_eq!(capture.name.text, "value");
+                assert_eq!(capture.name.diagnostic.as_deref(), Some(&location));
+                assert_eq!(capture.origin, origin);
+                drop(projected);
+                assert_eq!(Arc::strong_count(&first), before);
+            }
+        }
+    }
+
+    #[test]
+    fn staged_transformer_admission_stays_flat_and_capture_limited() {
+        use crate::{
+            syntax::ExpansionFrame, syntax::SyntaxContexts, syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        for (matcher, invocation, accepted) in [
+            ("", "sink\n", true),
+            ("word", "sink word\n", true),
+            ("$name:ident", "sink value\n", true),
+            ("$value:type", "sink Int\n", false),
+            ("$value:expr", "sink 42\n", false),
+        ] {
+            let forms = SourceFile::new(
+                "guard-forms.ash",
+                format!("pub syntax declaration: (sink) {matcher} => using transformer\n"),
+            )
+            .unwrap();
+            let selected = [h1_selection(&forms, 0, None)];
+            let source = SourceFile::new("guard-caller.ash", invocation).unwrap();
+            let tree = h1_tree(&source, &selected);
+            let contexts = SyntaxContexts::new(&selected, &[], &[]);
+            let span = node_span(
+                &source,
+                child_nodes(tree.root().unwrap()).next().unwrap(),
+                &ProjectionTokens::source(tree.tokens()),
+            )
+            .unwrap();
+            let parsed = d5_structured_tree(&source, &tree, &contexts);
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let frame = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: selected[0].declaration.span,
+            });
+            let frames = [Arc::clone(&frame)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+                expression_budget: None,
+                quote_sites: None,
+            };
+            let mut budget = SyntaxBudget::default();
+            let result =
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut budget);
+            if accepted {
+                result.unwrap_or_else(|error| panic!("{matcher}: {error:?}"));
+                let projected = project_declaration_invocation_node_inner(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    Some(&mut budget),
+                )
+                .unwrap();
+                assert_eq!(projected.selection.name, "sink");
+                let incomplete = ProjectionTokens {
+                    name_frame: None,
+                    ..tokens
+                };
+                assert!(matches!(
+                    charge_declaration_invocation(
+                        &source,
+                        node,
+                        &incomplete,
+                        &contexts,
+                        true,
+                        &mut SyntaxBudget::default(),
+                    ),
+                    Err(DeclarationExpansionFailure::Projection(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                    ))
+                ));
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ),
+                    "{matcher}"
+                );
+            }
+        }
     }
 
     #[test]
