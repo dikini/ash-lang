@@ -34366,14 +34366,14 @@ mod tests {
                             if variable.binder() == selected.binder =>
                         {
                             let node_id = node_id(program.arena, index).ok()?;
-                            Some((node_id, node.origin.primary_span()))
+                            Some((node_id, node.origin.as_ref().map(Origin::primary_span)))
                         }
                         _ => None,
                     })
                     .collect::<Vec<_>>();
                 let at_occurrence = matching_variables
                     .iter()
-                    .filter(|(_, origin)| *origin == original_span)
+                    .filter(|(_, origin)| *origin == Some(original_span))
                     .count();
                 let retained_occurrences = catalog
                     .occurrences()
