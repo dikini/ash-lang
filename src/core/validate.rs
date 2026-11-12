@@ -17684,6 +17684,7 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 pub(crate) use tests::{
+    exercise_restored_global_swap_for_image_test,
     exercise_restored_nominal_pair_mutation_for_image_test,
     exercise_restored_owner_swap_for_image_test,
 };
@@ -33318,6 +33319,111 @@ mod tests {
         }
     }
 
+    pub(crate) fn exercise_restored_global_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let registry = original.registry();
+        let find = |name: &str| {
+            registry
+                .global_parameter_rows()
+                .iter()
+                .find_map(|row| {
+                    let [id] = row.parameters() else { return None };
+                    let parameter = registry.type_variable(*id)?;
+                    (parameter.spelling == name).then_some((row.owner(), *id, parameter))
+                })
+                .unwrap_or_else(|| panic!("the original global {name} exists"))
+        };
+        let (first, left, a) = find("A");
+        let (second, right, b) = find("B");
+        assert_ne!(first, second);
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild original global image");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored global Core validates");
+            let mut changed = rebuild().expect("rebuild global Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(first)
+                    .unwrap()
+                    .parameters(),
+                &[right]
+            );
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(second)
+                    .unwrap()
+                    .parameters(),
+                &[left]
+            );
+            for (owner, expected) in [(first, right), (second, left)] {
+                let id = linked_global_abstraction(&changed, owner);
+                let node = &changed.nodes[id.index().unwrap()];
+                let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(abstraction),
+                )) = &node.kind
+                else {
+                    panic!("the actual global initializer remains a type abstraction")
+                };
+                assert_eq!(abstraction.parameters()[0].0, expected);
+                let Type::Forall(parameters, _) = &node.ty else {
+                    panic!("the actual abstraction retains its scheme")
+                };
+                assert_eq!(parameters[0].0, expected);
+            }
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original globals refuse the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.global_parameter_row(first).unwrap().parameters(),
+                &[left]
+            );
+            assert_eq!(
+                registry.global_parameter_row(second).unwrap().parameters(),
+                &[right]
+            );
+            eprintln!(
+                "restored {name}: fixed original global owners reject the coordinated active swap"
+            );
+        }
+    }
+
     pub(crate) fn exercise_restored_owner_swap_for_image_test(
         original: &super::super::ValidatedEffectProgram,
         sources: &[&SourceFile],
@@ -33590,6 +33696,223 @@ mod tests {
     }
 
     #[test]
+    fn checked_original_owners_cover_inherited_methods_and_reject_unissued_ties() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident first $first:ident second $second:ident => {\n    pub interface $name<A> {\n        $first<B> : (A, B) -> B\n        $second : A -> A\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose first pick second echo\nimpl Choose<Int> {\n    pick (left, right) = right\n    echo value = value\n}\nmain : Unit -> Int\nmain () = pick(echo(0), 42)\n",
+        );
+        let configuration = || crate::driver::RunConfiguration {
+            entry: entry.clone(),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled =
+            crate::driver::compile_path(configuration()).expect("the original graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let methods = original.method_evidence().methods();
+        let first = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "pick")
+            .unwrap();
+        let second = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "echo")
+            .unwrap();
+        assert_eq!(first.id.interface(), second.id.interface());
+        let [interface] = first.interface_parameters.as_ref() else {
+            panic!("one interface parameter")
+        };
+        let [(local, Kind::Type)] = first.parameters.as_ref() else {
+            panic!("one local parameter")
+        };
+        let (interface, local) = (*interface, *local);
+        assert_eq!(second.interface_parameters.as_ref(), &[interface]);
+        assert!(second.parameters.is_empty());
+        assert_eq!(first.inherited_parameters[0].binder, interface);
+        assert_eq!(second.inherited_parameters[0].binder, interface);
+        let anchors = original.generated_parameter_anchors();
+        let module = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .find(|module| module.module == first.id.interface().module())
+            .unwrap();
+        let row = |owner| module.rows.iter().find(|row| row.owner == owner).unwrap();
+        assert_eq!(
+            row(OriginalOwner::Interface(first.id.interface())).parameters[0].parameter,
+            interface
+        );
+        assert_eq!(
+            row(OriginalOwner::Method(first.id)).parameters[0].parameter,
+            local
+        );
+        assert!(row(OriginalOwner::Method(second.id)).parameters.is_empty());
+        assert!(
+            module
+                .rows
+                .iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let validator = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        let a = rebuilt.registry.type_variable(interface).unwrap();
+        let b = rebuilt.registry.type_variable(local).unwrap();
+        assert!(validator.allows_original_expansion_tie(a, b).unwrap());
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = b.origin
+        else {
+            panic!("direct expansion")
+        };
+        let mut changed = b.clone();
+        changed.origin = Origin::Source(invocation);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Generated {
+            cause: Box::new(b.origin.clone()),
+            reason: crate::source::GeneratedReason::TypeChecking,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Related {
+            primary: Box::new(b.origin.clone()),
+            related: Vec::new(),
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        let source = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let range = invocation.range();
+        let unequal = source
+            .span(ByteRange::new(range.start(), range.end() - 1).unwrap())
+            .unwrap();
+        changed.origin = Origin::Expansion {
+            invocation: unequal,
+            definition,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed = b.clone();
+        changed.id =
+            crate::types::TypeVariableId::resolved(first.id.interface().module(), u32::MAX);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        drop(validator);
+        validate_effect_modules(rebuilt, &sources, &relations).expect("genuine original validates");
+
+        let donor = crate::driver::compile_path(configuration()).expect("a separate checked donor");
+        let (donor, _) = donor.effect_build_input().unwrap();
+        let mut substituted = identity_effect_traversal(original).unwrap();
+        substituted.generated_parameter_anchors = Arc::clone(donor.generated_parameter_anchors());
+        let validator = Validator::new_modules(&substituted, &sources, &relations).unwrap();
+        assert_eq!(
+            validator
+                .authenticate_checked_originals()
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        drop(validator);
+        assert!(validate_effect_modules(substituted, &sources, &relations).is_err());
+    }
+
+    #[test]
+    fn checked_original_global_row_retains_type_and_effect_row_slots() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n    pub $name<E : EffectRow, A> : (Unit -> A ! { | E }) -> A ! { | E }\n    $name action = action ()\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit relay\neffect Read {\n    read : Unit -> Int\n}\nread_number : Unit -> Int ! {Read}\nread_number () = perform Read.read ()\nmain : Unit -> Int\nmain () = handle (relay(read_number)) with Read {\n    read ignored => resume 42\n}\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original effect-row graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, _) = compiled.effect_build_input().unwrap();
+        let registry = original.registry();
+        let row = original
+            .generated_parameter_anchors()
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .find(|row| {
+                matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2
+                    && registry
+                        .type_variable(row.parameters[0].parameter)
+                        .is_some_and(|p| p.spelling == "E")
+                    && registry
+                        .type_variable(row.parameters[1].parameter)
+                        .is_some_and(|p| p.spelling == "A")
+            })
+            .expect("the genuine global has its original E/A row");
+        let e = registry.type_variable(row.parameters[0].parameter).unwrap();
+        let a = registry.type_variable(row.parameters[1].parameter).unwrap();
+        assert_eq!(e.kind, Kind::EffectRow);
+        assert_eq!(a.kind, Kind::Type);
+        assert!(matches!(e.origin, Origin::Expansion { .. }));
+        assert!(matches!(a.origin, Origin::Expansion { .. }));
+        assert_eq!(e.origin.primary_span(), a.origin.primary_span());
+        assert_eq!(
+            row.parameters[0].expansion_primary,
+            Some(e.origin.primary_span())
+        );
+        assert_eq!(
+            row.parameters[1].expansion_primary,
+            Some(a.origin.primary_span())
+        );
+    }
+
+    #[test]
     fn checked_original_nested_nominal_pair_rejects_contained_origin_mutation() {
         use super::super::dialect::checked_owner_anchors::OriginalNominalPair;
 
@@ -33752,6 +34075,168 @@ mod tests {
         eprintln!(
             "linked: actual checked original pair rejected the coordinated contained mutation"
         );
+    }
+
+    #[test]
+    fn checked_nominal_pair_work_is_exact_retryable_and_last_owner_drops() {
+        let configuration = || crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives/nested.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .expect("actual checked originals prepare");
+                assert!(
+                    originals
+                        .nominal_pairs()
+                        .iter()
+                        .any(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                );
+                let cost = measured.used();
+                assert!(cost > 1);
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                    short.charge(prefix).unwrap();
+                    assert!(matches!(
+                        GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut short,
+                        ),
+                        Err(OwnerAnchorPreparationError::Resource)
+                    ));
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                        exact.charge(prefix).unwrap();
+                        let retry = GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut exact,
+                        )
+                        .expect("a fresh exact original-pair retry succeeds");
+                        assert_eq!(exact.used(), prefix + cost);
+                        assert_eq!(retry.nominal_pairs(), originals.nominal_pairs());
+                    }
+                }
+                eprintln!("nested checked-original preparation uses exactly {cost} work units");
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the original checked nested program validates");
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let previous = rebuilt.registry.nominal(pair.previous).unwrap();
+        let current = rebuilt.registry.nominal(pair.current).unwrap();
+        let measured = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        assert!(
+            measured
+                .allows_original_nominal_overlap(previous, current, pair.source)
+                .unwrap()
+        );
+        let cost = measured.type_work.get();
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+            short.type_work_limit = prefix + cost - 1;
+            short.charge_type_work(prefix).unwrap();
+            assert_eq!(
+                short
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+                exact.type_work_limit = prefix + cost;
+                exact.charge_type_work(prefix).unwrap();
+                assert!(
+                    exact
+                        .allows_original_nominal_overlap(previous, current, pair.source)
+                        .unwrap()
+                );
+                assert_eq!(exact.type_work.get(), prefix + cost);
+            }
+        }
+        eprintln!("original nominal-pair lookup uses exactly {cost} work units");
+        drop(measured);
+        drop(rebuilt);
+        let weak = Arc::downgrade(original.generated_parameter_anchors());
+        let last = identity_effect_traversal(original).unwrap();
+        drop(compiled);
+        assert_eq!(
+            weak.strong_count(),
+            1,
+            "only the transformed Core retains the anchor"
+        );
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || drop(last))
+            .expect("small-stack last owner worker")
+            .join()
+            .expect("last owner drop is bounded");
+        assert!(weak.upgrade().is_none());
+
+        let reached = Cell::new(false);
+        let failure = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .unwrap();
+                assert!(!originals.nominal_pairs().is_empty());
+                let weak = Arc::downgrade(&program.generated_parameter_anchors);
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                let result = validate_effect_modules_linked_with_work(
+                    program, sources, relations, linked, &mut short,
+                );
+                assert_eq!(
+                    result
+                        .as_ref()
+                        .err()
+                        .expect("one-short linked preparation refuses")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+                assert!(
+                    weak.upgrade().is_none(),
+                    "failed preparation disposes the unchecked owner"
+                );
+                reached.set(true);
+                result
+            },
+        );
+        assert!(reached.get());
+        assert!(failure.is_err());
     }
 
     #[test]

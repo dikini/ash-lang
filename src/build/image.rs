@@ -4919,6 +4919,71 @@ mod tests {
     }
 
     #[test]
+    fn checked_image_rejects_coordinated_restored_global_owner_swap() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $first:ident and $second:ident => {\n    pub $first<A> : A -> A\n    $first value = value\n    pub $second<B> : B -> B\n    $second value = value\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit first and second\nmain : Unit -> Int\nmain () = first(second(42))\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        crate::core::validate::exercise_restored_global_swap_for_image_test(
+            &restored.program,
+            &sources,
+            &module_sources,
+        );
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn checked_image_rejects_coordinated_restored_owner_swap() {
         let tree = SourceTree::new();
         tree.write(
