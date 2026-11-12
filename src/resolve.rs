@@ -18007,6 +18007,21 @@ mod tests {
 
     std::thread_local! {
         static OBSERVED_CHECKED_CAPTURE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+        static OBSERVED_LATE_CHECKED_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn observe_late_checked_capture(
+        exported: &ExportedGlobal,
+        _owner: SyntaxOwnerLookup<'_>,
+        _span: Span,
+    ) {
+        if exported
+            .publication
+            .as_ref()
+            .is_some_and(|fact| fact.spelling == "value")
+        {
+            OBSERVED_LATE_CHECKED_CAPTURE.set(true);
+        }
     }
 
     fn observe_checked_capture(
@@ -18069,6 +18084,165 @@ mod tests {
         result.expect("the real capture closure is retained");
         let used = measured.type_work.used();
         assert!(used > 17);
+
+        // Observe every actually reached ordinary capture nominal whose fact
+        // must come from its checked owner, not just the known QuoteHoles ID.
+        let mut observed_work = TypeWorkBudget::unbounded();
+        let mut referenced = HashSet::new();
+        for ty in exported.capture.types(&mut observed_work).unwrap() {
+            crate::resolved::collect_nominal_identities(ty, &mut referenced, &mut observed_work)
+                .unwrap();
+        }
+        let mut checked_missing = HashSet::new();
+        for id in referenced {
+            if id.is_lexical()
+                || owner
+                    .owner
+                    .exports()
+                    .resource_by_family(id, &mut observed_work)
+                    .unwrap()
+                    .is_some()
+            {
+                continue;
+            }
+            let summary = if owner.owner.exports().nominal_fact(id).is_some() {
+                owner.owner.exports()
+            } else {
+                owner.nominal_summary(id).unwrap_or(owner.owner.exports())
+            };
+            if summary.nominal_fact(id).is_some() || owner.private_nominal(id).is_some() {
+                continue;
+            }
+            let checked = owner
+                .graph
+                .iter()
+                .find(|checked| checked.module() == id.module())
+                .expect("the reached ordinary nominal has its real checked module");
+            let fact = checked
+                .syntax_nominal_fact(id)
+                .expect("the exact checked nominal exists");
+            let retained = measured
+                .imported
+                .nominal(id)
+                .expect("the reached fact is retained");
+            assert_eq!(retained.id, id);
+            assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+            assert!(retained.constructors.is_empty());
+            assert_eq!(retained.declaration_kind, fact.declaration_kind);
+            assert_eq!(retained.parameter_count, fact.parameter_count);
+            assert_eq!(retained.constructor_count, fact.constructor_count);
+            assert_eq!(retained.parameters.as_ref(), fact.parameters);
+            assert_eq!(retained.representation.as_ref(), fact.representation);
+            assert_eq!(
+                retained.representation_provenance.as_ref(),
+                fact.representation_provenance
+            );
+            assert_eq!(retained.display_spelling.as_deref(), fact.display_spelling);
+            assert_eq!(retained.display_is_private, fact.display_is_private);
+            assert_eq!(&retained.origin, fact.origin);
+            assert!(!measured.type_names.values().any(|named| *named == id));
+            assert!(
+                fact.constructors
+                    .iter()
+                    .all(|constructor| measured.imported.constructor(*constructor).is_none())
+            );
+
+            assert_ne!(owner.owner.module(), id.module());
+            assert!(owner.private_nominal(id).is_none());
+            let mut ordinary = Resolver::new(ModuleId::new(90_312));
+            let refusal = ordinary.retain_type_nominals_with(
+                &Type::Nominal(id),
+                owner.owner.exports(),
+                span,
+                false,
+                Some(owner),
+            );
+            assert_eq!(refusal.unwrap_err().reason, ResolveReason::InternalState);
+            assert!(ordinary.imported.nominal(id).is_none());
+            checked_missing.insert(id);
+        }
+        assert!(checked_missing.contains(&identity));
+        eprintln!(
+            "actual checked capture missing nominal IDs: {}",
+            checked_missing.len()
+        );
+
+        // Exercise the checked-capture merge itself with the actual borrowed
+        // fact, including reached table growth and a conflicting origin.
+        let candidate = crate::resolved::ImportedNominalFactRef {
+            constructors: &[],
+            access: ImportedTypeAccess::Hidden,
+            ..original
+        };
+        let merge = |limit| {
+            let mut facts = ImportedFacts::default();
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let mut constraints = InterfaceConstraintBudget::with_limit(usize::MAX);
+            work.charge(17).unwrap();
+            let result = facts
+                .prepare_checked_capture_nominal_merge(candidate, &mut work, &mut constraints)
+                .and_then(|prepared| facts.commit_nominal_merge(prepared));
+            (result, facts, work.used())
+        };
+        let (merged, mut facts, merge_work) = merge(usize::MAX);
+        merged.expect("the actual hidden fact stages and commits");
+        assert!(merge_work > 19, "the reached table growth is charged");
+        assert_eq!(
+            facts.nominal(identity).unwrap().access,
+            ImportedTypeAccess::Hidden
+        );
+        let (short, untouched, _) = merge(merge_work - 1);
+        assert!(matches!(
+            short,
+            Err(ImportedNominalMergeFailure::TypeResource)
+        ));
+        assert!(untouched.nominal(identity).is_none());
+        for _ in 0..2 {
+            let (retry, exact, actual_work) = merge(merge_work);
+            retry.expect("an exact fresh retry commits the actual hidden fact");
+            assert_eq!(actual_work, merge_work);
+            assert_eq!(
+                exact.nominal(identity).unwrap().access,
+                ImportedTypeAccess::Hidden
+            );
+        }
+        let changed_origin = Origin::Source(span);
+        assert_ne!(candidate.origin, &changed_origin);
+        let conflicting = crate::resolved::ImportedNominalFactRef {
+            origin: &changed_origin,
+            ..candidate
+        };
+        let conflict = |facts: &mut ImportedFacts, limit| {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut constraints = InterfaceConstraintBudget::with_limit(limit);
+            let result = facts.prepare_checked_capture_nominal_merge(
+                conflicting,
+                &mut work,
+                &mut constraints,
+            );
+            (result.map(|_| ()), constraints.used())
+        };
+        let (failure, conflict_work) = conflict(&mut facts, usize::MAX);
+        assert!(matches!(
+            failure,
+            Err(ImportedNominalMergeFailure::Conflict)
+        ));
+        assert!(conflict_work > 0);
+        let (short, _) = conflict(&mut facts, conflict_work - 1);
+        assert!(matches!(
+            short,
+            Err(ImportedNominalMergeFailure::ConstraintResource)
+        ));
+        for _ in 0..2 {
+            let (failure, exact_work) = conflict(&mut facts, conflict_work);
+            assert!(matches!(
+                failure,
+                Err(ImportedNominalMergeFailure::Conflict)
+            ));
+            assert_eq!(exact_work, conflict_work);
+            assert_eq!(&facts.nominal(identity).unwrap().origin, original.origin);
+        }
+
         let retained = measured.imported.nominal(identity).unwrap();
         assert_eq!(retained.id, identity);
         assert_eq!(retained.access, ImportedTypeAccess::Hidden);
@@ -18173,6 +18347,94 @@ mod tests {
             OBSERVED_CHECKED_CAPTURE_WORK.get().is_some(),
             "the actual checked private helper was reached"
         );
+    }
+
+    #[test]
+    fn checked_capture_then_late_resolution_failure_publishes_no_caller() {
+        const ENTRY: &str =
+            "import dependency (value)\nmain : Unit -> Int\nmain () = missing(())\n";
+        let fixture =
+            ImportBudgetFixture::create(ENTRY, "pub value : Unit -> Int\nvalue () = 42\n");
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|owner| owner.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut binding_work = TypeWorkBudget::unbounded();
+        let terms = checked
+            .iter()
+            .map(|owner| {
+                crate::syntax::SyntaxOwnerBindings::new(
+                    owner,
+                    graph.module(owner.module()).unwrap(),
+                    &checked,
+                    &mut binding_work,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| owner.exports().term("value").is_some())
+            .unwrap();
+        let owner = &checked[owner_index];
+        let usage = crate::syntax::SyntaxNameUse {
+            name: SurfaceName {
+                text: "value".into(),
+                span: owner.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            },
+            qualifier: None,
+            namespace: crate::syntax::SyntaxNameNamespace::Term,
+            owner: owner_index,
+            declaration: owner.span(),
+            import_span: entry
+                .dependencies()
+                .iter()
+                .find(|edge| edge.target() == owner.module())
+                .unwrap()
+                .import_span(),
+        };
+        OBSERVED_LATE_CHECKED_CAPTURE.set(false);
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_late_checked_capture)));
+        let result = resolve_module_with_syntax(
+            entry,
+            &dependencies,
+            &mut TypeWorkBudget::unbounded(),
+            &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+            &[usage],
+            &checked,
+            &terms,
+            None,
+        );
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        assert!(OBSERVED_LATE_CHECKED_CAPTURE.get());
+        let Err(ResolveModuleError::Resolution(failure)) = result else {
+            panic!("the later missing caller name must prevent a completed module");
+        };
+        assert_eq!(failure.reason, ResolveReason::UnknownName);
+        let missing = ENTRY.find("missing").unwrap() as u32;
+        assert_eq!(failure.primary.span().range().start(), missing);
+        assert_eq!(failure.primary.span().range().end(), missing + 7);
     }
 
     #[test]

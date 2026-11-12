@@ -2200,7 +2200,13 @@ pub(crate) fn charge_selected(
     if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
         charge_name(name, budget)?;
     }
+    if selection.declaration.template_contents.is_some() {
+        budget.charge()?;
+    }
     if selection.declaration.template_escapes.is_some() {
+        budget.charge()?;
+    }
+    if selection.declaration.generators.is_some() {
         budget.charge()?;
     }
     Ok(())
@@ -2231,6 +2237,9 @@ pub(crate) fn charge_selected_expression(
         budget.charge()?;
     }
     if selection.declaration.template_escapes.is_some() {
+        budget.charge()?;
+    }
+    if selection.declaration.generators.is_some() {
         budget.charge()?;
     }
     if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
@@ -7907,6 +7916,75 @@ mod tests {
                 .unwrap()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn selected_generator_packet_retain_is_paid_before_clone() {
+        let source = SourceFile::new(
+            "selected-generator-retains.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = $next\n} with {\n$next from 0 step advance\n}\n",
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let mut initial = SyntaxBudget::default();
+        let mut module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut initial,
+            None,
+        )
+        .unwrap();
+        let declaration = module.syntax_declarations.remove(0);
+        let selection = SelectedSyntax {
+            name: "make".into(),
+            owner: 0,
+            import_span: declaration.span,
+            declaration,
+        };
+        let contents = selection.declaration.template_contents.as_ref().unwrap();
+        let generators = selection.declaration.generators.as_ref().unwrap();
+        let baseline = (Arc::strong_count(contents), Arc::strong_count(generators));
+        for charge in [charge_selected, charge_selected_expression] {
+            let run = |selected: &SelectedSyntax, limit| {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                budget.charge_units(17).unwrap();
+                let result = charge(selected, &mut budget).map(|()| selected.clone());
+                (result, budget.consumed())
+            };
+            let (result, exact) = run(&selection, usize::MAX);
+            drop(result.unwrap());
+            let mut no_generators = selection.clone();
+            no_generators.declaration.generators = None;
+            let (result, without_generators) = run(&no_generators, usize::MAX);
+            drop(result.unwrap());
+            assert_eq!(exact, without_generators + 1);
+            let mut no_contents = selection.clone();
+            no_contents.declaration.template_contents = None;
+            let (result, without_contents) = run(&no_contents, usize::MAX);
+            drop(result.unwrap());
+            assert_eq!(exact, without_contents + 1);
+            drop((no_generators, no_contents));
+            assert!(matches!(
+                run(&selection, exact - 1).0,
+                Err(ResourceFailure::SyntaxWork { .. })
+            ));
+            assert_eq!(
+                (Arc::strong_count(contents), Arc::strong_count(generators)),
+                baseline
+            );
+            for _ in 0..2 {
+                let (result, used) = run(&selection, exact);
+                drop(result.unwrap());
+                assert_eq!(used, exact);
+                assert_eq!(
+                    (Arc::strong_count(contents), Arc::strong_count(generators)),
+                    baseline
+                );
+            }
+        }
     }
 
     #[test]
