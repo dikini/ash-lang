@@ -8498,6 +8498,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ImportedNominalName, ResolveError> {
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
@@ -8550,7 +8551,7 @@ impl Resolver<'_, '_> {
         )? {
             return Ok(ImportedNominalName { id });
         }
-        if name.introduction != 0 {
+        if name.introduction != 0 && !self.is_current_caller_quote(name)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
                 .syntax_nominals
@@ -8597,7 +8598,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Interface)?;
             let id = match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -8655,12 +8656,7 @@ impl Resolver<'_, '_> {
                 origin: Origin::Source(reference.span()),
             });
         }
-        if self.file_name_is_bound(&member.text)
-            || self
-                .type_scopes
-                .iter()
-                .rev()
-                .any(|scope| scope.contains_key(&member.text))
+        if self.file_name_is_bound(&member.text) || self.contextual_type_variable(member).is_some()
         {
             return Err(interface_kind_error(member.span, &member.text)
                 .with_name(member, &self.diagnostic_frames));
@@ -8682,7 +8678,7 @@ impl Resolver<'_, '_> {
     fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
             return match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -9245,6 +9241,7 @@ impl Resolver<'_, '_> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             let selected = self
@@ -9264,6 +9261,7 @@ impl Resolver<'_, '_> {
                 .with_name(member, &self.diagnostic_frames)
             });
         }
+        let mut checked_contextual_lexical = false;
         if matches!(reference, SurfaceReference::Unqualified(_)) && member.introduction != 0 {
             if let Some(id) = charged_lexical_scope_lookup(
                 &self.lexical_constructor_scopes,
@@ -9273,19 +9271,22 @@ impl Resolver<'_, '_> {
             )? {
                 return Ok(id);
             }
-            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
-            return self
-                .syntax_constructors
-                .get(&(member.text.clone(), member.introduction))
-                .copied()
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::UnknownConstructor,
-                        member.span,
-                        "this constructor is not declared in the syntax owner",
-                    )
-                    .with_name(member, &self.diagnostic_frames)
-                });
+            if !self.is_current_caller_quote(member)? {
+                self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
+                return self
+                    .syntax_constructors
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::UnknownConstructor,
+                            member.span,
+                            "this constructor is not declared in the syntax owner",
+                        )
+                        .with_name(member, &self.diagnostic_frames)
+                    });
+            }
+            checked_contextual_lexical = true;
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
@@ -9307,13 +9308,17 @@ impl Resolver<'_, '_> {
                     .with_name(reference.member(), &self.diagnostic_frames)
                 });
         }
-        if let Some(constructor) = charged_lexical_scope_lookup(
-            &self.lexical_constructor_scopes,
-            reference.member(),
-            &mut self.type_work,
-            "lexical constructor lookup exceeded its type-work budget",
-        )?
-        .or_else(|| {
+        let lexical = if checked_contextual_lexical {
+            None
+        } else {
+            charged_lexical_scope_lookup(
+                &self.lexical_constructor_scopes,
+                reference.member(),
+                &mut self.type_work,
+                "lexical constructor lookup exceeded its type-work budget",
+            )?
+        };
+        if let Some(constructor) = lexical.or_else(|| {
             self.constructor_names
                 .get(&reference.member().text)
                 .copied()
