@@ -907,6 +907,7 @@ enum ResolveContext {
     MissingModuleAlias,
     SyntaxNameReservation,
     MixedTypeRowRoles,
+    ForeignContract(crate::foreign::source_contract::ForeignContractCause),
     IdentityExhaustion(ResolveIdentitySpace),
 }
 
@@ -1068,6 +1069,19 @@ impl ResolveError {
         }
     }
 
+    pub(crate) const fn foreign_contract_cause(&self) -> Option<&'static str> {
+        use crate::foreign::source_contract::ForeignContractCause;
+        match self.0.context {
+            Some(ResolveContext::ForeignContract(
+                ForeignContractCause::MissingSupportedProfile,
+            )) => Some("missing-supported-profile"),
+            Some(ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember)) => {
+                Some("unsupported-member")
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn resource_name(&self) -> Option<&'static str> {
         match self.reason {
             ResolveReason::TypeResourceExhausted => Some("type-work"),
@@ -1127,6 +1141,9 @@ impl ResolveError {
             return Some((self.message()?, "resolution_site"));
         }
         match self.reason {
+            ResolveReason::ForeignContract if self.foreign_contract_cause().is_some() => {
+                return Some((self.message()?, "foreign_contract"));
+            }
             ResolveReason::BinderIdExhausted => {
                 return Some((self.message()?, "identity_allocation"));
             }
@@ -1372,6 +1389,18 @@ impl ResolveError {
             return Some(context.message());
         }
         match self.reason {
+            ResolveReason::ForeignContract => {
+                use crate::foreign::source_contract::ForeignContractCause;
+                return Some(match self.0.context? {
+                    ResolveContext::ForeignContract(
+                        ForeignContractCause::MissingSupportedProfile,
+                    ) => crate::message::Message::foreign_missing_profile(),
+                    ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember) => {
+                        crate::message::Message::foreign_unsupported_member()
+                    }
+                    _ => return None,
+                });
+            }
             ResolveReason::TypeResourceExhausted => {
                 return Some(crate::message::Message::resolve_type_resources());
             }
@@ -1510,6 +1539,7 @@ impl ResolveError {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
             ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::ForeignContract(_)
             | ResolveContext::SyntaxNameReservation
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
@@ -2724,6 +2754,49 @@ impl GeneratedParameterOrder {
     pub(crate) fn parameters(&self) -> &[TypeVariableId] {
         &self.parameters
     }
+}
+
+// Pay for the actual flat DiagnosticLocation clone before a new label retains
+// it. Combined origins retain two Arcs; their shared inputs are not cloned.
+fn prepay_diagnostic_location(
+    work: &mut TypeWorkBudget,
+    location: Option<&crate::syntax::DiagnosticLocation>,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let Some(location) = location else {
+        return Ok(());
+    };
+    let resource = || {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "diagnostic location retention exceeded its type-work budget",
+        )
+    };
+    work.charge(2).map_err(|()| resource())?;
+    work.charge(location.related.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    for origin in std::iter::once(&location.primary).chain(&location.related) {
+        work.charge(1).map_err(|()| resource())?;
+        let depth = match origin {
+            crate::syntax::MacroOrigin::Source(_) => 0,
+            crate::syntax::MacroOrigin::Combined { depth, .. } => {
+                work.charge(2).map_err(|()| resource())?;
+                *depth
+            }
+        };
+        if depth
+            .checked_add(1)
+            .is_none_or(|depth| depth > crate::parser::STRUCTURAL_DEPTH_LIMIT)
+        {
+            return Err(resource());
+        }
+    }
+    Ok(())
 }
 
 fn validate_newtype_shape(

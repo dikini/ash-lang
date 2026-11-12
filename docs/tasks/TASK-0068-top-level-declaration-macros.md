@@ -131,42 +131,33 @@ Three later syntax probes currently fail: plain and quoted nested syntax return
 `runtime.invalid-control-state`; the syntax bridge reaches `type.internal`.
 Their exact internal causes are unproved. They are outside this bounded repair.
 
-### Publication evidence candidate
+### Retained publication and downstream repairs
 
-The test-only H4 candidate `213fb092e85bd8e74579aa94548f2e142e677a3b`
-observes the original generated public `answer`, `Shade` and `Bright` names
-with one fresh introduction and their actual expansion origins. The validated
-linked program retains the invoking module's function, type and constructor
-identities in both the invoking and importing modules. The original literal
-public graph and handwritten control return 84; the nominal graph and control
-return 42. Repeated invocation and handwritten collisions reject through
-ordinary duplicate checks. These focused H4 results await exact retention and
-independent live acceptance; they do not close H6 or the integrated gates.
+[PR #318](https://github.com/dikini/ash-lang/pull/318) retained the H4 evidence
+and H4 [#233](https://github.com/dikini/ash-lang/issues/233) was accepted. The
+original generated and handwritten publication graphs preserve their observed
+identities, results and ordinary duplicate refusals.
 
-The original H6 hygiene caller and handwritten control return 252; private type
-and owner controls retain their ordinary results and refusals. The fixed
-interface and implementation cases and handwritten controls return 42; the
-copied duplicate-implementation variant and its handwritten control both
-reject with `impl.overlap`. Supplemental importer controls return 42. The
-unchanged relation graph still reaches `core.validation.registry` while its
-handwritten control returns 42, so H6 and the full declaration coverage remain
-open. Original source and failure results are not replaced by the supplemental
-wrappers.
+[PR #323](https://github.com/dikini/ash-lang/pull/323), retained at
+`d0a08c6527c9010865228ca6440b4b5fbb73eb5c`, completed H6
+[#237](https://github.com/dikini/ash-lang/issues/237) and the separately
+authorized bounded downstream repairs in [#303](https://github.com/dikini/ash-lang/issues/303),
+[#304](https://github.com/dikini/ash-lang/issues/304),
+[#310](https://github.com/dikini/ash-lang/issues/310),
+[#314](https://github.com/dikini/ash-lang/issues/314),
+[#319](https://github.com/dikini/ash-lang/issues/319) and
+[#320](https://github.com/dikini/ash-lang/issues/320). The original H6 matrix
+and its corrected supplemental importer controls were independently checked;
+the unchanged relation graph and the original method, Global and nested derive
+graphs now return 42 with their recorded controls. The H6 acceptance does not
+replace the remaining integrated corpus and verification gates.
 
 ### Remaining work and gates
 
-The original G/E criteria and I01–I22 corpus remain at their named gates.
-[#303](https://github.com/dikini/ash-lang/issues/303) records the independent
-Core parameter-order boundary; [#314](https://github.com/dikini/ash-lang/issues/314)
-records the distinct unequal nominal-origin overlap. Their bounded repairs and
-retention were separately authorized and are being delivered together with the
-authorized Method-local image repair [#319](https://github.com/dikini/ash-lang/issues/319)
-and Foreign symbol origin repair [#320](https://github.com/dikini/ash-lang/issues/320).
-The candidate retains checked original owner and nominal-pair facts across
-validation and the supported image path; its original examples and focused
-mutation controls have been exercised. Review, native execution, retention and
-acceptance remain gates. #304 and #310 retain their partial issue records until
-their complete original criteria are independently verified on the retained result.
+The original G/E criteria and I01–I22 corpus remain at their named gates. The
+retained downstream repair carries checked original owner and nominal-pair facts
+through validation and the supported image path; the independently checked
+issue records preserve the original positive and fixed-original mutation evidence.
 
 For #303 and #319 the user approved a supported-image proof amendment. The
 original concrete method and handwritten control still run to 42 and the actual
@@ -180,14 +171,13 @@ the original diverging generator diagnostic omits the actual step-function
 origin; [#317](https://github.com/dikini/ash-lang/issues/317) records that
 separate downstream boundary. Only a later bounded #317 experiment is authorized;
 its repair and retention are not. Its native G4, G5, G6 and E5 successors remain
-at their original gates. Public publication H4
-[#233](https://github.com/dikini/ash-lang/issues/233) was retained and accepted;
-H6 [#237](https://github.com/dikini/ash-lang/issues/237) remains open pending
-its complete original matrix on the retained successor. V1 remains open for its
-full original criteria, including the distinct diagnostic gaps in
+at their original gates. V1 remains open for its full original criteria,
+including the distinct diagnostic gaps in
 [#313](https://github.com/dikini/ash-lang/issues/313),
 [#321](https://github.com/dikini/ash-lang/issues/321) and
-[#322](https://github.com/dikini/ash-lang/issues/322).
+[#322](https://github.com/dikini/ash-lang/issues/322). The user has authorized
+one bounded diagnostic repair and retention for these three issues; its
+implementation, verification and acceptance remain in progress.
 
 Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
 V8 retained equality and acceptance remain required. The last full workspace
