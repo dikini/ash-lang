@@ -3575,7 +3575,7 @@ impl Resolver<'_, '_> {
                 let operation_id = OperationId::new(id, operation_index);
                 let operation_name = try_clone_resolution_string(
                     operation.spelling,
-                    operation.name_span,
+                    operation.name.span,
                     "effect operation name could not be retained",
                 )?;
                 operation_names.insert(operation_name, operation_id);
@@ -3871,11 +3871,39 @@ impl Resolver<'_, '_> {
                             "an effect operation must have one outer function arrow with a pure result",
                         ));
                     }
+                    let origin = if matches!(declaration, EffectSource::Foreign { .. }) {
+                        // Pay for inspecting the issued name context and retaining
+                        // the two inline spans before constructing its origin.
+                        self.type_work.charge(3).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                operation.name.span,
+                                "foreign operation origin exceeded its type-work budget",
+                            )
+                        })?;
+                        if operation.name.introduction != 0 {
+                            let invocation = operation.name.introduced_at.ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    operation.name.span,
+                                    "introduced foreign symbol has no invocation origin",
+                                )
+                            })?;
+                            Origin::Expansion {
+                                invocation,
+                                definition: operation.name.span,
+                            }
+                        } else {
+                            Origin::Source(operation.name.span)
+                        }
+                    } else {
+                        Origin::Source(operation.name.span)
+                    };
                     resolved.0.push(ResolvedEffectOperation {
                         id,
                         spelling,
                         annotation: annotation.into_inner(),
-                        origin: Origin::Source(operation.name_span),
+                        origin,
                         span: operation.span,
                     });
                 }
