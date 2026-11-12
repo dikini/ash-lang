@@ -1917,6 +1917,22 @@ pub(crate) fn copy_fragment_output_with_type(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, false)
+}
+
+/// Copy a declaration-service packet without interpreting its quoted tokens.
+pub(crate) fn copy_declaration_output(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, true).map(|(contents, _, _)| contents)
+}
+
+fn copy_fragment_output_inner(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+    declarations: bool,
+) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1930,8 +1946,13 @@ pub(crate) fn copy_fragment_output_with_type(
     for _ in 0..3 {
         budget.charge_units(output.len()).map_err(resource)?;
     }
-    // The returned capture owns both its AST and this contents Arc.
-    let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
+    // Expression, Type and Pattern captures own an AST plus a contents Arc;
+    // a declaration capture owns only the contents Arc.
+    let base_depth = if declarations { 1 } else { 2 };
+    let mut pending = output
+        .iter()
+        .map(|node| (node, base_depth))
+        .collect::<Vec<_>>();
     let mut group_count = 0usize;
     let mut group_depth = 0usize;
     let mut contains_protected_type = false;
@@ -1953,7 +1974,7 @@ pub(crate) fn copy_fragment_output_with_type(
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 group_count = group_count.saturating_add(1);
                 // The copy stack holds only actual Groups, not owner layers.
-                group_depth = group_depth.max(depth - 1);
+                group_depth = group_depth.max(depth - base_depth + 1);
                 // The copied child Vec and this walk's child entries.
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
@@ -2000,6 +2021,12 @@ pub(crate) fn copy_fragment_output_with_type(
                 {
                     return Err(MacroParseFailure::Invalid);
                 }
+            }
+            MacroOutputNode::ForwardedDeclaration(capture, origin) if declarations => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                charge_declaration_retention(&capture.contents, depth, budget)?;
+                budget.charge().map_err(resource)?; // cloned contents Arc
             }
             MacroOutputNode::Splice(_)
             | MacroOutputNode::ForwardedDeclaration(_, _)
@@ -2050,6 +2077,81 @@ pub(crate) fn copy_fragment_output_with_type(
             }
         }
     }
+}
+
+/// Inspect the owners retained by a declaration capture without copying them.
+pub(crate) fn charge_declaration_retention(
+    contents: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    let prefix = type_depth(prefix, 1).map_err(resource)?;
+    budget.charge_units(contents.len()).map_err(resource)?;
+    let mut pending = contents
+        .iter()
+        .map(|node| (node, prefix))
+        .collect::<Vec<_>>();
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge().map_err(resource)?;
+        match node {
+            MacroOutputNode::Identifier(name, origin) => {
+                charge_type_name_inspection(name, depth, budget).map_err(resource)?;
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Token(_, _, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Group(_, children, origin) => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin(origin, child, budget).map_err(resource)?;
+                budget.charge_units(children.len()).map_err(resource)?;
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(resource)?;
+                    pending.reserve_exact(children.len());
+                }
+                pending.extend(children.iter().map(|node| (node, child)));
+            }
+            MacroOutputNode::ForwardedType(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                charge_new_type_retention(capture, depth, budget)?;
+            }
+            MacroOutputNode::ForwardedPattern(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                if charge_new_pattern_retention(capture, depth, budget).map_err(resource)?
+                    != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
+            MacroOutputNode::Expression(capture, origin)
+            | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                if charge_new_expression_retention(capture, depth, budget).map_err(resource)?
+                    != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
+            MacroOutputNode::ForwardedDeclaration(_, _)
+            | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn charge_type_token_copy(

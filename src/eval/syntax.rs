@@ -102,46 +102,8 @@ fn check_declaration_contents_at(
     prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), RuntimeFailure> {
-    // The capture retains one Arc layer before any delimiter groups.
-    let prefix = crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?;
-    budget
-        .charge_units(contents.len())
-        .map_err(syntax_failure)?;
-    let mut pending = contents
-        .iter()
-        .map(|node| (node, prefix))
-        .collect::<Vec<_>>();
-    while let Some((node, depth)) = pending.pop() {
-        budget.charge().map_err(syntax_failure)?;
-        match node {
-            MacroOutputNode::Identifier(name, origin) => {
-                crate::syntax::charge_type_name_inspection(name, depth, budget)
-                    .map_err(syntax_failure)?;
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
-            }
-            MacroOutputNode::Token(_, _, origin) => {
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
-            }
-            MacroOutputNode::Group(_, children, origin) => {
-                let depth = crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?;
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
-                budget
-                    .charge_units(children.len())
-                    .map_err(syntax_failure)?;
-                let live = pending.len();
-                let requested = live.saturating_add(children.len());
-                if requested > pending.capacity() {
-                    budget
-                        .charge_units(requested.saturating_add(live))
-                        .map_err(syntax_failure)?;
-                    pending.reserve_exact(children.len());
-                }
-                pending.extend(children.iter().map(|child| (child, depth)));
-            }
-            _ => return Err(RuntimeFailure::InvalidControlState),
-        }
-    }
-    Ok(())
+    crate::syntax::charge_declaration_retention(contents, prefix, budget)
+        .map_err(type_retention_failure)
 }
 
 #[derive(Debug)]
@@ -1893,6 +1855,62 @@ impl<'inv> SyntaxHost<'inv> {
                         self.patterns.push(capture);
                         let fragment = self.handle(CompilerSyntaxHandleKind::Pattern(index));
                         self.construct(heap, "ParsedPattern", Some(fragment))
+                    }
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.charge(2)?; // failure slot and issued handle
+                        let live = self.parse_failures.len();
+                        if live == self.parse_failures.capacity() {
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
+                            self.parse_failures.reserve_exact(1);
+                        }
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                        self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
+                }
+            }
+            "parse_declaration" => {
+                let (input, syntax) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) || self.syntax_work.is_none()
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let output = self.transfer_syntax_inner(syntax, heap, 0, true)?;
+                let result = crate::parser::parse_macro_declaration(
+                    &self.source,
+                    self.frame.invocation,
+                    output,
+                    self.contexts
+                        .as_deref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
+                    self.syntax_work
+                        .as_deref_mut()
+                        .expect("the declaration route owns a budget"),
+                );
+                match result {
+                    Ok(capture) => {
+                        self.charge(2)?; // arena slot and issued handle
+                        let live = self.declarations.len();
+                        if live == self.declarations.capacity() {
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
+                            self.declarations.reserve_exact(1);
+                        }
+                        let index = self.declarations.len();
+                        self.declarations.push(capture);
+                        let fragment = self.handle(CompilerSyntaxHandleKind::Declaration(index));
+                        self.construct(heap, "ParsedDeclaration", Some(fragment))
                     }
                     Err(crate::parser::MacroParseFailure::Syntax {
                         diagnostics,

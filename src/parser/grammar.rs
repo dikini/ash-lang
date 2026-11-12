@@ -284,6 +284,28 @@ pub(super) fn module_body(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+/// Parse exactly one module declaration without expanding it.
+pub(super) fn declaration_fragment(parser: &mut Parser<'_>) {
+    if starts_module_declaration(parser) {
+        let outcome = module_declaration(parser);
+        let recovered_to_end = outcome == TypeParametersOutcome::RecoveredToEndOfFile
+            && parser.at(&TokenKind::EndOfFile);
+        if !recovered_to_end {
+            let _ = expect_declaration_line_end(parser);
+        }
+    } else {
+        parser.error_at_current(ParseReason::UnexpectedToken);
+    }
+    if !parser.at(&TokenKind::EndOfFile) {
+        parser.error_at_current(ParseReason::UnexpectedToken);
+        parser.consume_rest();
+    }
+    if parser.at(&TokenKind::EndOfFile) {
+        let _ = parser.bump();
+    }
+    parser.finish();
+}
+
 fn expect_declaration_line_end(parser: &mut Parser<'_>) -> bool {
     let recovered_group = parser.take_recovered_expression_group_boundary();
     if recovered_group && parser.at(&TokenKind::EndOfFile) {

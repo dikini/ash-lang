@@ -1195,6 +1195,128 @@ pub(crate) fn parse_macro_pattern(
     })
 }
 
+/// Parse one structured ordinary declaration, retaining its authentic syntax.
+pub(crate) fn parse_macro_declaration(
+    source: &SourceFile,
+    invocation: Span,
+    mut output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    budget: &mut SyntaxBudget,
+) -> Result<crate::surface::SurfaceDeclarationCapture, MacroParseFailure> {
+    // The parser consumes its own paid copy. Keep the original packet intact
+    // until the complete input has passed the ordinary grammar and CST checks.
+    let parser_output = crate::syntax::copy_declaration_output(&output, budget)?;
+    let parsed = parse_macro_tree_with_expression_scratch(
+        source,
+        invocation,
+        parser_output,
+        contexts,
+        &[],
+        MacroOutputPosition::DeclarationFragment,
+        true,
+        true,
+        budget,
+    )?;
+    if !project::valid_macro_declaration_fragment(source, &parsed, budget).map_err(|error| {
+        match error {
+            ProjectionError::ResourceLimit(resource) => macro_resource_failure(resource),
+            _ => MacroParseFailure::Invalid,
+        }
+    })? {
+        budget
+            .charge_units(parsed.tree.events.len())
+            .map_err(macro_resource_failure)?;
+        let first = parsed.tree.events.iter().find_map(|event| match event {
+            Event::Token(index) => Some(*index),
+            _ => None,
+        });
+        let (span, kind) = first
+            .and_then(|index| {
+                let token = parsed.tree.tokens.get(index)?;
+                let span =
+                    parsed
+                        .original_nodes
+                        .get(&index)
+                        .map_or(invocation, |node| match node {
+                            crate::syntax::MacroOutputNode::Identifier(_, origin)
+                            | crate::syntax::MacroOutputNode::Token(_, _, origin)
+                            | crate::syntax::MacroOutputNode::Group(_, _, origin)
+                            | crate::syntax::MacroOutputNode::Expression(_, origin)
+                            | crate::syntax::MacroOutputNode::ForwardedExpression(_, origin)
+                            | crate::syntax::MacroOutputNode::ForwardedType(_, origin)
+                            | crate::syntax::MacroOutputNode::ForwardedPattern(_, origin)
+                            | crate::syntax::MacroOutputNode::ForwardedDeclaration(_, origin) => {
+                                origin.primary()
+                            }
+                            _ => invocation,
+                        });
+                Some((span, &token.kind))
+            })
+            .unwrap_or((invocation, &TokenKind::EndOfFile));
+        return Err(fragment_unexpected(span, kind, budget)?);
+    }
+    // The module parser owns the outer line terminator, not the fragment.
+    if matches!(
+        output.last(),
+        Some(crate::syntax::MacroOutputNode::Token(
+            TokenKind::LineEnd,
+            _,
+            _
+        ))
+    ) {
+        output.pop();
+    }
+    if output.len() == 1
+        && matches!(
+            output.first(),
+            Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(_, _))
+        )
+    {
+        let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, _)) = output.pop()
+        else {
+            unreachable!();
+        };
+        return Ok(capture);
+    }
+    budget
+        .charge_units(output.len())
+        .map_err(macro_resource_failure)?;
+    budget
+        .charge_units(output.len())
+        .map_err(macro_resource_failure)?;
+    budget.charge().map_err(macro_resource_failure)?;
+    Ok(crate::surface::SurfaceDeclarationCapture {
+        contents: output.into(),
+    })
+}
+
+fn fragment_unexpected(
+    span: Span,
+    kind: &TokenKind,
+    budget: &mut SyntaxBudget,
+) -> Result<MacroParseFailure, MacroParseFailure> {
+    let reason = ParseReason::UnexpectedToken;
+    budget
+        .charge_units(
+            primary_message(reason)
+                .len()
+                .saturating_add(token_name(kind).len())
+                .saturating_add(2),
+        )
+        .map_err(macro_resource_failure)?;
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, primary_message(reason)));
+    diagnostic.found = Some(token_name(kind).to_owned());
+    Ok(MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(
+            diagnostic,
+            None,
+            Some(retained_token(kind)),
+            None,
+        )],
+        resource: None,
+    })
+}
+
 pub(crate) fn parse_template_admission(
     source: &SourceFile,
     invocation: Span,
@@ -1248,6 +1370,7 @@ enum MacroOutputPosition {
     HostExpressionFragment,
     Type,
     Pattern,
+    DeclarationFragment,
     Declarations,
     StagedDeclarations,
     // Same admission grammar, with actual placeholder comparisons charged.
@@ -1258,7 +1381,10 @@ impl MacroOutputPosition {
     fn is_declarations(self) -> bool {
         matches!(
             self,
-            Self::Declarations | Self::StagedDeclarations | Self::QuoteTemplateAdmission
+            Self::Declarations
+                | Self::StagedDeclarations
+                | Self::QuoteTemplateAdmission
+                | Self::DeclarationFragment
         )
     }
 }
@@ -1359,7 +1485,9 @@ fn parse_macro_tree_with_expression_scratch(
         || expression_scratch
         || matches!(
             position,
-            MacroOutputPosition::StagedDeclarations | MacroOutputPosition::QuoteTemplateAdmission
+            MacroOutputPosition::StagedDeclarations
+                | MacroOutputPosition::QuoteTemplateAdmission
+                | MacroOutputPosition::DeclarationFragment
         );
     if budgeted {
         charge_staged_output_with_expression_scratch(
@@ -1639,6 +1767,7 @@ fn parse_macro_tree_with_expression_scratch(
                 parser.error_at_current(ParseReason::UnexpectedToken);
             }
         }
+        MacroOutputPosition::DeclarationFragment => grammar::declaration_fragment(&mut parser),
         MacroOutputPosition::Declarations
         | MacroOutputPosition::StagedDeclarations
         | MacroOutputPosition::QuoteTemplateAdmission => grammar::module_body(&mut parser),
@@ -1702,6 +1831,36 @@ fn parse_macro_tree_with_expression_scratch(
             }
         }
         if actual_declarations != forwarded_declarations {
+            if matches!(position, MacroOutputPosition::DeclarationFragment) {
+                budget
+                    .charge_units(original_nodes.len())
+                    .map_err(macro_resource_failure)?;
+                let actual = root.children.iter().find_map(|child| match child {
+                    ConcreteElement::Node(node) if node.kind == NodeKind::DeclarationFragment => {
+                        match node.children.as_slice() {
+                            [ConcreteElement::Token(index)] => Some(*index),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                });
+                let rejected = original_nodes
+                    .iter()
+                    .filter_map(|(index, node)| match node {
+                        MacroOutputNode::ForwardedDeclaration(_, origin)
+                            if Some(*index) != actual =>
+                        {
+                            Some((*index, origin.primary()))
+                        }
+                        _ => None,
+                    })
+                    .min_by_key(|(index, _)| *index);
+                if let Some((index, span)) = rejected
+                    && let Some(token) = tree.tokens.get(index)
+                {
+                    return Err(fragment_unexpected(span, &token.kind, budget)?);
+                }
+            }
             return Err(MacroParseFailure::Invalid);
         }
     }

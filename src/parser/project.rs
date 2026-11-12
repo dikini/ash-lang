@@ -2967,6 +2967,7 @@ struct DeclarationFrame<'a> {
     frame: Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     expression_pattern: bool,
     pattern_accounting: bool,
+    forwarded_expression: bool,
     owns_staging_frame: bool,
     deferred: std::collections::VecDeque<DeclarationFrame<'a>>,
 }
@@ -3657,6 +3658,7 @@ fn admit_staged_output<'a>(
             frame: Some(frame),
             expression_pattern,
             pattern_accounting,
+            forwarded_expression: false,
             owns_staging_frame: true,
             deferred: std::collections::VecDeque::new(),
         }),
@@ -3822,6 +3824,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
         frame: None,
         expression_pattern: false,
         pattern_accounting: false,
+        forwarded_expression: false,
         owns_staging_frame: false,
         deferred: std::collections::VecDeque::new(),
     }];
@@ -3920,12 +3923,14 @@ pub(crate) fn project_declaration_expansions_with_resource(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
                     );
                 };
-                charge_forwarded_declaration(capture, depth, budget)?;
+                let (forwarded_expression, forwarded_pattern) =
+                    charge_forwarded_declaration(capture, depth, budget)?;
                 let anchor = current.invocation.unwrap_or_else(|| origin.primary());
                 budget.charge()?;
                 let frame = current.frame.clone();
-                let expression_pattern = current.expression_pattern;
-                let pattern_accounting = current.pattern_accounting;
+                let expression_pattern =
+                    current.expression_pattern || forwarded_expression || forwarded_pattern;
+                let pattern_accounting = current.pattern_accounting || forwarded_pattern;
                 let contexts = crate::syntax::SyntaxContexts::new_budgeted(
                     selected,
                     owner_imports,
@@ -3940,7 +3945,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
                     &[],
                     super::MacroOutputPosition::StagedDeclarations,
                     pattern_accounting,
-                    false,
+                    forwarded_expression,
                     budget,
                 )?;
                 for _ in 0..4 {
@@ -3974,6 +3979,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
                     frame,
                     expression_pattern,
                     pattern_accounting,
+                    forwarded_expression,
                     owns_staging_frame: false,
                     deferred: std::collections::VecDeque::new(),
                 });
@@ -3997,7 +4003,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
                         Some(&current.contexts),
                         budget,
                     )?;
-                    if protected_type {
+                    if protected_type || current.forwarded_expression {
                         if charge_projection_preflight_with_expression(
                             child,
                             &tokens,
@@ -7608,9 +7614,11 @@ fn charge_forwarded_declaration(
     capture: &SurfaceDeclarationCapture,
     prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<(), DeclarationExpansionFailure> {
+) -> Result<(bool, bool), DeclarationExpansionFailure> {
     use crate::syntax::MacroOutputNode;
 
+    let mut has_expression = false;
+    let mut has_pattern = false;
     budget.charge_units(capture.contents.len().saturating_mul(3))?;
     let mut pending = capture
         .contents
@@ -7644,6 +7652,8 @@ fn charge_forwarded_declaration(
             MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
             | MacroOutputNode::ForwardedPattern(_, _) => {
+                has_expression |= matches!(node, MacroOutputNode::ForwardedExpression(_, _));
+                has_pattern |= matches!(node, MacroOutputNode::ForwardedPattern(_, _));
                 if crate::syntax::charge_captured_ep_original_selected(node, depth, true, budget)? {
                     return Err(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
@@ -7659,7 +7669,7 @@ fn charge_forwarded_declaration(
             }
         }
     }
-    Ok(())
+    Ok((has_expression, has_pattern))
 }
 
 /// Reserve the source-only packet and check its retained delimiter depth.
@@ -8690,6 +8700,33 @@ fn capture_contents_with_escapes(
         None,
         allow_repetition,
     )
+}
+
+pub(super) fn valid_macro_declaration_fragment(
+    source: &SourceFile,
+    parsed: &super::ParsedMacroTree,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, ProjectionError> {
+    // The existing validators walk the event-built tree and token coverage.
+    for _ in 0..4 {
+        budget
+            .charge_units(parsed.tree.events.len())
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    budget
+        .charge_units(parsed.tree.tokens.len())
+        .map_err(ProjectionError::ResourceLimit)?;
+    let root = validated_macro_root(source, &parsed.tree)?;
+    validate_node_shape_with_admission(
+        root,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let mut declarations = child_nodes(root);
+    let valid = declarations.next().is_some_and(|node| {
+        node.kind == NodeKind::DeclarationFragment || is_capturable_declaration(node.kind)
+    });
+    Ok(valid && declarations.next().is_none())
 }
 
 fn validated_macro_root<'tree>(
@@ -15378,6 +15415,7 @@ mod tests {
             frame: Some(Arc::clone(&frame)),
             expression_pattern: false,
             pattern_accounting: false,
+            forwarded_expression: false,
             owns_staging_frame: true,
             deferred: std::collections::VecDeque::new(),
         };
