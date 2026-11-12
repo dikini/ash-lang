@@ -2614,6 +2614,7 @@ fn generator_resource(error: ResourceFailure, span: Span) -> TemplateSubstitutio
 }
 
 /// Construct the ordinary private entry consumed by the staged caller view.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generator_adapter_definition(
     plan: &GeneratorPlan,
     escape_categories: &[Option<EscapeResultCategory>],
@@ -2621,9 +2622,11 @@ pub(crate) fn generator_adapter_definition(
     captures: &[SurfaceSyntaxCapture],
     definition_introduction: usize,
     builtin_introduction: usize,
+    owners: &[SyntaxOwner],
     span: Span,
     budget: &mut SyntaxBudget,
-) -> Result<crate::surface::SurfaceDefinition, crate::parser::MacroParseFailure> {
+) -> Result<(crate::surface::SurfaceDefinition, Vec<SyntaxNameUse>), crate::parser::MacroParseFailure>
+{
     use crate::parser::MacroParseFailure;
     use crate::surface::*;
     let resource = |error| MacroParseFailure::Syntax {
@@ -3312,7 +3315,7 @@ pub(crate) fn generator_adapter_definition(
         diagnostic: None,
     };
     let adapter = name("\0ash_generator_adapter".into(), span, 0);
-    Ok(SurfaceDefinition {
+    let definition = SurfaceDefinition {
         public: false,
         span,
         kind: SurfaceDefinitionKind::Equational(EquationalGlobal {
@@ -3330,7 +3333,69 @@ pub(crate) fn generator_adapter_definition(
                 span,
             }],
         }),
-    })
+    };
+
+    // The normal resolver already admits a slice of contextual uses together.
+    // For escape-only adapters all these references are compiler-created and
+    // authenticated. Generator adapters leave their user-written seeds and
+    // steps in the ordinary lazy order.
+    let mut uses = Vec::new();
+    if plan.shapes.is_empty()
+        && plan
+            .actions
+            .iter()
+            .all(|action| matches!(action, GeneratorAction::Escape { .. }))
+    {
+        let mut record = |text: &str, introduction: usize| -> Result<(), MacroParseFailure> {
+            let owner = introduction
+                .checked_sub(1)
+                .and_then(|index| owners.get(index))
+                .ok_or(MacroParseFailure::Invalid)?;
+            let owner_index = owner.owner.ok_or(MacroParseFailure::Invalid)?;
+            let live = uses.len();
+            budget
+                .charge_units(text.len().saturating_add(if live == uses.capacity() {
+                    live.saturating_mul(2).saturating_add(2)
+                } else {
+                    2
+                }))
+                .map_err(resource)?;
+            if live == uses.capacity() {
+                uses.reserve_exact(1);
+            }
+            uses.push(SyntaxNameUse {
+                name: name(text.to_owned(), span, introduction),
+                qualifier: None,
+                namespace: SyntaxNameNamespace::Term,
+                owner: owner_index,
+                declaration: owner.declaration,
+                import_span: owner.import_span,
+            });
+            Ok(())
+        };
+        for _ in &plan.captures {
+            record("capture", builtin_introduction)?;
+        }
+        for (action, category) in plan.actions.iter().zip(escape_categories) {
+            let GeneratorAction::Escape {
+                escapes,
+                descriptor,
+                ..
+            } = action
+            else {
+                return Err(MacroParseFailure::Invalid);
+            };
+            let escape = escapes.get(*descriptor).ok_or(MacroParseFailure::Invalid)?;
+            record(&escape.adapter.text, definition_introduction)?;
+            if *category != Some(EscapeResultCategory::Identifier) {
+                record("invocation_origin", builtin_introduction)?;
+            }
+        }
+        if !plan.captures.is_empty() {
+            record("invocation_origin", builtin_introduction)?;
+        }
+    }
+    Ok((definition, uses))
 }
 
 pub(crate) enum DeclarationAdapter<'a> {

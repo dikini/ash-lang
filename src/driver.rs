@@ -1279,7 +1279,7 @@ where
 enum CompilationInput<'a> {
     #[cfg(test)]
     Parsed {
-        graph: &'a ModuleGraph,
+        graph: &'a mut ModuleGraph,
         next: usize,
     },
     Staged(&'a mut HeaderGraph),
@@ -1434,7 +1434,7 @@ impl CompilationInput<'_> {
 
 #[cfg(test)]
 fn compile_graph_with_consumers<I, V>(
-    graph: &ModuleGraph,
+    graph: &mut ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
     interface_validator: I,
     validator: V,
@@ -2810,13 +2810,14 @@ fn evaluate_generator_transformer(
         };
         escape_categories.push(category);
     }
-    let definition = crate::syntax::generator_adapter_definition(
+    let (definition, uses) = crate::syntax::generator_adapter_definition(
         plan,
         &escape_categories,
         &selection.declaration.matcher,
         captures,
         introduction,
         builtin_introduction,
+        owners,
         frame.invocation,
         budget,
     )
@@ -2877,7 +2878,7 @@ fn evaluate_generator_transformer(
         &dependencies,
         resolution_work,
         constraint_work,
-        &[],
+        &uses,
         checked,
         checked_terms,
         Some(&mut expansion),
@@ -3690,19 +3691,20 @@ mod tests {
     fn parsed_input_has_no_syntax_ledger_loan() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/surface-macros/type-host/control.ash");
-        let graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+        let mut graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+        let first_id = graph.modules()[0].id();
         let mut input = CompilationInput::Parsed {
-            graph: &graph,
+            graph: &mut graph,
             next: 0,
         };
         assert!(input.current_with_syntax_budget().is_none());
         let mut input = CompilationInput::Parsed {
-            graph: &graph,
+            graph: &mut graph,
             next: 1,
         };
         let (module, budget, ordinal) = input.current_with_syntax_budget().unwrap();
         assert!(ordinal.is_none());
-        assert_eq!(module.id(), graph.modules()[0].id());
+        assert_eq!(module.id(), first_id);
         assert!(budget.is_none());
     }
 
@@ -7662,7 +7664,7 @@ wrong input = {
                 "}\n",
             ),
         );
-        let graph = load_module_graph(&source.0, &ModuleRoots::empty())
+        let mut graph = load_module_graph(&source.0, &ModuleRoots::empty())
             .expect("imported cell source graph loads");
         let original_handle_count = Arc::strong_count(graph.modules()[0].retained_source());
         let mut refused_work = TypeWorkBudget::with_limit(2 * graph.modules().len() - 1);
@@ -7676,9 +7678,9 @@ wrong input = {
             original_handle_count,
             "refusal precedes all shared-handle copies",
         );
-        let compile = |retention| {
+        let mut compile = |retention| {
             compile_graph_with_consumers(
-                &graph,
+                &mut graph,
                 &mut InterfaceConstraintBudget::default(),
                 validate_interface_evidence_with_budget,
                 validate_modular_effect_core,
