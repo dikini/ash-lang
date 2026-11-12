@@ -2623,12 +2623,13 @@ pub(crate) fn generator_adapter_definition(
     definition_introduction: usize,
     builtin_introduction: usize,
     owners: &[SyntaxOwner],
-    span: Span,
+    frame: &Arc<ExpansionFrame>,
     budget: &mut SyntaxBudget,
 ) -> Result<(crate::surface::SurfaceDefinition, Vec<SyntaxNameUse>), crate::parser::MacroParseFailure>
 {
     use crate::parser::MacroParseFailure;
     use crate::surface::*;
+    let span = frame.invocation;
     let resource = |error| MacroParseFailure::Syntax {
         diagnostics: Vec::new(),
         resource: Some(error),
@@ -2723,12 +2724,76 @@ pub(crate) fn generator_adapter_definition(
     fn node(index: usize) -> String {
         format!("\0ash_generator_node_{index}")
     }
+    fn inherit_frame(
+        location: &mut Option<Box<DiagnosticLocation>>,
+        span: Span,
+        frame: &Arc<ExpansionFrame>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        let resource = |error| MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        };
+        let count = location
+            .as_deref()
+            .map_or(0, |location| location.frames.len());
+        budget
+            .charge_units(count.saturating_add(1))
+            .map_err(resource)?;
+        if location.as_deref().is_some_and(|location| {
+            location
+                .frames
+                .iter()
+                .any(|existing| Arc::ptr_eq(existing, frame))
+        }) {
+            return Ok(());
+        }
+        let growth = location.as_deref().map_or(1, |location| {
+            if location.frames.len() == location.frames.capacity() {
+                count.saturating_mul(2).saturating_add(1)
+            } else {
+                0
+            }
+        });
+        // Location and source-origin storage when absent, one retained frame,
+        // plus any frame-vector growth. Pay before allocating or cloning.
+        budget
+            .charge_units(growth.saturating_add(3))
+            .map_err(resource)?;
+        let location =
+            location.get_or_insert_with(|| Box::new(DiagnosticLocation::new(span.into())));
+        if location.frames.len() == location.frames.capacity() {
+            location
+                .frames
+                .try_reserve_exact(1)
+                .map_err(|_| MacroParseFailure::Invalid)?;
+        }
+        location.add_frame(frame);
+        Ok(())
+    }
+    fn step_pattern_location(
+        generator: &SurfaceTemplateGenerator,
+        frame: &Arc<ExpansionFrame>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<Option<Box<DiagnosticLocation>>, MacroParseFailure> {
+        budget
+            .charge_units(6)
+            .map_err(|error| MacroParseFailure::Syntax {
+                diagnostics: Vec::new(),
+                resource: Some(error),
+            })?;
+        let mut location = DiagnosticLocation::new(frame.invocation.into());
+        location.related.push(generator.step.member().span.into());
+        location.add_frame(frame);
+        Ok(Some(Box::new(location)))
+    }
     fn step_reference(
         generator: &SurfaceTemplateGenerator,
         introduction: usize,
-        span: Span,
+        frame: &Arc<ExpansionFrame>,
         budget: &mut SyntaxBudget,
     ) -> Result<SurfaceExpr, MacroParseFailure> {
+        let span = frame.invocation;
         let resource = |error| MacroParseFailure::Syntax {
             diagnostics: Vec::new(),
             resource: Some(error),
@@ -2760,12 +2825,14 @@ pub(crate) fn generator_adapter_definition(
                 name.introduction = introduction;
                 name.introduced_at = Some(span);
                 name.written = false;
+                inherit_frame(&mut name.diagnostic, name.span, frame, budget)?;
             }
             SurfaceReference::Qualified(qualified) => {
                 for name in [&mut qualified.qualifier, &mut qualified.member] {
                     name.introduction = introduction;
                     name.introduced_at = Some(span);
                     name.written = false;
+                    inherit_frame(&mut name.diagnostic, name.span, frame, budget)?;
                 }
             }
         }
@@ -2780,14 +2847,15 @@ pub(crate) fn generator_adapter_definition(
         label: &str,
         index: usize,
         seed: Option<SurfaceExpr>,
-        span: Span,
+        frame: &Arc<ExpansionFrame>,
         budget: &mut SyntaxBudget,
     ) -> Result<SurfaceExpr, MacroParseFailure> {
+        let span = frame.invocation;
         let probe = format!("\0ash_generator_{label}_probe_{index}");
         let checked_next = format!("\0ash_generator_{label}_state_{index}");
         let checked_fragment = format!("\0ash_generator_{label}_fragment_{index}");
         let application = call(
-            step_reference(generator, definition_introduction, span, budget)?,
+            step_reference(generator, definition_introduction, frame, budget)?,
             reference(probe.clone(), span, 0),
             span,
         );
@@ -2797,7 +2865,7 @@ pub(crate) fn generator_adapter_definition(
                 binder(checked_fragment.clone(), span),
             ]),
             span,
-            diagnostic: None,
+            diagnostic: step_pattern_location(generator, frame, budget)?,
         };
         let origin = invoke(
             "invocation_origin",
@@ -2936,7 +3004,9 @@ pub(crate) fn generator_adapter_definition(
             {
                 // The block, match, arms and their boxed children are new.
                 budget.charge_units(12).map_err(resource)?;
-                Some(candidate.clone())
+                let mut seed = candidate.clone();
+                inherit_frame(&mut seed.diagnostic, seed.span, frame, budget)?;
+                Some(seed)
             } else {
                 None
             }
@@ -2950,7 +3020,7 @@ pub(crate) fn generator_adapter_definition(
             "shape",
             index,
             seed,
-            span,
+            frame,
             budget,
         )?;
         declarations.push(local(
@@ -2971,7 +3041,7 @@ pub(crate) fn generator_adapter_definition(
                 indices,
             } => {
                 let generator = &generators[*binding];
-                let seed = match &generator.seed.kind {
+                let mut seed = match &generator.seed.kind {
                     SurfaceExprKind::TemplateSplice(name) => {
                         charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
                         budget
@@ -3007,6 +3077,7 @@ pub(crate) fn generator_adapter_definition(
                     }
                     _ => return Err(MacroParseFailure::Invalid),
                 };
+                inherit_frame(&mut seed.diagnostic, seed.span, frame, budget)?;
                 // The shell is created at the invocation; the seed itself
                 // keeps its original source, context and diagnostic packet.
                 budget.charge_units(3).map_err(resource)?;
@@ -3027,7 +3098,7 @@ pub(crate) fn generator_adapter_definition(
                     "entry",
                     *target,
                     None,
-                    span,
+                    frame,
                     budget,
                 )?;
                 let witness_name = format!("\0ash_generator_witness_{target}");
@@ -3047,7 +3118,7 @@ pub(crate) fn generator_adapter_definition(
             } => {
                 let generator = &generators[*binding];
                 let application = call(
-                    step_reference(generator, definition_introduction, span, budget)?,
+                    step_reference(generator, definition_introduction, frame, budget)?,
                     reference(state(*old), span, 0),
                     span,
                 );
@@ -3057,7 +3128,7 @@ pub(crate) fn generator_adapter_definition(
                         binder(value(*result), span),
                     ]),
                     span,
-                    diagnostic: None,
+                    diagnostic: step_pattern_location(generator, frame, budget)?,
                 };
                 declarations.push(local(pattern, application, span));
                 let origin = invoke(
@@ -7569,6 +7640,267 @@ mod tests {
             assert_eq!(retry.results, 6);
             assert_eq!(exact.consumed(), used);
         }
+    }
+
+    #[test]
+    fn generator_adapter_preserves_qualified_prior_frames_and_pays_new_frames() {
+        use crate::surface::{
+            SurfaceDefinitionKind, SurfaceExprKind, SurfaceQualifiedName, SurfaceReference,
+            SurfaceTemplateGenerator,
+        };
+
+        let source = SourceFile::new("frame-adapter.ash", "x".repeat(80)).unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let current = Arc::new(ExpansionFrame {
+            invocation: span(0, 8),
+            definition: span(9, 17),
+        });
+        let prior = Arc::new(ExpansionFrame {
+            invocation: span(18, 26),
+            definition: span(27, 35),
+        });
+        let location = |at: Span, already_current: bool| {
+            let mut location = DiagnosticLocation::new(at.into());
+            location.related.push(span(36, 40).into());
+            location.captured_expression = true;
+            location.add_frame(&prior);
+            if already_current {
+                location.add_frame(&current);
+            }
+            Some(Box::new(location))
+        };
+        let name = |text: &str, at, already_current| SurfaceName {
+            text: text.into(),
+            span: at,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: location(at, already_current),
+        };
+        let seed_span = span(41, 42);
+        let member_span = span(56, 60);
+        let generators: Arc<[SurfaceTemplateGenerator]> = Arc::from([SurfaceTemplateGenerator {
+            name: name("number", span(43, 49), false),
+            seed: SurfaceExpr {
+                kind: SurfaceExprKind::Integer(crate::integer::Integer::from_i64(7)),
+                span: seed_span,
+                diagnostic: location(seed_span, false),
+            },
+            step: SurfaceReference::Qualified(SurfaceQualifiedName {
+                qualifier: name("Tools", span(50, 55), false),
+                member: name("step", member_span, true),
+                span: span(50, 60),
+            }),
+            span: span(41, 60),
+        }]);
+        let plan = GeneratorPlan {
+            shapes: vec![(Arc::clone(&generators), 0)],
+            actions: vec![
+                GeneratorAction::Enter {
+                    generators: Arc::clone(&generators),
+                    binding: 0,
+                    state: 0,
+                    indices: Vec::new(),
+                },
+                GeneratorAction::Advance {
+                    generators,
+                    binding: 0,
+                    state: 0,
+                    next: 1,
+                    result: 0,
+                },
+            ],
+            results: 1,
+            captures: Vec::new(),
+        };
+        let baseline = (Arc::strong_count(&prior), Arc::strong_count(&current));
+        let run = |budget: &mut SyntaxBudget| {
+            generator_adapter_definition(
+                &plan,
+                &[None, None],
+                &[],
+                &[],
+                1,
+                2,
+                &[],
+                &current,
+                budget,
+            )
+        };
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (definition, uses) = run(&mut measured).unwrap();
+        assert!(uses.is_empty());
+        let used = measured.consumed();
+
+        fn visit(
+            expression: &SurfaceExpr,
+            prior: &Arc<ExpansionFrame>,
+            current: &Arc<ExpansionFrame>,
+            seed_span: Span,
+            member_span: Span,
+            seen: &mut [usize; 3],
+        ) {
+            use crate::surface::{SurfaceExprKind, SurfaceLocalDeclaration, SurfaceReference};
+            let check = |location: &DiagnosticLocation| {
+                assert_eq!(location.related.len(), 1);
+                assert!(location.captured_expression);
+                assert_eq!(
+                    location
+                        .frames
+                        .iter()
+                        .filter(|f| Arc::ptr_eq(f, prior))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    location
+                        .frames
+                        .iter()
+                        .filter(|f| Arc::ptr_eq(f, current))
+                        .count(),
+                    1
+                );
+            };
+            match &expression.kind {
+                SurfaceExprKind::Integer(value) if expression.span == seed_span => {
+                    assert_eq!(value.to_string(), "7");
+                    let location = expression.diagnostic.as_deref().unwrap();
+                    assert_eq!(location.primary.primary(), seed_span);
+                    check(location);
+                    seen[0] += 1;
+                }
+                SurfaceExprKind::Name(SurfaceReference::Qualified(name))
+                    if name.member.text == "step" =>
+                {
+                    for component in [&name.qualifier, &name.member] {
+                        assert_eq!(component.introduction, 1);
+                        assert_eq!(component.introduced_at, Some(current.invocation));
+                        assert!(!component.written);
+                        let location = component.diagnostic.as_deref().unwrap();
+                        assert_eq!(location.primary.primary(), component.span);
+                        check(location);
+                    }
+                    seen[1] += 1;
+                }
+                SurfaceExprKind::Apply(application) => {
+                    visit(
+                        &application.function,
+                        prior,
+                        current,
+                        seed_span,
+                        member_span,
+                        seen,
+                    );
+                    visit(
+                        &application.argument,
+                        prior,
+                        current,
+                        seed_span,
+                        member_span,
+                        seen,
+                    );
+                }
+                SurfaceExprKind::Tuple(values) => {
+                    for value in values {
+                        visit(value, prior, current, seed_span, member_span, seen);
+                    }
+                }
+                SurfaceExprKind::Function(function) => {
+                    visit_block(&function.body, prior, current, seed_span, member_span, seen)
+                }
+                SurfaceExprKind::Block(block) => {
+                    visit_block(block, prior, current, seed_span, member_span, seen)
+                }
+                SurfaceExprKind::Match(value) => {
+                    visit(
+                        &value.scrutinee,
+                        prior,
+                        current,
+                        seed_span,
+                        member_span,
+                        seen,
+                    );
+                    for arm in &value.arms {
+                        visit(&arm.body, prior, current, seed_span, member_span, seen);
+                    }
+                }
+                _ => {}
+            }
+            fn visit_block(
+                block: &crate::surface::SurfaceBlock,
+                prior: &Arc<ExpansionFrame>,
+                current: &Arc<ExpansionFrame>,
+                seed_span: Span,
+                member_span: Span,
+                seen: &mut [usize; 3],
+            ) {
+                for declaration in &block.declarations {
+                    if let SurfaceLocalDeclaration::Binding(binding) = declaration {
+                        if let Some(location) = &binding.pattern.diagnostic {
+                            assert_eq!(location.primary.primary(), current.invocation);
+                            assert_eq!(location.related, [MacroOrigin::Source(member_span)]);
+                            assert_eq!(location.frames.len(), 1);
+                            assert!(Arc::ptr_eq(&location.frames[0], current));
+                            seen[2] += 1;
+                        }
+                        visit(
+                            &binding.initializer,
+                            prior,
+                            current,
+                            seed_span,
+                            member_span,
+                            seen,
+                        );
+                    }
+                }
+                visit(&block.result, prior, current, seed_span, member_span, seen);
+            }
+        }
+        let SurfaceDefinitionKind::Equational(global) = &definition.kind else {
+            panic!("generated equational adapter")
+        };
+        let mut seen = [0; 3];
+        visit(
+            &global.equations[0].body,
+            &prior,
+            &current,
+            seed_span,
+            member_span,
+            &mut seen,
+        );
+        assert_eq!(seen, [2, 3, 3]);
+        drop(definition);
+        assert_eq!(
+            (Arc::strong_count(&prior), Arc::strong_count(&current)),
+            baseline
+        );
+
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            run(&mut short),
+            Err(crate::parser::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(
+            (Arc::strong_count(&prior), Arc::strong_count(&current)),
+            baseline
+        );
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(used);
+            exact.charge_units(17).unwrap();
+            let (definition, _) = run(&mut exact).unwrap();
+            assert_eq!(exact.consumed(), used);
+            drop(definition);
+            assert_eq!(
+                (Arc::strong_count(&prior), Arc::strong_count(&current)),
+                baseline
+            );
+        }
+        eprintln!("qualified seed/step frame preservation: pre-spent 17, short/exact/retry");
     }
 
     #[test]

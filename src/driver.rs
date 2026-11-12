@@ -2832,7 +2832,7 @@ fn evaluate_generator_transformer(
         introduction,
         builtin_introduction,
         owners,
-        frame.invocation,
+        &frame,
         budget,
     )
     .map_err(|error| match error {
@@ -5542,6 +5542,12 @@ mod tests {
         static GENERATOR_LIFECYCLES: RefCell<Vec<[usize; 5]>> = const { RefCell::new(Vec::new()) };
         static ESCAPE_OBSERVATIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static ESCAPE_CHECKED_HELPERS: Cell<usize> = const { Cell::new(0) };
+        static FRESH_QUOTE_SITES: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
+        static FRESH_QUOTE_TEMPLATES: RefCell<Vec<std::sync::Weak<crate::syntax::QuoteTemplate>>> = const { RefCell::new(Vec::new()) };
+        static FRESH_OBSERVED: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_OUTPUTS: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
     }
 
     fn observe_generator_owner(
@@ -5827,11 +5833,25 @@ mod tests {
                         _ => None,
                     })
                     .expect("the caller declaration is captured");
-                let [MacroOutputNode::ForwardedDeclaration(returned, _)] = output else {
+                let [MacroOutputNode::ForwardedDeclaration(returned, origin)] = output else {
                     panic!("the declaration escape returns a protected declaration")
                 };
                 assert!(Arc::ptr_eq(&returned.contents, &original.contents));
                 assert_eq!(returned.contents, original.contents);
+                let first = original
+                    .contents
+                    .iter()
+                    .find_map(|node| match node {
+                        MacroOutputNode::Identifier(_, origin)
+                        | MacroOutputNode::Token(_, _, origin)
+                        | MacroOutputNode::Group(_, _, origin) => Some(origin.primary()),
+                        _ => None,
+                    })
+                    .expect("the original declaration has a source origin");
+                let invocation = origin.primary();
+                assert_eq!(invocation.source(), first.source());
+                assert!(invocation.range().start() <= first.range().start());
+                assert!(invocation.range().end() >= first.range().end());
             }
             _ => return,
         }
@@ -5877,6 +5897,262 @@ mod tests {
         assert_generator_cleanup(0);
         assert_eq!(execute(&compiled).unwrap().value_display(), "246");
         assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    fn observe_fresh_quote_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let actual = entry
+            .quote_sites
+            .iter()
+            .filter(|site| {
+                let origin = site.nodes.template.origin;
+                let range = origin.range();
+                site.source.display_path().ends_with("freshness_forms.ash")
+                    && site.source.text()[range.start() as usize..range.end() as usize]
+                        .contains("let temporary")
+            })
+            .collect::<Vec<_>>();
+        let [site] = actual.as_slice() else {
+            panic!("the actual reached helper quote has one authenticated defining site")
+        };
+        assert_eq!(site.nodes.template.origin.source(), site.source.id());
+        assert!(hooks::QUOTE_COMPLETIONS.get() >= 3);
+        FRESH_QUOTE_SITES
+            .with(|slot| *slot.borrow_mut() = Some(Arc::downgrade(&entry.quote_sites)));
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            *slot.borrow_mut() = actual
+                .iter()
+                .map(|site| Arc::downgrade(&site.nodes.template))
+                .collect();
+            assert!(slot.borrow()[0].upgrade().is_some());
+        });
+    }
+
+    fn observe_fresh_quotes(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{
+                SurfaceExprKind, SurfaceLocalDeclaration, SurfacePatternKind, SurfaceReference,
+            },
+            syntax::MacroOutputNode,
+        };
+        if selection.declaration.name.text != "fresh_quotes" {
+            return;
+        }
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        FRESH_QUOTE_SITES.with(|slot| {
+            assert!(
+                slot.borrow().as_ref().unwrap().upgrade().is_none(),
+                "the entry and host have released the prepared quote-site slice"
+            )
+        });
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            assert!(
+                slot.borrow()[0].upgrade().is_some(),
+                "the defining module still owns the reached quote template"
+            )
+        });
+        let [MacroOutputNode::Expression(returned, _)] = output else {
+            panic!("the original freshness invocation returns one quoted expression")
+        };
+        let SurfaceExprKind::Add(addition) = &returned.expression.kind else {
+            panic!("the quote contains both helper results")
+        };
+        let names = |value: &crate::surface::SurfaceExpr| {
+            let SurfaceExprKind::Block(block) = &value.kind else {
+                panic!("each helper result remains a block")
+            };
+            let [SurfaceLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+                panic!("each quoted block owns its binding")
+            };
+            let SurfacePatternKind::Binder(binder) = &binding.pattern.kind else {
+                panic!("each quote binds temporary")
+            };
+            let SurfaceExprKind::Name(SurfaceReference::Unqualified(reference)) =
+                &block.result.kind
+            else {
+                panic!("each quote references its own temporary")
+            };
+            assert_eq!(binder.name.text, "temporary");
+            assert_eq!(reference.text, "temporary");
+            assert_eq!(binder.name.introduction, reference.introduction);
+            assert_ne!(binder.name.introduction, 0);
+            assert!(!binder.name.written && !reference.written);
+            (binder.name.introduction, binder.name.span, reference.span)
+        };
+        let left = names(&addition.left);
+        let right = names(&addition.right);
+        assert_ne!(left.0, right.0);
+        assert_eq!((left.1, left.2), (right.1, right.2));
+        assert_eq!(left.1.source(), selection.declaration.span.source());
+        FRESH_OBSERVED.set(FRESH_OBSERVED.get() + 1);
+    }
+
+    #[test]
+    fn original_fresh_quotes_keep_distinct_contexts_after_last_metadata_owner() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let configuration = || RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/freshness.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let baseline = compile_path(configuration()).expect("the unobserved graph compiles");
+        let baseline_work = *baseline.compilation_work();
+        assert_eq!(execute(&baseline).unwrap().value_display(), "20");
+        drop(baseline);
+        hooks::reset();
+        FRESH_QUOTE_SITES.with(|slot| *slot.borrow_mut() = None);
+        FRESH_QUOTE_TEMPLATES.with(|slot| slot.borrow_mut().clear());
+        FRESH_OBSERVED.set(0);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_fresh_quote_entry));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_fresh_quotes));
+        let program = compile_path(configuration()).expect("the original freshness graph compiles");
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_eq!(FRESH_OBSERVED.get(), 1);
+        assert_eq!(*program.compilation_work(), baseline_work);
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            let templates = slot.borrow();
+            assert!(!templates.is_empty());
+            assert!(
+                templates
+                    .iter()
+                    .all(|template| template.upgrade().is_none()),
+                "the final quote-template metadata owners have been released"
+            );
+        });
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&program).unwrap().value_display(), "20");
+        assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    fn observe_failure_output(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        match selection.declaration.name.text.as_str() {
+            "wrong_category" => {
+                let [crate::syntax::MacroOutputNode::Expression(fragment, _)] = output else {
+                    panic!("the actual escaped expression reaches output admission")
+                };
+                let crate::surface::SurfaceExprKind::Integer(value) = &fragment.expression.kind
+                else {
+                    panic!("the actual returned expression retains the original quote's integer")
+                };
+                assert_eq!(value.to_string(), "0");
+                assert_eq!(
+                    fragment
+                        .expression
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .primary
+                        .primary()
+                        .source(),
+                    selection.declaration.span.source()
+                );
+                FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1);
+            }
+            "abort" => FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1),
+            _ => {}
+        }
+    }
+
+    fn observe_failure_staged_module(source: &SourceFile, _module: &crate::surface::SurfaceModule) {
+        if source.display_path().ends_with("atomic.ash")
+            || source.display_path().ends_with("wrong_category.ash")
+        {
+            FAILURE_STAGED_CALLERS.set(FAILURE_STAGED_CALLERS.get() + 1);
+        }
+        if source.display_path().ends_with("freshness.ash") {
+            FAILURE_STAGED_CONTROLS.set(FAILURE_STAGED_CONTROLS.get() + 1);
+        }
+    }
+
+    fn assert_failure_stage_observer_is_active() {
+        FAILURE_STAGED_CONTROLS.set(0);
+        let control = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/freshness.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original completed-caller control compiles");
+        assert_eq!(execute(&control).unwrap().value_display(), "20");
+        assert_eq!(FAILURE_STAGED_CONTROLS.get(), 1);
+    }
+
+    #[test]
+    fn original_wrong_category_checks_transferred_expression_at_admission() {
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        assert_failure_stage_observer_is_active();
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/wrong_category.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("an Expression fragment cannot be admitted as a type");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_eq!(FAILURE_OUTPUTS.get(), 1);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(failure.reason_code(), "parse.expected-form");
+    }
+
+    #[test]
+    fn original_atomic_failure_publishes_no_caller_module_or_output() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        assert_failure_stage_observer_is_active();
+        hooks::reset();
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/atomic.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the later escape exceeds the existing execution bound");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_eq!(failure.reason_code(), "syntax.transformer-failed");
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::SyntaxRuntime(cause))
+            if cause.cause().reason_code() == "runtime.resource-capacity")
+        );
+        assert_eq!(FAILURE_OUTPUTS.get(), 0);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+        eprintln!(
+            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+            hooks::ACTIVE_ROOT_RECORDS.get()
+        );
+        assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
         hooks::reset();
     }
 
