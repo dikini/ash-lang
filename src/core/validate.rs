@@ -33194,67 +33194,6 @@ mod tests {
             a.origin.primary_span()
         );
 
-        let mut tampered = identity_effect_traversal(original).expect("copy actual Core");
-        assert!(
-            Arc::make_mut(&mut tampered.registry)
-                .swap_tied_parameter_owners_for_core_test(left, right)
-        );
-        swap_method_catalog_type_variables_for_owner_swap_test(&mut tampered, left, right);
-        coherently_swap_core_type_variables(&mut tampered, left, right);
-
-        let changed = &tampered.registry;
-        assert_eq!(changed.type_variable(left), Some(a));
-        assert_eq!(changed.type_variable(right), Some(b));
-        assert_eq!(
-            changed.owner_signature(owner).unwrap().parameters.as_ref(),
-            &[right]
-        );
-        assert_eq!(
-            changed.defining_owner_parameters(owner).unwrap()[0].id,
-            right
-        );
-        assert_eq!(&changed.defining_owner_parameters(owner).unwrap()[0], b);
-        let method = tampered
-            .method_evidence
-            .methods()
-            .iter()
-            .find(|method| method.id.interface() == interface)
-            .unwrap();
-        assert_eq!(method.interface_parameters.as_ref(), &[right]);
-        assert_eq!(method.inherited_parameters[0].binder, right);
-        assert_eq!(method.parameters[0].0, left);
-        for row in registry.global_parameter_rows() {
-            let expected = row
-                .parameters()
-                .iter()
-                .map(|id| {
-                    let mut id = *id;
-                    swap_type_variable_identity(&mut id, left, right);
-                    id
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                changed
-                    .global_parameter_row(row.owner())
-                    .unwrap()
-                    .parameters(),
-                expected
-            );
-            assert_eq!(
-                changed.global_parameter_position_for_core_test(row.owner()),
-                registry.global_parameter_position_for_core_test(row.owner())
-            );
-        }
-        assert_eq!(registry.type_variable(left).unwrap().spelling, "A");
-        assert_eq!(registry.type_variable(right).unwrap().spelling, "B");
-        assert_eq!(
-            registry.owner_signature(owner).unwrap().parameters.as_ref(),
-            &[left]
-        );
-        eprintln!(
-            "canonical A/B records remain fixed; B is now interface-owned and A method-local; roles, rows and actual Core uses are coordinated"
-        );
-
         let sources = provenance
             .iter()
             .map(|(_, source)| source.as_ref())
@@ -33263,29 +33202,193 @@ mod tests {
             .iter()
             .map(|(module, source)| (*module, source.id()))
             .collect::<Vec<_>>();
-        let untouched = identity_effect_traversal(original).expect("copy the genuine Core");
-        let validator = Validator::new_modules(&untouched, &sources, &module_sources)
-            .expect("the genuine module relation is admitted");
-        validator
-            .authenticate_checked_originals()
-            .expect("the original owner rows match the untouched active program");
-        drop(validator);
-        untouched.discard_iteratively();
+        let rebuild = |folded| {
+            if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+        };
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let untouched = rebuild(folded).expect("rebuild the genuine Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &module_sources)
+                .expect("the untouched transform independently validates");
+            let mut tampered = rebuild(folded).expect("rebuild actual Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &tampered.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut tampered.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut tampered, left, right);
+            coherently_swap_core_type_variables(&mut tampered, left, right);
 
-        let validator = Validator::new_modules(&tampered, &sources, &module_sources)
-            .expect("the fixed-original mutation retains the module relation");
-        assert_eq!(
-            validator
-                .authenticate_checked_originals()
-                .expect_err("the original-owner comparison must reject the coordinated swap")
-                .reason(),
-            ValidationReason::Registry,
-        );
-        drop(validator);
-        match validate_effect_modules(tampered, &sources, &module_sources) {
-            Ok(_) => panic!("COUNTEREXAMPLE: coordinated wrong parameter ownership validated"),
-            Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
+            let changed = &tampered.registry;
+            assert_eq!(changed.type_variable(left), Some(a));
+            assert_eq!(changed.type_variable(right), Some(b));
+            assert_eq!(
+                changed.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.defining_owner_parameters(owner).unwrap()[0].id,
+                right
+            );
+            assert_eq!(&changed.defining_owner_parameters(owner).unwrap()[0], b);
+            let method = tampered
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            for row in registry.global_parameter_rows() {
+                let expected = row
+                    .parameters()
+                    .iter()
+                    .map(|id| {
+                        let mut id = *id;
+                        swap_type_variable_identity(&mut id, left, right);
+                        id
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed
+                        .global_parameter_row(row.owner())
+                        .unwrap()
+                        .parameters(),
+                    expected
+                );
+                assert_eq!(
+                    changed.global_parameter_position_for_core_test(row.owner()),
+                    registry.global_parameter_position_for_core_test(row.owner())
+                );
+            }
+            assert_eq!(registry.type_variable(left).unwrap().spelling, "A");
+            assert_eq!(registry.type_variable(right).unwrap().spelling, "B");
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!(
+                "canonical A/B records remain fixed; B is now interface-owned and A method-local; roles, rows and actual Core uses are coordinated"
+            );
+
+            let validator = Validator::new_modules(&tampered, &sources, &module_sources)
+                .expect("the fixed-original mutation retains the module relation");
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("the original-owner comparison must reject the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry,
+            );
+            drop(validator);
+            match validate_effect_modules(tampered, &sources, &module_sources) {
+                Ok(_) => panic!("COUNTEREXAMPLE: coordinated wrong parameter ownership validated"),
+                Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
+            }
+            eprintln!("{name} preserved originals and rejected the owner swap");
         }
+    }
+
+    #[test]
+    fn checked_original_owner_preparation_is_exact_retryable_and_accepts_source_aliases() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let fixture = vector_method_evidence_validation_fixture();
+        let graph = &fixture.graph;
+        let linked = link_modules(checked_linked_validation_graph(graph), graph.entry())
+            .expect("the original graph links");
+        let linked = validate_linked_facts_for_test(linked).expect("the original graph checks");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relations = &fixture.module_sources;
+
+        let mut measured = TypeWorkBudget::unbounded();
+        let anchors = GeneratedParameterAnchors::prepare_from_linked(
+            &linked,
+            &sources,
+            relations,
+            &mut measured,
+        )
+        .expect("the actual checked originals prepare");
+        let exact = measured.used();
+        assert!(exact > 1);
+        let rows = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(
+            |row| matches!(row.owner, OriginalOwner::Interface(_)) && row.parameters.len() == 2
+        ));
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Method(_))
+                    && row.parameters.len() == 1)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        // Equal immutable source identities, held in distinct SourceFile values,
+        // must not acquire a pointer-identity requirement.
+        let aliases = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().clone())
+            .collect::<Vec<_>>();
+        let alias_refs = aliases.iter().collect::<Vec<_>>();
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).expect("short prefix fits");
+            assert!(matches!(
+                GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut short,
+                ),
+                Err(OwnerAnchorPreparationError::Resource)
+            ));
+            for _ in 0..2 {
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).expect("exact prefix fits");
+                let retried = GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut retry,
+                )
+                .expect("an exact fresh retry fits");
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(
+                    retried.checked_owners().modules().len(),
+                    anchors.checked_owners().modules().len()
+                );
+            }
+        }
+        eprintln!("checked original owner preparation used exactly {exact} work units");
     }
 
     #[test]
