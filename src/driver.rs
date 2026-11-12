@@ -2242,8 +2242,8 @@ where
                                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
                             )))
                         })?;
-                        let category = match category {
-                            Some(category) => category,
+                        let (category, disjoint_atom) = match category {
+                            Some(category) => (category, false),
                             // These closed builtin atoms cannot be a syntax
                             // fragment. Finish the existing expression shell
                             // and let the full ordinary module check diagnose
@@ -2253,7 +2253,7 @@ where
                                 Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit
                             ) =>
                             {
-                                crate::syntax::EscapeResultCategory::Expression
+                                (crate::syntax::EscapeResultCategory::Expression, true)
                             }
                             None => {
                                 return Err(FileFailure::from(PipelineFailure::Resolution(
@@ -2268,7 +2268,7 @@ where
                                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
                             )))
                         })?;
-                        categories.push((category, result.effects().is_empty()));
+                        categories.push((category, result.effects().is_empty(), disjoint_atom));
                     }
                     drop(checked_module);
                     drop(results);

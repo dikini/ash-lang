@@ -5574,11 +5574,15 @@ pub(crate) fn finish_escape_probes(
     module: &mut crate::surface::SurfaceModule,
     introduction: Option<usize>,
     probes: &[usize],
-    categories: &[(EscapeResultCategory, bool)],
+    categories: &[(EscapeResultCategory, bool, bool)],
     budget: &mut SyntaxBudget,
 ) -> Result<(), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
-    use crate::surface::{SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceTypeKind};
+    use crate::surface::{
+        ApplicationExpr, FunctionExpr, FunctionType, SurfaceBinder, SurfaceBinding, SurfaceBlock,
+        SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceLocalDeclaration,
+        SurfacePattern, SurfacePatternKind, SurfaceTypeKind,
+    };
     let resource = |error| MacroParseFailure::Syntax {
         diagnostics: Vec::new(),
         resource: Some(error),
@@ -5587,7 +5591,7 @@ pub(crate) fn finish_escape_probes(
         return Err(MacroParseFailure::Invalid);
     }
     let introduction = introduction.ok_or(MacroParseFailure::Invalid)?;
-    for (definition, &(category, pure)) in probes.iter().zip(categories) {
+    for (definition, &(category, pure, disjoint_atom)) in probes.iter().zip(categories) {
         let definition = module
             .definitions
             .get_mut(*definition)
@@ -5656,7 +5660,7 @@ pub(crate) fn finish_escape_probes(
         } else {
             ty
         };
-        let returned = SurfaceExpr {
+        let mut returned = SurfaceExpr {
             kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name(
                 format!("{}\0result", global.interface.name.text),
                 0,
@@ -5664,6 +5668,95 @@ pub(crate) fn finish_escape_probes(
             span,
             diagnostic: None,
         };
+        if disjoint_atom {
+            if category != EscapeResultCategory::Expression {
+                return Err(MacroParseFailure::Invalid);
+            }
+            let [SurfaceLocalDeclaration::Binding(initializer)] = block.declarations.as_slice()
+            else {
+                return Err(MacroParseFailure::Invalid);
+            };
+            let initializer_span = initializer.initializer.span;
+            const IDENTITY: &str = "\0ash_escape_identity";
+            const VALUE: &str = "\0ash_escape_identity_value";
+            let live = block.declarations.len();
+            let growth = if live == block.declarations.capacity() {
+                live.saturating_mul(2).saturating_add(1)
+            } else {
+                1
+            };
+            budget
+                .charge_units(
+                    IDENTITY
+                        .len()
+                        .saturating_mul(2)
+                        .saturating_add(VALUE.len().saturating_mul(2))
+                        .saturating_add("ExpressionFragment".len().saturating_mul(2))
+                        .saturating_add(growth)
+                        .saturating_add(24),
+                )
+                .map_err(resource)?;
+            if live == block.declarations.capacity() {
+                block.declarations.reserve_exact(1);
+            }
+            let pattern = |text: &str| SurfacePattern {
+                kind: SurfacePatternKind::Binder(SurfaceBinder {
+                    name: name(text.to_owned(), 0),
+                    span,
+                }),
+                span,
+                diagnostic: None,
+            };
+            let reference = |text: &str| SurfaceExpr {
+                kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name(
+                    text.to_owned(),
+                    0,
+                ))),
+                span,
+                diagnostic: None,
+            };
+            let annotation = SurfaceType {
+                kind: SurfaceTypeKind::Function(FunctionType {
+                    domain: Box::new(named("ExpressionFragment")),
+                    codomain: Box::new(named("ExpressionFragment")),
+                    effects: None,
+                }),
+                span,
+                diagnostic: None,
+            };
+            let identity = SurfaceExpr {
+                kind: SurfaceExprKind::Function(FunctionExpr {
+                    parameter: pattern(VALUE),
+                    body: SurfaceBlock {
+                        declarations: Vec::new(),
+                        result: Box::new(reference(VALUE)),
+                        span,
+                    },
+                }),
+                span,
+                diagnostic: None,
+            };
+            block
+                .declarations
+                .push(SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
+                    pattern: pattern(IDENTITY),
+                    annotation: Some(annotation),
+                    initializer: identity,
+                    span,
+                })));
+            returned.span = initializer_span;
+            if let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &mut returned.kind {
+                name.span = initializer_span;
+            }
+            returned = SurfaceExpr {
+                kind: SurfaceExprKind::Apply(ApplicationExpr {
+                    function: Box::new(reference(IDENTITY)),
+                    argument: Box::new(returned),
+                }),
+                span: initializer_span,
+                diagnostic: None,
+            };
+        }
         function.codomain = Box::new(ty);
         if pure {
             // The ordinary probe finalized this initializer as effect-free;
