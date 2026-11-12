@@ -101,7 +101,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(None)
     }
 
-    fn authenticate_checked_originals(&self) -> Result<(), ValidationError> {
+    pub(super) fn authenticate_checked_originals(&self) -> Result<(), ValidationError> {
         if self.checked_owner_anchors_authenticated.get() {
             return Ok(());
         }

@@ -32992,6 +32992,302 @@ mod tests {
         }
     }
 
+    fn swap_application_type_variables_for_owner_swap_test(
+        application: &mut crate::interface::InterfaceApplication,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        for argument in application.arguments_mut_for_summary_test() {
+            let replacement = crate::types::map_kinded_argument_types_with_budget(
+                argument,
+                &mut |ty, work: &mut TypeWorkBudget| {
+                    let mut copy = clone_type_with_budget(ty, work)?;
+                    swap_type_variable_identities(&mut copy, left, right);
+                    Ok::<Type, ()>(copy)
+                },
+                &mut TypeWorkBudget::unbounded(),
+                &mut |_| (),
+            )
+            .expect("test application arguments remain representable");
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                argument,
+                replacement,
+            ));
+        }
+    }
+
+    fn swap_method_catalog_type_variables_for_owner_swap_test(
+        program: &mut UnvalidatedEffectProgram,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        let catalog = Arc::make_mut(&mut program.method_evidence);
+        assert!(catalog.lexical_owners().is_empty());
+        for method in catalog.methods_mut_for_core_test() {
+            for id in &mut method.interface_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for role in &mut method.inherited_parameters {
+                swap_type_variable_identity(&mut role.binder, left, right);
+            }
+            for (id, _) in &mut method.parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_type_variable_identities(&mut method.value_type, left, right);
+        }
+        for owner in catalog.implementation_owners_mut_for_core_test() {
+            for (id, _) in &mut owner.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut owner.application,
+                left,
+                right,
+            );
+        }
+        for domain in catalog.domains_mut_for_core_test() {
+            for (id, _) in &mut domain.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut domain.application,
+                left,
+                right,
+            );
+        }
+        for occurrence in catalog.occurrences_mut_for_core_test() {
+            // Keep the actual checked selection plan fixed. This concrete
+            // fixture must not hide the swapped variables inside that anchor.
+            for argument in occurrence.selection.arguments() {
+                let mapped = crate::types::map_kinded_argument_types_with_budget(
+                    argument,
+                    &mut |ty, work: &mut TypeWorkBudget| {
+                        let mut copy = clone_type_with_budget(ty, work)?;
+                        swap_type_variable_identities(&mut copy, left, right);
+                        Ok::<Type, ()>(copy)
+                    },
+                    &mut TypeWorkBudget::unbounded(),
+                    &mut |_| (),
+                )
+                .expect("checked argument copy");
+                assert_eq!(&mapped, argument, "checked selection remains fixed");
+                crate::types::discard_kinded_argument_iteratively(mapped);
+            }
+            for index in 0..occurrence.selection.node_count() {
+                let node = occurrence
+                    .selection
+                    .node(crate::interface::EvidenceNodeId::new(index))
+                    .expect("checked selection node");
+                if let crate::interface::EvidenceNode::Implementation { substitution, .. } = node {
+                    for item in substitution {
+                        assert_ne!(item.parameter(), left);
+                        assert_ne!(item.parameter(), right);
+                        let mut argument = item.argument().clone();
+                        swap_type_variable_identities(&mut argument, left, right);
+                        assert_eq!(&argument, item.argument());
+                    }
+                }
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut occurrence.checked_application,
+                left,
+                right,
+            );
+            for ty in &mut occurrence.method_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            if let Some(ty) = &mut occurrence.checked_value_type {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for adapter in catalog.adapters_mut_for_core_test() {
+            for id in &mut adapter.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for ty in &mut adapter.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            for edge in &mut adapter.prerequisites {
+                swap_application_type_variables_for_owner_swap_test(
+                    &mut edge.application,
+                    left,
+                    right,
+                );
+                for id in &mut edge.interface_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                for (id, _) in &mut edge.method_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                swap_type_variable_identities(&mut edge.value_type, left, right);
+            }
+        }
+        for source in catalog.concrete_sources_mut_for_core_test() {
+            for ty in &mut source.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for anchor in &mut program.method_evidence_anchors {
+            swap_application_type_variables_for_owner_swap_test(
+                &mut anchor.application,
+                left,
+                right,
+            );
+        }
+    }
+
+    #[test]
+    fn core_rejects_coordinated_tied_parameter_owner_swap() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original introduced method graph must compile");
+        let (original, provenance) = compiled.effect_build_input().expect("actual effect Core");
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the original checked method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("the original interface owns one parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("the original method owns one Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("canonical A");
+        let b = registry.type_variable(right).expect("canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert_eq!((&a.kind, &b.kind), (&Kind::Type, &Kind::Type));
+        assert!(left.local() < right.local());
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        assert!(
+            registry
+                .nominal_parameter_entries()
+                .all(|(_, parameters)| parameters.iter().all(|p| p.id != left && p.id != right))
+        );
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        assert_eq!(
+            registry.defining_owner_parameters(owner).unwrap()[0].id,
+            left
+        );
+        eprintln!(
+            "original tied A={left:?} B={right:?} span={:?} interface={interface:?}",
+            a.origin.primary_span()
+        );
+
+        let mut tampered = identity_effect_traversal(original).expect("copy actual Core");
+        assert!(
+            Arc::make_mut(&mut tampered.registry)
+                .swap_tied_parameter_owners_for_core_test(left, right)
+        );
+        swap_method_catalog_type_variables_for_owner_swap_test(&mut tampered, left, right);
+        coherently_swap_core_type_variables(&mut tampered, left, right);
+
+        let changed = &tampered.registry;
+        assert_eq!(changed.type_variable(left), Some(a));
+        assert_eq!(changed.type_variable(right), Some(b));
+        assert_eq!(
+            changed.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[right]
+        );
+        assert_eq!(
+            changed.defining_owner_parameters(owner).unwrap()[0].id,
+            right
+        );
+        assert_eq!(&changed.defining_owner_parameters(owner).unwrap()[0], b);
+        let method = tampered
+            .method_evidence
+            .methods()
+            .iter()
+            .find(|method| method.id.interface() == interface)
+            .unwrap();
+        assert_eq!(method.interface_parameters.as_ref(), &[right]);
+        assert_eq!(method.inherited_parameters[0].binder, right);
+        assert_eq!(method.parameters[0].0, left);
+        for row in registry.global_parameter_rows() {
+            let expected = row
+                .parameters()
+                .iter()
+                .map(|id| {
+                    let mut id = *id;
+                    swap_type_variable_identity(&mut id, left, right);
+                    id
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                changed
+                    .global_parameter_row(row.owner())
+                    .unwrap()
+                    .parameters(),
+                expected
+            );
+            assert_eq!(
+                changed.global_parameter_position_for_core_test(row.owner()),
+                registry.global_parameter_position_for_core_test(row.owner())
+            );
+        }
+        assert_eq!(registry.type_variable(left).unwrap().spelling, "A");
+        assert_eq!(registry.type_variable(right).unwrap().spelling, "B");
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        eprintln!(
+            "canonical A/B records remain fixed; B is now interface-owned and A method-local; roles, rows and actual Core uses are coordinated"
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let untouched = identity_effect_traversal(original).expect("copy the genuine Core");
+        let validator = Validator::new_modules(&untouched, &sources, &module_sources)
+            .expect("the genuine module relation is admitted");
+        validator
+            .authenticate_checked_originals()
+            .expect("the original owner rows match the untouched active program");
+        drop(validator);
+        untouched.discard_iteratively();
+
+        let validator = Validator::new_modules(&tampered, &sources, &module_sources)
+            .expect("the fixed-original mutation retains the module relation");
+        assert_eq!(
+            validator
+                .authenticate_checked_originals()
+                .expect_err("the original-owner comparison must reject the coordinated swap")
+                .reason(),
+            ValidationReason::Registry,
+        );
+        drop(validator);
+        match validate_effect_modules(tampered, &sources, &module_sources) {
+            Ok(_) => panic!("COUNTEREXAMPLE: coordinated wrong parameter ownership validated"),
+            Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
+        }
+    }
+
     #[test]
     fn linked_core_rejects_coherent_resolved_binder_owner_swap() {
         let mut fixture = LinkedCoreValidationFixture::compile(
