@@ -132,6 +132,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
         dependencies: &staged.dependencies,
         span: staged.surface.span,
         source_snapshot: &slot,
+        quote_projection: None,
     };
     let mut measured = SyntaxBudget::default();
     let view = loan
@@ -163,6 +164,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
         dependencies: &staged.dependencies,
         span: staged.surface.span,
         source_snapshot: &slot,
+        quote_projection: None,
     };
     let mut short = SyntaxBudget::with_limit(used - 1);
     assert!(

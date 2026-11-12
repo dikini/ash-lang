@@ -48,6 +48,7 @@ std::thread_local! {
 
 // The parser and projector share token indices. Structured output attaches
 // original names and fragments to those indices without changing lexer tokens.
+#[derive(Clone, Copy)]
 struct ProjectionTokens<'a> {
     tokens: &'a [Token],
     originals: Option<&'a std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
@@ -8795,16 +8796,35 @@ fn project_selected_declaration_invocation_node_inner(
     allow_declaration: bool,
     mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let quote_projection = tokens.quote_sites;
+    // Only the capture-owned generator branch receives the staged quote loan.
+    let ordinary_tokens = ProjectionTokens {
+        quote_sites: None,
+        ..*tokens
+    };
+    let tokens = &ordinary_tokens;
     let source_transformer = allow_declaration
         && source_projection_tokens(tokens)
         && matches!(
             selected.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
-    let source_generator = allow_declaration
+    let source_generator_candidate = allow_declaration
         && source_projection_tokens(tokens)
         && selected.declaration.contains_generators
-        && tokens.quote_sites.is_some();
+        && quote_projection.is_some();
+    if source_generator_candidate && let Some(budget) = budget.as_deref_mut() {
+        budget
+            .charge_units(selected.declaration.matcher.len())
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    let source_generator = source_generator_candidate
+        && !selected.declaration.matcher.iter().any(|part| {
+            matches!(
+                part,
+                SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+            )
+        });
     let selection = selected.clone();
     let mut children = node.children.iter();
     let _ = children.next();
@@ -8888,9 +8908,11 @@ fn project_selected_declaration_invocation_node_inner(
                                 staging_frames: tokens.staging_frames,
                                 preserve_name_diagnostic: tokens.preserve_name_diagnostic,
                                 expression_budget: Some(&expression_budget),
-                                quote_sites: source_generator
-                                    .then_some(tokens.quote_sites)
-                                    .flatten(),
+                                quote_sites: if source_generator {
+                                    quote_projection
+                                } else {
+                                    None
+                                },
                             };
                             let (contents, contains_type) = capture_contents_and_type(
                                 source,
@@ -12937,6 +12959,109 @@ mod tests {
         assert!(matches!(&inner.seed.kind, SurfaceExprKind::Integer(_)));
         assert_eq!(outer.span.source(), source.id());
         assert_eq!(inner.span.source(), source.id());
+    }
+
+    #[test]
+    fn declaration_capture_quotes_stay_owned_by_supported_generator_capture() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+        use std::cell::RefCell;
+
+        for (header, generator, invocation, supported) in [
+            ("$start:expr", "", "sink syntax { 42 }\n", false),
+            (
+                "$( $start:expr ),+",
+                " with { $number from 0 step next }",
+                "sink syntax { 42 }\n",
+                false,
+            ),
+            (
+                "$start:expr names $( $name:ident ),*",
+                " with { $number from $start step next }",
+                "sink syntax { 42 } names\n",
+                false,
+            ),
+            (
+                "$start:expr",
+                " with { $number from $start step next }",
+                "sink syntax { 42 }\n",
+                true,
+            ),
+        ] {
+            let definition = SourceFile::new(
+                "quote-capture-forms.ash",
+                format!("pub syntax declaration: (sink) {header} => {{}}{generator}\n"),
+            )
+            .unwrap();
+            let tree = h1_tree(&definition, &[]);
+            let (root, raw) = validated_root(&definition, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                raw,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let caller = SourceFile::new("quote-capture-caller.ash", invocation).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, raw) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let quotes = RefCell::new(QuoteProjection {
+                introduction: 1,
+                next_ordinal: 0,
+                sites: Vec::new(),
+            });
+            let mut tokens = ProjectionTokens::source(raw);
+            tokens.quote_sites = Some(&quotes);
+            let mut budget = SyntaxBudget::default();
+            let result = project_declaration_invocation_node_inner(
+                &caller,
+                node,
+                &tokens,
+                &contexts,
+                true,
+                Some(&mut budget),
+            );
+            assert!(quotes.borrow().sites.is_empty());
+            if supported {
+                let invocation = result.expect("the flat generator capture owns its quote site");
+                let [SurfaceSyntaxCapture::Expression(capture)] = invocation.captures.as_slice()
+                else {
+                    panic!("the original expression capture is retained")
+                };
+                let crate::surface::CapturedQuoteSites::Owned(sites) = &capture.quote_sites else {
+                    panic!("the quote metadata stays with the capture")
+                };
+                let [site] = sites.as_slice() else {
+                    panic!("one actual quote site")
+                };
+                let SurfaceExprKind::Apply(application) = &capture.expression.kind else {
+                    panic!("the quote call stays in the capture")
+                };
+                assert_eq!(
+                    site.callee,
+                    std::ptr::from_ref(application.function.as_ref()) as usize
+                );
+                assert_eq!(site.template.origin, capture.expression.span);
+                assert_eq!(quotes.borrow().next_ordinal, 1);
+            } else {
+                assert!(matches!(result, Err(ProjectionError::MalformedTree(_))));
+                assert_eq!(quotes.borrow().next_ordinal, 0);
+            }
+        }
     }
 
     #[test]
