@@ -17684,7 +17684,7 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 pub(crate) use tests::{
-    exercise_restored_global_swap_for_image_test,
+    exercise_foreign_wrong_source_for_image_test, exercise_restored_global_swap_for_image_test,
     exercise_restored_nominal_pair_mutation_for_image_test,
     exercise_restored_owner_swap_for_image_test,
 };
@@ -33421,6 +33421,77 @@ mod tests {
             eprintln!(
                 "restored {name}: fixed original global owners reject the coordinated active swap"
             );
+        }
+    }
+
+    pub(crate) fn exercise_foreign_wrong_source_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let original_registry = original.registry();
+        let original_effect = original_registry
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Other")
+            .expect("the actual second foreign symbol is retained");
+        let operation = &original_effect.operations[0];
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = operation.origin
+        else {
+            panic!("the literal foreign symbol must carry its expansion")
+        };
+        assert_ne!(invocation.source(), definition.source());
+        let contract = original_registry.native_symbol(operation.id).unwrap();
+        assert!(
+            contract
+                .same_source_provenance(original_effect, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        let relation = module_sources.iter().copied().collect::<HashMap<_, _>>();
+        for folded in [false, true] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original).unwrap()
+            } else {
+                identity_effect_traversal(original).unwrap()
+            };
+            let mut effects = changed.registry.effects().to_vec();
+            let effect = effects
+                .iter_mut()
+                .find(|effect| effect.id == original_effect.id)
+                .unwrap();
+            effect.operations[0].origin = Origin::Source(definition);
+            assert_eq!(effect.operations[0].id, operation.id);
+            assert_eq!(effect.operations[0].span, operation.span);
+            assert_eq!(effect.operations[0].annotation, operation.annotation);
+            assert!(
+                contract
+                    .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                    .unwrap()
+            );
+            changed.registry = Arc::new(
+                changed
+                    .registry
+                    .as_ref()
+                    .clone()
+                    .replace_effects_for_core_test(effects),
+            );
+            assert!(Arc::ptr_eq(
+                contract,
+                changed.registry.native_symbol(operation.id).unwrap()
+            ));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .validate_effect_registry(Some(&relation), &mut HashMap::new())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
         }
     }
 

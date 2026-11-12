@@ -4983,6 +4983,265 @@ mod tests {
         );
     }
 
+    #[test]
+    fn generated_foreign_symbol_origins_survive_checked_image_and_wrong_source_refuses() {
+        fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32, String) {
+            let source = sources
+                .iter()
+                .find(|source| source.id() == span.source())
+                .unwrap();
+            let start = span.range().start();
+            let end = span.range().end();
+            (
+                source.display_path().to_owned(),
+                start,
+                end,
+                source.text()[start as usize..end as usize].to_owned(),
+            )
+        }
+        fn facts(
+            program: &crate::core::ValidatedEffectProgram,
+            sources: &[&SourceFile],
+        ) -> Vec<(
+            String,
+            u32,
+            (String, u32, u32, String),
+            Vec<(String, u32, u32, String)>,
+        )> {
+            ["Make", "Other"]
+                .into_iter()
+                .map(|name| {
+                    let registry = program.registry();
+                    let effect = registry
+                        .effects()
+                        .iter()
+                        .find(|effect| effect.spelling == name)
+                        .unwrap();
+                    assert!(effect.parameters.is_empty());
+                    let [operation] = effect.operations.as_ref() else {
+                        panic!("one synthetic operation")
+                    };
+                    assert_eq!(operation.id.owner(), effect.id);
+                    assert_eq!(operation.id.operation(), 0);
+                    assert_eq!(operation.spelling, "call");
+                    assert!(operation.annotation.ty.function_view().is_some());
+                    let contract = registry.native_symbol(operation.id).unwrap();
+                    assert!(std::sync::Arc::ptr_eq(
+                        effect.native_contract.as_ref().unwrap(),
+                        contract
+                    ));
+                    assert!(
+                        contract
+                            .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                            .unwrap()
+                    );
+                    let origin = match &operation.origin {
+                        Origin::Source(span) => vec![place(*span, sources)],
+                        Origin::Expansion {
+                            invocation,
+                            definition,
+                        } => vec![place(*invocation, sources), place(*definition, sources)],
+                        _ => panic!("the fixture uses only source or direct expansion"),
+                    };
+                    if name == "Make" {
+                        assert_eq!(origin.len(), 1);
+                        assert_eq!(origin[0].3, "Make");
+                    } else {
+                        assert_eq!(origin.len(), 2);
+                        assert_eq!(origin[0].3, "make_foreign Fixture symbol Make");
+                        assert_eq!(origin[1].3, "Other");
+                    }
+                    let mut work = TypeWorkBudget::unbounded();
+                    let retained =
+                        crate::resolved::clone_resolved_effect_with_budget(effect, &mut work)
+                            .unwrap();
+                    let cost = work.used();
+                    assert_eq!(&retained, effect);
+                    eprintln!("foreign {name} canonical clone uses exactly {cost} work units");
+                    for prefix in [0, 17] {
+                        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                        short.charge(prefix).unwrap();
+                        assert!(
+                            crate::resolved::clone_resolved_effect_with_budget(effect, &mut short)
+                                .is_err()
+                        );
+                        for _ in 0..2 {
+                            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                            exact.charge(prefix).unwrap();
+                            assert_eq!(
+                                &crate::resolved::clone_resolved_effect_with_budget(
+                                    effect, &mut exact
+                                )
+                                .unwrap(),
+                                effect
+                            );
+                            assert_eq!(exact.used(), prefix + cost);
+                        }
+                    }
+                    std::thread::Builder::new()
+                        .stack_size(64 * 1024)
+                        .spawn(move || drop(retained))
+                        .unwrap()
+                        .join()
+                        .unwrap();
+                    (
+                        name.to_owned(),
+                        operation.id.operation(),
+                        place(operation.span, sources),
+                        origin,
+                    )
+                })
+                .collect()
+        }
+
+        let tree = SourceTree::new();
+        let forms = include_str!("../../docs/design/macros/fixtures/declarations/forms.ash").replacen(
+            "symbol $S : Unit -> F.Address { name \"fixture_make\" }",
+            "symbol $S : Unit -> F.Address { name \"fixture_make\" }\n        symbol Other : Unit -> F.Address { name \"fixture_other\" }",
+            1,
+        );
+        tree.write("forms.ash", &forms);
+        tree.write(
+            "entry.ash",
+            include_str!("../../docs/design/macros/fixtures/declarations/case_06.ash"),
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let original = facts(program, &sources);
+        crate::core::validate::exercise_foreign_wrong_source_for_image_test(
+            program, &sources, &relation,
+        );
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(sources);
+        drop(compiled);
+        drop(tree);
+
+        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let relation = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        assert_eq!(facts(&restored.program, &sources), original);
+        crate::core::validate::exercise_foreign_wrong_source_for_image_test(
+            &restored.program,
+            &sources,
+            &relation,
+        );
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            assert_eq!(facts(&checked, &sources), original);
+        }
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn foreign_symbol_captured_after_introduction_keeps_original_context() {
+        let tree = SourceTree::new();
+        tree.write("inner.ash", "import @builtin.foreign as F\npub syntax declaration: (inner) $S:ident => {\n    pub foreign library Fixture {\n        profile \"x86_64-unknown-linux-gnu\"\n        symbol $S : Unit -> F.Address { name \"fixture_other\" }\n    }\n}\n");
+        tree.write("outer.ash", "import inner (syntax inner)\npub syntax declaration: (outer) => {\n    inner Other\n}\n");
+        tree.write(
+            "entry.ash",
+            "import outer (syntax outer)\nouter\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let effect = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Other")
+            .unwrap();
+        let operation = &effect.operations[0];
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = operation.origin
+        else {
+            panic!("the already-introduced captured symbol must retain its own direct expansion")
+        };
+        let text = |span: Span| {
+            let source = provenance
+                .iter()
+                .find(|(_, source)| source.id() == span.source())
+                .unwrap()
+                .1
+                .as_ref();
+            source.text()[span.range().start() as usize..span.range().end() as usize].to_owned()
+        };
+        assert_eq!(text(invocation), "outer");
+        assert_eq!(text(definition), "Other");
+        assert_ne!(invocation.source(), definition.source());
+        assert_eq!(operation.id.owner(), effect.id);
+        assert_eq!(operation.id.operation(), 0);
+        assert_eq!(operation.spelling, "call");
+        assert!(
+            effect
+                .native_contract
+                .as_ref()
+                .unwrap()
+                .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+    }
+
     // This covers the newly supported declaration metadata, without claiming
     // native support for a concrete implementation or method invocation.
     #[test]
@@ -5102,14 +5361,46 @@ mod tests {
                     .iter()
                     .all(|row| row.2.0 == u8::from(generated))
             );
+            let mut encode_work = TypeWorkBudget::unbounded();
             let build = encode_effect_for_build(
                 program,
                 provenance,
                 &[],
                 super::super::NATIVE_TARGET,
-                &mut TypeWorkBudget::default(),
+                &mut encode_work,
             )
             .unwrap();
+            let encode_cost = encode_work.used();
+            eprintln!(
+                "declared method image encoding (generated={generated}) uses exactly {encode_cost} work units"
+            );
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + encode_cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    encode_effect_for_build(
+                        program,
+                        provenance,
+                        &[],
+                        super::super::NATIVE_TARGET,
+                        &mut short
+                    ),
+                    Err(NativeImageFailure::Image(ImageFailure::Resource))
+                ));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + encode_cost);
+                    exact.charge(prefix).unwrap();
+                    encode_effect_for_build(
+                        program,
+                        provenance,
+                        &[],
+                        super::super::NATIVE_TARGET,
+                        &mut exact,
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + encode_cost);
+                }
+            }
             let bytes = build
                 .image
                 .encode_bytes(&mut TypeWorkBudget::default())
