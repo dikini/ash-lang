@@ -4500,6 +4500,7 @@ fn charge_structured_items<'a>(
     elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
     depth: usize,
+    transformer_contexts: Option<&crate::syntax::SyntaxContexts>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
     fn charge_argument_span(
@@ -4738,7 +4739,7 @@ fn charge_structured_items<'a>(
                                     ty,
                                     tokens,
                                     SurfaceSyntaxCaptureKind::Type,
-                                    false,
+                                    transformer_contexts.is_some(),
                                     false,
                                     repeat_depth,
                                     false,
@@ -4758,23 +4759,36 @@ fn charge_structured_items<'a>(
                                             InternalReason::UnexpectedShape,
                                         ))?
                                 };
+                                let new_pattern = transformer_contexts.is_some()
+                                    && *kind == SurfaceSyntaxCaptureKind::Pattern;
+                                let new_expression = transformer_contexts.is_some()
+                                    && *kind == SurfaceSyntaxCaptureKind::Expression;
+                                let owner_prefix = if new_expression {
+                                    crate::syntax::type_depth(repeat_depth, 1)?
+                                } else {
+                                    repeat_depth
+                                };
                                 let bridge = charge_projection_preflight_with_expression(
                                     value,
                                     tokens,
                                     true,
-                                    false,
-                                    false,
-                                    None,
-                                    repeat_depth,
+                                    new_pattern,
+                                    new_expression,
+                                    if new_expression {
+                                        transformer_contexts
+                                    } else {
+                                        None
+                                    },
+                                    owner_prefix,
                                     false,
                                     budget,
                                 )? | charge_capture_contents_with_expression(
                                     value,
                                     tokens,
                                     *kind,
-                                    false,
-                                    false,
-                                    repeat_depth,
+                                    new_pattern,
+                                    new_expression,
+                                    owner_prefix,
                                     false,
                                     false,
                                     budget,
@@ -5088,7 +5102,14 @@ fn charge_declaration_invocation(
         && source_projection_tokens(tokens)
         && tokens.quote_sites.is_some();
     if has_structured {
-        if !template {
+        let source_transformer = executing
+            && source_projection_tokens(tokens)
+            && selection.declaration.category == SurfaceSyntaxCategory::Declaration
+            && matches!(
+                selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+        if !template && !source_transformer {
             return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
         }
         crate::syntax::charge_selected(selection, budget)?;
@@ -5098,6 +5119,7 @@ fn charge_declaration_invocation(
             &node.children[1..],
             tokens,
             1,
+            source_transformer.then_some(contexts),
             budget,
         );
     }
@@ -8878,6 +8900,8 @@ fn project_structured_items<'a>(
     parts: &'a [SurfaceSyntaxMatcherPart],
     elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
+    source_transformer: bool,
+    mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<(Vec<SurfaceSyntaxCapture>, Option<Span>), ProjectionError> {
     enum Frame<'a> {
         Items {
@@ -9015,12 +9039,46 @@ fn project_structured_items<'a>(
                                     .ok_or(ProjectionError::MalformedTree(
                                         InternalReason::UnexpectedShape,
                                     ))?;
-                                let (contents, contains_type) = capture_contents_and_type(
-                                    source, expression, tokens, originals,
-                                )?;
-                                let expression = project_expression_with_fragments(
-                                    source, expression, tokens, originals,
-                                )?;
+                                let (expression, contents, contains_type) =
+                                    if source_transformer && budget.is_some() {
+                                        let expression_budget = std::cell::RefCell::new(
+                                            budget
+                                                .as_deref_mut()
+                                                .expect("source transformer has a budget"),
+                                        );
+                                        let selected_tokens = ProjectionTokens {
+                                            expression_budget: Some(&expression_budget),
+                                            quote_sites: None,
+                                            ..*tokens
+                                        };
+                                        let (contents, contains_type) = capture_contents_and_type(
+                                            source,
+                                            expression,
+                                            &selected_tokens,
+                                            originals,
+                                        )?;
+                                        let expression = project_expression_with_fragments(
+                                            source,
+                                            expression,
+                                            &selected_tokens,
+                                            originals,
+                                        )?;
+                                        expression_budget
+                                            .borrow_mut()
+                                            .charge_units(
+                                                contents.len().saturating_mul(2).saturating_add(1),
+                                            )
+                                            .map_err(ProjectionError::ResourceLimit)?;
+                                        (expression, contents, contains_type)
+                                    } else {
+                                        let (contents, contains_type) = capture_contents_and_type(
+                                            source, expression, tokens, originals,
+                                        )?;
+                                        let expression = project_expression_with_fragments(
+                                            source, expression, tokens, originals,
+                                        )?;
+                                        (expression, contents, contains_type)
+                                    };
                                 SurfaceSyntaxCapture::Expression(project_syntax_expression_capture(
                                     expression,
                                     contents,
@@ -9030,7 +9088,16 @@ fn project_structured_items<'a>(
                             }
                             SurfaceSyntaxCaptureKind::Type => {
                                 let node = only_child_of_kind(argument, NodeKind::Type)?;
-                                let contents = capture_contents(source, node, tokens, originals)?;
+                                let contents = if source_transformer && budget.is_some() {
+                                    capture_source_declaration_contents_inner(
+                                        source,
+                                        node,
+                                        tokens,
+                                        budget.as_deref_mut(),
+                                    )?
+                                } else {
+                                    capture_contents(source, node, tokens, originals)?
+                                };
                                 let ty = project_type(source, node, tokens)?;
                                 let contents = match contents.as_slice() {
                                     [crate::syntax::MacroOutputNode::ForwardedType(capture, _)] => {
@@ -9042,7 +9109,16 @@ fn project_structured_items<'a>(
                             }
                             SurfaceSyntaxCaptureKind::Pattern => {
                                 let node = only_child_of_kind(argument, NodeKind::Pattern)?;
-                                let contents = capture_contents(source, node, tokens, originals)?;
+                                let contents = if source_transformer && budget.is_some() {
+                                    capture_source_declaration_contents_inner(
+                                        source,
+                                        node,
+                                        tokens,
+                                        budget.as_deref_mut(),
+                                    )?
+                                } else {
+                                    capture_contents(source, node, tokens, originals)?
+                                };
                                 let pattern = project_pattern(source, node, tokens)?;
                                 let contents = match contents.as_slice() {
                                     [
@@ -9239,11 +9315,20 @@ fn project_selected_declaration_invocation_node_inner(
             part,
             SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
         ) {
+            if source_transformer && budget.is_none() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
             let (tail, last_span) = project_structured_items(
                 source,
                 &selection.declaration.matcher[position..],
                 children.as_slice(),
                 tokens,
+                source_transformer,
+                if source_transformer {
+                    budget.as_deref_mut()
+                } else {
+                    None
+                },
             )?;
             structured_edge = Some(last_span.unwrap_or(prefix_edge));
             captures.extend(tail);
@@ -13571,6 +13656,7 @@ mod tests {
                 &invocation.children[1..],
                 &projected_tokens,
                 1,
+                None,
                 &mut budget,
             )
             .unwrap();
@@ -13580,7 +13666,9 @@ mod tests {
                     &caller,
                     &selected.declaration.matcher,
                     &invocation.children[1..],
-                    &projected_tokens
+                    &projected_tokens,
+                    false,
+                    None,
                 )
                 .unwrap()
                 .0
@@ -13589,7 +13677,7 @@ mod tests {
             let mut short = SyntaxBudget::with_limit(total - 1);
             short.charge_units(17).unwrap();
             assert!(
-                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
+                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, None, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
             );
             assert!(short.consumed() >= 17 && short.consumed() < total);
             let mut exact = SyntaxBudget::with_limit(total);
@@ -13600,6 +13688,7 @@ mod tests {
                 &invocation.children[1..],
                 &projected_tokens,
                 1,
+                None,
                 &mut exact,
             )
             .unwrap();
