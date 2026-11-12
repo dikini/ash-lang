@@ -34148,17 +34148,40 @@ mod tests {
         );
     }
 
-    /// Read-only I16 inventory. A missing actual Adapter is a stop, not a mutation pass.
+    /// Exercise the checked implementation selected at a real I16 Core call site.
     #[test]
-    fn i16_inventory_actual_indexed_color_selection_and_core_identity() {
+    fn i16_actual_indexed_selection_rejects_unrelated_method_binder() {
         use std::fmt::Write as _;
+
+        #[derive(Clone, Copy, Debug)]
+        struct Site {
+            implementation: ImplMethodId,
+            binder: BinderId,
+            variable: NodeId,
+            application: NodeId,
+            argument: NodeId,
+            span: Span,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        struct Donor {
+            implementation: ImplMethodId,
+            binder: BinderId,
+        }
+
+        struct Inspection {
+            report: String,
+            sites: Vec<Site>,
+            same_graph_donors: Vec<Donor>,
+        }
 
         fn inspect(
             program: &UnvalidatedEffectProgram,
             sources: &[&SourceFile],
             relations: &[(ModuleId, SourceId)],
             linked: &crate::evidence_validation::ValidatedInterfaceProgram,
-        ) -> Result<(String, usize), String> {
+            exported_path: &str,
+        ) -> Result<Inspection, String> {
             fn find_module(
                 suffix: &str,
                 sources: &[&SourceFile],
@@ -34189,8 +34212,7 @@ mod tests {
             }
 
             let (api_id, _) = find_module("indexed/api.ash", sources, relations)?;
-            let (export_id, export_source) =
-                find_module("indexed/exported.ash", sources, relations)?;
+            let (export_id, export_source) = find_module(exported_path, sources, relations)?;
             let api = linked
                 .groups()
                 .iter()
@@ -34316,7 +34338,7 @@ mod tests {
                 "I16 original: interface={:?} method={:?} Color={:?} implementation={:?} implementation_method={:?} binder={:?}",
                 interface.id, method.id, color.id, implementation.id, selected.id, selected.binder
             );
-            let mut matched_anchors = 0;
+            let mut sites = Vec::new();
             for occurrence in &occurrences {
                 let [slot] = occurrence.evidence.as_ref() else {
                     return Err(format!(
@@ -34373,8 +34395,41 @@ mod tests {
                     .collect::<Vec<_>>();
                 let at_occurrence = matching_variables
                     .iter()
-                    .filter(|(_, origin)| *origin == Some(original_span))
-                    .count();
+                    .filter_map(|(node, origin)| (*origin == Some(original_span)).then_some(*node))
+                    .collect::<Vec<_>>();
+                let [variable] = at_occurrence.as_slice() else {
+                    return Err(format!(
+                        "expected one real variable at {original_span:?}, found {}",
+                        at_occurrence.len()
+                    ));
+                };
+                let applications = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Apply(application),
+                        )) if application.function() == *variable => {
+                            Some((node_id(program.arena, index).ok()?, application.argument()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let [(application, argument)] = applications.as_slice() else {
+                    return Err(format!(
+                        "expected one Apply.function edge for {variable:?}, found {}",
+                        applications.len()
+                    ));
+                };
+                sites.push(Site {
+                    implementation: selected.id,
+                    binder: selected.binder,
+                    variable: *variable,
+                    application: *application,
+                    argument: *argument,
+                    span: original_span,
+                });
                 let retained_occurrences = catalog
                     .occurrences()
                     .iter()
@@ -34385,8 +34440,7 @@ mod tests {
                         && matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { implementation: actual, selection_node: node }
                             if actual == selected.id && node == selection_node)
                 }).map(|anchor| anchor.node).collect::<Vec<_>>();
-                matched_anchors += anchors.len();
-                writeln!(report, "\nslot={slot_id} span={original_span:?} selection_node={selection_node:?} selected={:?} binder={:?} binder_variables={matching_variables:?} variables_at_occurrence={at_occurrence} retained_occurrences={retained_occurrences} matching_adapter_nodes={anchors:?}", selected.id, selected.binder).unwrap();
+                writeln!(report, "\nslot={slot_id} span={original_span:?} selection_node={selection_node:?} selected={:?} binder={:?} binder_variables={matching_variables:?} variable={variable:?} application={application:?} argument={argument:?} retained_occurrences={retained_occurrences} matching_adapter_nodes={anchors:?}", selected.id, selected.binder).unwrap();
             }
             let checked_occurrences = catalog
                 .occurrences()
@@ -34439,42 +34493,243 @@ mod tests {
                 .map(|anchor| (anchor.node, anchor.occurrence, anchor.role))
                 .collect::<Vec<_>>();
             writeln!(report, "\nchecked_occurrences={checked_occurrences:?} implementation_owners={implementation_owners:?} adapters={adapters:?} concrete_sources={concrete_sources:?} method_expectations={expectations:?} method_anchors={method_anchors:?}").unwrap();
-            Ok((report, matched_anchors))
+            let same_graph_donors = linked
+                .groups()
+                .iter()
+                .flat_map(|group| group.implementation_facts())
+                .filter(|candidate| candidate.id != implementation.id)
+                .flat_map(|candidate| {
+                    let candidate_id = candidate.id;
+                    candidate
+                        .methods
+                        .iter()
+                        .filter_map(move |candidate_method| {
+                            (candidate_method.id.implementation() == candidate_id
+                                && candidate_method.binder.module() == Some(candidate_id.module())
+                                && candidate_method.binder != selected.binder)
+                                .then_some(Donor {
+                                    implementation: candidate_method.id,
+                                    binder: candidate_method.binder,
+                                })
+                        })
+                })
+                .collect::<Vec<_>>();
+            writeln!(report, "\nsame_graph_donors={same_graph_donors:?}").unwrap();
+            Ok(Inspection {
+                report,
+                sites,
+                same_graph_donors,
+            })
         }
 
-        let inventory = std::cell::RefCell::new(None);
-        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+        fn configuration(entry: &str) -> crate::driver::RunConfiguration {
             crate::driver::RunConfiguration {
                 entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("docs/design/macros/fixtures/indexed/integrated.ash"),
+                    .join("docs/design/macros/fixtures/indexed")
+                    .join(entry),
                 roots: ModuleRoots::empty(),
-            },
-            |program, sources, relations, linked| {
-                *inventory.borrow_mut() = Some(inspect(&program, sources, relations, linked));
-                validate_effect_modules_linked_with_work(
+            }
+        }
+
+        fn positive(entry: &str, exported_path: &str) -> Inspection {
+            let inventory = std::cell::RefCell::new(None);
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                configuration(entry),
+                |program, sources, relations, linked| {
+                    *inventory.borrow_mut() =
+                        Some(inspect(&program, sources, relations, linked, exported_path));
+                    validate_effect_modules_linked_with_work(
+                        program,
+                        sources,
+                        relations,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .unwrap_or_else(|error| panic!("{entry} must independently validate: {error}"));
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            inventory
+                .into_inner()
+                .expect("the actual linked validation callback must run")
+                .unwrap_or_else(|reason| {
+                    panic!("I16 STOP: {entry} actual-site inventory unavailable: {reason}")
+                })
+        }
+
+        let control = positive("control_integrated.ash", "indexed/control_exported.ash");
+        let original = positive("integrated.ash", "indexed/exported.ash");
+        assert_eq!(control.sites.len(), 2, "two actual handwritten index calls");
+        assert_eq!(original.sites.len(), 2, "two actual generated index calls");
+        eprintln!("I16 handwritten control: {}", control.report);
+        eprintln!("I16 unchanged original: {}", original.report);
+        let control_donor = Donor {
+            implementation: control.sites[0].implementation,
+            binder: control.sites[0].binder,
+        };
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration("integrated.ash"),
+            |mut program, sources, relations, linked| {
+                let observed =
+                    inspect(&program, sources, relations, linked, "indexed/exported.ash")
+                        .unwrap_or_else(|reason| {
+                            panic!("I16 STOP: actual-site inventory unavailable: {reason}")
+                        });
+                let [target, other] = observed.sites.as_slice() else {
+                    panic!(
+                        "I16 STOP: expected two actual index calls, found {}",
+                        observed.sites.len()
+                    );
+                };
+                let (donor, donor_kind) = match observed.same_graph_donors.first() {
+                    Some(donor) => (*donor, "same checked graph"),
+                    None => (control_donor, "separately checked handwritten control"),
+                };
+                assert_ne!(donor.implementation, target.implementation);
+                assert_ne!(
+                    donor.implementation.implementation(),
+                    target.implementation.implementation()
+                );
+                assert_ne!(donor.binder, target.binder);
+                assert_eq!(
+                    donor.binder.module(),
+                    Some(donor.implementation.implementation().module())
+                );
+                if observed.same_graph_donors.is_empty() {
+                    assert_ne!(
+                        donor.implementation.implementation().module(),
+                        target.implementation.implementation().module(),
+                        "the independent donor must retain its distinct module identity"
+                    );
+                }
+                assert_ne!(target.variable, other.variable);
+                assert_eq!(target.implementation, other.implementation);
+                assert_eq!(target.binder, other.binder);
+
+                let target_index = target.variable.index().expect("actual variable index");
+                let other_index = other.variable.index().expect("other variable index");
+                let application_index = target.application.index().expect("actual call index");
+                let application = match &program.nodes[application_index].kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                        application,
+                    ))) => *application,
+                    _ => panic!("I16 STOP: selected call is not an Apply"),
+                };
+                assert_eq!(application.function(), target.variable);
+                assert_eq!(application.argument(), target.argument);
+                let node = &program.nodes[target_index];
+                assert_eq!(
+                    node.origin.as_ref().map(Origin::primary_span),
+                    Some(target.span)
+                );
+                let before_type = node.ty.clone();
+                let before_effects = node.effects.clone();
+                let before_origin = node.origin.clone();
+                let before_dialect = node.dialect;
+                let original_registry = Arc::clone(&program.registry);
+                let original_catalog = Arc::clone(&program.method_evidence);
+                let original_owners = Arc::clone(&program.generated_parameter_anchors);
+                let original_anchors = program.method_evidence_anchors.as_ptr();
+                let original_anchor_count = program.method_evidence_anchors.len();
+                let original_root = program.root;
+                let original_arena = program.arena;
+                let original_node_count = program.nodes.len();
+                let variable_binders = |program: &UnvalidatedEffectProgram| {
+                    program
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, node)| match &node.kind {
+                            EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                                Some((index, variable.binder()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let before_binders = variable_binders(&program);
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &mut program.nodes[target_index].kind
+                else {
+                    panic!("I16 STOP: selected Apply.function is not a variable")
+                };
+                assert_eq!(variable.binder(), target.binder);
+                *variable = super::super::variable::VariableNode::new(donor.binder);
+                let after_binders = variable_binders(&program);
+                assert_eq!(before_binders.len(), after_binders.len());
+                let changed = before_binders
+                    .iter()
+                    .zip(&after_binders)
+                    .filter(|(before, after)| before != after)
+                    .map(|(before, after)| (*before, *after))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed,
+                    vec![((target_index, target.binder), (target_index, donor.binder))]
+                );
+                let node = &program.nodes[target_index];
+                assert_eq!(node.ty, before_type);
+                assert_eq!(node.effects, before_effects);
+                assert_eq!(node.origin, before_origin);
+                assert_eq!(node.dialect, before_dialect);
+                assert!(matches!(
+                    &program.nodes[other_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if variable.binder() == other.binder
+                ));
+                assert!(matches!(
+                    &program.nodes[application_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(actual)))
+                        if *actual == application
+                ));
+                assert_eq!(program.root, original_root);
+                assert_eq!(program.arena, original_arena);
+                assert_eq!(program.nodes.len(), original_node_count);
+                assert!(Arc::ptr_eq(&program.registry, &original_registry));
+                assert!(Arc::ptr_eq(&program.method_evidence, &original_catalog));
+                assert!(Arc::ptr_eq(
+                    &program.generated_parameter_anchors,
+                    &original_owners
+                ));
+                assert_eq!(program.method_evidence_anchors.as_ptr(), original_anchors);
+                assert_eq!(program.method_evidence_anchors.len(), original_anchor_count);
+                eprintln!("I16 original linked facts: {}", observed.report);
+                eprintln!(
+                    "I16 selected callee {target:?}; {donor_kind} donor {donor:?}; exactly one binder changed"
+                );
+
+                reached.set(true);
+                let result = validate_effect_modules_linked_with_work(
                     program,
                     sources,
                     relations,
                     linked,
                     &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
-                )
+                );
+                match &result {
+                    Ok(_) => eprintln!("I16 mutated Core was accepted"),
+                    Err(error) => eprintln!(
+                        "I16 mutated Core refused: reason={:?} node={:?} cause={:?}",
+                        error.reason(),
+                        error.node,
+                        error.cause_name()
+                    ),
+                }
+                result
             },
-        )
-        .expect("the unmodified original graph must independently validate");
-        assert_eq!(
-            crate::driver::execute(&compiled).unwrap().value_display(),
-            "42"
         );
-        let observed = inventory
-            .into_inner()
-            .expect("the actual linked validation callback must run")
-            .unwrap_or_else(|reason| {
-                panic!("I16 STOP: actual-site inventory unavailable: {reason}")
-            });
-        eprintln!("{}", observed.0);
         assert!(
-            observed.1 > 0,
-            "I16 STOP: the actual selected Indexed<Color> occurrence has no matching Core Adapter identity to mutate"
+            reached.get(),
+            "the actual selected call mutation must be reached"
+        );
+        assert!(
+            negative.is_err(),
+            "independent linked Core validation must reject the unrelated selected method binder"
         );
     }
 
