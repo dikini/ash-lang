@@ -17683,6 +17683,12 @@ pub(crate) fn generic_cell_source_fixture_for_test(
 pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
+pub(crate) use tests::{
+    exercise_restored_nominal_pair_mutation_for_image_test,
+    exercise_restored_owner_swap_for_image_test,
+};
+
+#[cfg(test)]
 mod tests {
 
     #[test]
@@ -33309,6 +33315,186 @@ mod tests {
                 Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
             }
             eprintln!("{name} preserved originals and rejected the owner swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_owner_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the restored original method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("one original interface parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("one original method-local Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("fixed canonical A");
+        let b = registry.type_variable(right).expect("fixed canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild restored original");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored Core validates");
+            let mut changed = rebuild().expect("rebuild restored Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut changed, left, right);
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .owner_signature(owner)
+                    .unwrap()
+                    .parameters
+                    .as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.registry.defining_owner_parameters(owner).unwrap()[0],
+                *b
+            );
+            let method = changed
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original owner comparison refuses the swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!("restored {name}: fixed original owners reject the coordinated active swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_nominal_pair_mutation_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the restored original nested pair");
+        assert_eq!(
+            pair.previous_source.range(),
+            ByteRange::new(35, 76).unwrap()
+        );
+        assert_ne!(pair.definition.source(), pair.source);
+        let source = sources
+            .iter()
+            .find(|source| source.id() == pair.source)
+            .unwrap();
+        let changed_span = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+        assert!(changed_span.range().start() >= pair.previous_source.range().start());
+        assert!(changed_span.range().end() <= pair.previous_source.range().end());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+            .expect("rebuild restored nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed_span,
+                )
+            );
+            let registry = changed.registry.as_ref();
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed_span && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed_span
+            )));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .err()
+                .expect("the restored fixed-original pair refuses");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "restored {name}: original nominal pair rejects the still-contained origin change"
+            );
         }
     }
 

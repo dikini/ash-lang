@@ -4919,6 +4919,67 @@ mod tests {
     }
 
     #[test]
+    fn checked_image_rejects_coordinated_restored_owner_swap() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        crate::core::validate::exercise_restored_owner_swap_for_image_test(
+            &restored.program,
+            &sources,
+            &module_sources,
+        );
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn checked_image_preserves_nested_nominal_pair_and_fixed_expectation() {
         let tree = SourceTree::new();
         for (name, source) in [
@@ -5001,6 +5062,21 @@ mod tests {
                 "42"
             );
         }
+        crate::core::validate::exercise_restored_nominal_pair_mutation_for_image_test(
+            &restored.program,
+            &sources,
+            &module_sources,
+        );
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
         let raw = image
             .restore_effect(&mut TypeWorkBudget::default())
             .unwrap();
