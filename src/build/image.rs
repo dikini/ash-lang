@@ -10311,6 +10311,7 @@ impl CheckedImageOwners<'_> {
         decoder: &mut Decoder<'_>,
         owner_index: usize,
     ) -> Result<ParameterBuffer, ImageFailure> {
+        charge(decoder.work, 1)?;
         let owner = *self
             .image
             .interface_owners
@@ -11684,9 +11685,11 @@ fn checked_method_inventory(
                     }
                     _ => return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
                 };
+                if canonical.kind != Kind::Type {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                }
                 if original.parameter.module() != Some(module.module)
                     || canonical.id != original.parameter
-                    || canonical.kind != Kind::Type
                     || original.expansion_primary != primary
                     || usize::try_from(slot.row).ok() != Some(row_index)
                     || usize::try_from(slot.slot).ok() != Some(ordinal)
