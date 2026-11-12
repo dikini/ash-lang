@@ -1797,17 +1797,29 @@ impl GeneratedParameterAnchors {
             module_sources,
             work,
         )?;
+        let mut order_count = 0usize;
+        for group in linked.groups() {
+            work.charge(1)
+                .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+            order_count = order_count
+                .checked_add(group.generated_parameter_orders().len())
+                .ok_or(OwnerAnchorPreparationError::Resource)?;
+        }
+        work.charge(
+            order_count
+                .checked_mul(3)
+                .ok_or(OwnerAnchorPreparationError::Resource)?,
+        )
+        .map_err(|()| OwnerAnchorPreparationError::Resource)?;
         let mut orders = crate::resolved::GeneratedParameterOrders::default();
+        orders
+            .try_reserve(order_count)
+            .map_err(|_| OwnerAnchorPreparationError::Resource)?;
         for group in linked.groups() {
             work.charge(1)
                 .map_err(|()| OwnerAnchorPreparationError::Resource)?;
             for (owner, order) in group.generated_parameter_orders() {
-                // Pay the lookup, possible growth and retained Arc before publication.
-                work.charge(3)
-                    .map_err(|()| OwnerAnchorPreparationError::Resource)?;
-                orders
-                    .try_reserve(1)
-                    .map_err(|_| OwnerAnchorPreparationError::Resource)?;
+                // The complete map allocation, lookup and each retained Arc were prepaid.
                 if owner.module() != group.module()
                     || orders.insert(*owner, Arc::clone(order)).is_some()
                 {

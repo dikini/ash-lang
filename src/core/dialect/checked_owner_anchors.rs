@@ -114,47 +114,76 @@ fn row(
     })
 }
 
-// Charge each comparison and move before inserting into already-reserved storage.
-fn insert_row(
-    rows: &mut Vec<OriginalOwnerRow>,
-    row: OriginalOwnerRow,
+// Sort a finite index with paid merge passes, then move the owned rows once.
+fn sorted_unique<T, K: Copy + Ord>(
+    items: Vec<T>,
+    key: impl Fn(&T) -> K,
     work: &mut TypeWorkBudget,
-) -> Result<(), PreparationError> {
-    let mut position = rows.len();
-    for (index, previous) in rows.iter().enumerate() {
+) -> Result<Vec<T>, PreparationError> {
+    let count = items.len();
+    if count < 2 {
+        charge(work, count)?;
+        return Ok(items);
+    }
+    charge(
+        work,
+        count.checked_mul(4).ok_or(PreparationError::Resource)?,
+    )?;
+    let mut order = Vec::new();
+    let mut scratch = Vec::new();
+    order
+        .try_reserve_exact(count)
+        .map_err(|_| PreparationError::Resource)?;
+    scratch
+        .try_reserve_exact(count)
+        .map_err(|_| PreparationError::Resource)?;
+    order.extend(0..count);
+    scratch.resize(count, 0);
+    let mut width = 1usize;
+    while width < count {
+        let mut start = 0usize;
+        while start < count {
+            let middle = start.saturating_add(width).min(count);
+            let end = middle.saturating_add(width).min(count);
+            let (mut left, mut right) = (start, middle);
+            for output in &mut scratch[start..end] {
+                charge(work, 1)?;
+                if right == end
+                    || (left < middle && key(&items[order[left]]) <= key(&items[order[right]]))
+                {
+                    *output = order[left];
+                    left += 1;
+                } else {
+                    *output = order[right];
+                    right += 1;
+                }
+            }
+            start = end;
+        }
+        std::mem::swap(&mut order, &mut scratch);
+        width = width.checked_mul(2).ok_or(PreparationError::Resource)?;
+    }
+    let mut owned = Vec::new();
+    let mut sorted = Vec::new();
+    owned
+        .try_reserve_exact(count)
+        .map_err(|_| PreparationError::Resource)?;
+    sorted
+        .try_reserve_exact(count)
+        .map_err(|_| PreparationError::Resource)?;
+    owned.extend(items.into_iter().map(Some));
+    let mut previous = None;
+    for index in order {
         charge(work, 1)?;
-        if previous.owner == row.owner {
+        let item = owned[index].take().ok_or(PreparationError::Invalid)?;
+        let current = key(&item);
+        if previous == Some(current) {
             return Err(PreparationError::Invalid);
         }
-        if previous.owner > row.owner {
-            position = index;
-            break;
-        }
+        previous = Some(current);
+        sorted.push(item);
     }
-    charge(work, rows.len() - position)?;
-    rows.insert(position, row);
-    Ok(())
-}
-
-fn insert_slot(
-    slots: &mut Vec<OriginalDeclaringSlot>,
-    slot: OriginalDeclaringSlot,
-    work: &mut TypeWorkBudget,
-) -> Result<(), PreparationError> {
-    let mut position = slots.len();
-    for (index, previous) in slots.iter().enumerate() {
-        charge(work, 1)?;
-        if previous.parameter == slot.parameter {
-            return Err(PreparationError::Invalid);
-        }
-        if previous.parameter > slot.parameter {
-            position = index;
-            break;
-        }
-    }
-    charge(work, slots.len() - position)?;
-    slots.insert(position, slot);
-    Ok(())
+    Ok(sorted)
 }
 
 impl CheckedOwnerOrders {
@@ -224,63 +253,55 @@ impl CheckedOwnerOrders {
                 .map_err(|_| PreparationError::Resource)?;
             let registry = linked.registry();
             for interface in group.interface_facts() {
+                charge(work, 1)?;
                 if interface.id.module() != module {
                     return Err(PreparationError::Invalid);
                 }
-                insert_row(
-                    &mut rows,
-                    row(
-                        OriginalOwner::Interface(interface.id),
-                        interface.parameters.iter().map(|parameter| parameter.id),
-                        module,
-                        source,
-                        registry,
-                        work,
-                    )?,
+                rows.push(row(
+                    OriginalOwner::Interface(interface.id),
+                    interface.parameters.iter().map(|parameter| parameter.id),
+                    module,
+                    source,
+                    registry,
                     work,
-                )?;
+                )?);
                 for method in &interface.methods {
+                    charge(work, 1)?;
                     if method.id.interface() != interface.id {
                         return Err(PreparationError::Invalid);
                     }
-                    insert_row(
-                        &mut rows,
-                        row(
-                            OriginalOwner::Method(method.id),
-                            method
-                                .authoritative_type_parameters()
-                                .iter()
-                                .map(|parameter| parameter.id),
-                            module,
-                            source,
-                            registry,
-                            work,
-                        )?,
-                        work,
-                    )?;
-                }
-            }
-            for scheme in group.schemes() {
-                if scheme.binder.module() != Some(module) {
-                    return Err(PreparationError::Invalid);
-                }
-                insert_row(
-                    &mut rows,
-                    row(
-                        OriginalOwner::Global(scheme.binder),
-                        scheme
-                            .scheme
-                            .type_parameters
+                    rows.push(row(
+                        OriginalOwner::Method(method.id),
+                        method
+                            .authoritative_type_parameters()
                             .iter()
-                            .map(|(parameter, _)| *parameter),
+                            .map(|parameter| parameter.id),
                         module,
                         source,
                         registry,
                         work,
-                    )?,
-                    work,
-                )?;
+                    )?);
+                }
             }
+            for scheme in group.schemes() {
+                charge(work, 1)?;
+                if scheme.binder.module() != Some(module) {
+                    return Err(PreparationError::Invalid);
+                }
+                rows.push(row(
+                    OriginalOwner::Global(scheme.binder),
+                    scheme
+                        .scheme
+                        .type_parameters
+                        .iter()
+                        .map(|(parameter, _)| *parameter),
+                    module,
+                    source,
+                    registry,
+                    work,
+                )?);
+            }
+            let rows = sorted_unique(rows, |entry| entry.owner, work)?;
 
             let mut slots = Vec::new();
             slots
@@ -289,41 +310,22 @@ impl CheckedOwnerOrders {
             for (row_index, owner) in rows.iter().enumerate() {
                 for (slot_index, parameter) in owner.parameters.iter().enumerate() {
                     charge(work, 1)?;
-                    insert_slot(
-                        &mut slots,
-                        OriginalDeclaringSlot {
-                            parameter: parameter.parameter,
-                            row: u32::try_from(row_index)
-                                .map_err(|_| PreparationError::Resource)?,
-                            slot: u32::try_from(slot_index)
-                                .map_err(|_| PreparationError::Resource)?,
-                        },
-                        work,
-                    )?;
+                    slots.push(OriginalDeclaringSlot {
+                        parameter: parameter.parameter,
+                        row: u32::try_from(row_index).map_err(|_| PreparationError::Resource)?,
+                        slot: u32::try_from(slot_index).map_err(|_| PreparationError::Resource)?,
+                    });
                 }
             }
-            let mut position = modules.len();
-            for (index, previous) in modules.iter().enumerate() {
-                charge(work, 1)?;
-                if previous.module == module {
-                    return Err(PreparationError::Invalid);
-                }
-                if previous.module > module {
-                    position = index;
-                    break;
-                }
-            }
-            charge(work, modules.len() - position)?;
-            modules.insert(
-                position,
-                OriginalModuleOwners {
-                    module,
-                    source,
-                    rows: rows.into_boxed_slice(),
-                    slots: slots.into_boxed_slice(),
-                },
-            );
+            let slots = sorted_unique(slots, |entry| entry.parameter, work)?;
+            modules.push(OriginalModuleOwners {
+                module,
+                source,
+                rows: rows.into_boxed_slice(),
+                slots: slots.into_boxed_slice(),
+            });
         }
+        let modules = sorted_unique(modules, |entry| entry.module, work)?;
         Ok(Self {
             modules: modules.into_boxed_slice(),
         })
