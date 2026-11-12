@@ -5818,6 +5818,265 @@ mod tests {
         hooks::reset();
     }
 
+    fn observe_caller_quote_roles(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{
+                SurfaceExprKind, SurfaceLocalDeclaration, SurfacePatternKind, SurfaceTypeKind,
+            },
+            syntax::MacroOutputNode,
+        };
+        if selection.declaration.name.text != "make" {
+            return;
+        }
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        let [MacroOutputNode::Expression(capture, _)] = output else {
+            panic!("one generated expression")
+        };
+        let SurfaceExprKind::Block(block) = &capture.expression.kind else {
+            panic!("combined quote block")
+        };
+        let [
+            SurfaceLocalDeclaration::Binding(boxed),
+            SurfaceLocalDeclaration::Binding(base),
+            SurfaceLocalDeclaration::Newtype(_),
+            SurfaceLocalDeclaration::Evidence(evidence),
+            SurfaceLocalDeclaration::Binding(request),
+        ] = block.declarations.as_slice()
+        else {
+            panic!("combined quote declarations")
+        };
+        let SurfaceTypeKind::Named(box_type) = &boxed.annotation.as_ref().unwrap().kind else {
+            panic!("written Box annotation")
+        };
+        let SurfacePatternKind::Binder(boxed_name) = &boxed.pattern.kind else {
+            panic!("boxed binder")
+        };
+        let SurfaceExprKind::Match(matching) = &base.initializer.kind else {
+            panic!("constructor match")
+        };
+        let SurfacePatternKind::Constructor {
+            name: constructor, ..
+        } = &matching.arms[0].pattern.kind
+        else {
+            panic!("Box pattern")
+        };
+        let SurfaceExprKind::Function(function) = &request.initializer.kind else {
+            panic!("effectful request function")
+        };
+        let SurfaceExprKind::Perform(performed) = &function.body.result.kind else {
+            panic!("effect request")
+        };
+        let SurfaceExprKind::Handle(handled) = &block.result.kind else {
+            panic!("effect handler")
+        };
+        let names = [
+            box_type.member(),
+            constructor.member(),
+            evidence.application.interface.member(),
+            performed.effect.member(),
+            handled.effect.effect.member(),
+            &boxed_name.name,
+        ];
+        assert_eq!(
+            names.map(|name| name.text.as_str()),
+            ["Box", "Box", "Read", "Ask", "Ask", "boxed"]
+        );
+        assert!(names.iter().all(|name| name.introduction != 0));
+        assert!(
+            names
+                .iter()
+                .all(|name| name.introduction == names[0].introduction)
+        );
+        CALLER_QUOTE_REFERENCES.with(|slot| {
+            slot.borrow_mut()
+                .extend(names.map(|name| (name.introduction, name.span)));
+        });
+    }
+
+    #[test]
+    fn caller_quote_roles_keep_fresh_contexts_and_api_identities() {
+        use crate::{
+            core::{
+                CorePatternKind, EffectExprKind, EffectOperation, PureComputation, PureExprKind,
+            },
+            eval::machine_test_hooks as hooks,
+            types::Type,
+        };
+        const CALLER: &str = r#"import forms (syntax make)
+import api (Box, Read, read, Ask)
+
+make starting_at syntax { {
+    let boxed : Box = Box(40)
+    let base = match boxed {
+        Box(value) => value
+    }
+    newtype Token = Token(Unit)
+    with Read<Token> {
+        read ignored = base + 2
+    }
+    let request : Unit -> Int ! {Ask} = fn(ignored) {
+        perform Ask.ask ()
+    }
+    handle (request ()) with Ask {
+        ask ignored => resume (read (Token(())))
+    }
+} } name one
+make starting_at syntax { {
+    let boxed : Box = Box(40)
+    let base = match boxed {
+        Box(value) => value
+    }
+    newtype Token = Token(Unit)
+    with Read<Token> {
+        read ignored = base + 2
+    }
+    let request : Unit -> Int ! {Ask} = fn(ignored) {
+        perform Ask.ask ()
+    }
+    handle (request ()) with Ask {
+        ask ignored => resume (read (Token(())))
+    }
+} } name two
+
+main : Unit -> Int
+main () = one(()) + two(())
+"#;
+        const FORMS: &str = "import @builtin.compiler.syntax as Syntax\n\necho : Syntax.ExpressionFragment -> (Syntax.ExpressionFragment, Syntax.ExpressionFragment)\necho state = (state, state)\n\npub syntax declaration: (make) starting_at $start:expr name $name:ident => {\n    pub $name : Unit -> Int\n    $name () = $next\n} with {\n    $next from $start step echo\n}\n";
+        const API: &str = "pub type Box = Box(Int)\n\npub interface Read<A> {\n    read : A -> Int\n}\n\npub effect Ask {\n    ask : Unit -> Int\n}\n";
+        let source = TestSource::write(CALLER);
+        source.write_sibling("forms.ash", FORMS);
+        source.write_sibling("api.ash", API);
+        hooks::reset();
+        CALLER_QUOTE_REFERENCES.with(|slot| slot.borrow_mut().clear());
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_caller_quote_roles));
+        let compiled =
+            compile_path(source.configuration()).expect("combined caller quotes compile");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let references =
+            CALLER_QUOTE_REFERENCES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(references.len(), 12);
+        let first = &references[..6];
+        let second = &references[6..];
+        assert_ne!(first[0].0, second[0].0);
+        assert!(first.iter().zip(second).all(|(a, b)| a.1 != b.1));
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("validated effect program");
+        let (api, _) = provenance
+            .iter()
+            .find(|(_, source)| source.display_path().ends_with("api.ash"))
+            .unwrap();
+        let caller = first[0].1.source();
+        let nominal = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == *api && nominal.spelling == "Box")
+            .expect("API Box nominal");
+        let constructor = program
+            .registry()
+            .constructors()
+            .iter()
+            .find(|constructor| constructor.owner == nominal.id && constructor.spelling == "Box")
+            .expect("API Box constructor")
+            .id;
+        let effect = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == *api && effect.spelling == "Ask")
+            .expect("API Ask effect");
+        let operation = effect
+            .operations
+            .iter()
+            .find(|operation| operation.spelling == "ask")
+            .unwrap()
+            .id;
+        let method = program
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| {
+                method.id.interface().module() == *api && method.spelling.as_ref() == "read"
+            })
+            .expect("API Read.read method")
+            .id;
+        let covers = |outer: crate::source::Span, inner: crate::source::Span| {
+            outer.source() == inner.source()
+                && outer.range().start() <= inner.range().start()
+                && outer.range().end() >= inner.range().end()
+        };
+        for observed in [first, second] {
+            assert!(
+                program.nodes().iter().any(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) =>
+                        covers(binding.binder().origin().primary_span(), observed[5].1)
+                            && binding.binder().ty() == &Type::Nominal(nominal.id),
+                    _ => false,
+                }),
+                "the quoted Box annotation retains the API nominal"
+            );
+            assert!(program.nodes().iter().any(|node| match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =>
+                    matching.arms().iter().any(|arm| {
+                        let pattern = arm.pattern();
+                        covers(pattern.origin.primary_span(), observed[1].1)
+                            && matches!(pattern.kind, CorePatternKind::Constructor { constructor: id, .. } if id == constructor)
+                    }),
+                _ => false,
+            }), "the quoted pattern retains the API constructor");
+            assert!(
+                program.nodes().iter().any(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Request(request)) =>
+                        covers(node.origin.primary_span(), observed[3].1)
+                            && request.effect().effect() == effect.id
+                            && request.operation() == operation,
+                    _ => false,
+                }),
+                "the quoted request retains the API effect and operation"
+            );
+            assert!(
+                program.nodes().iter().any(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Handler(handler)) =>
+                        covers(node.origin.primary_span(), observed[4].1)
+                            && handler.effect().effect() == effect.id,
+                    _ => false,
+                }),
+                "the quoted handler retains the API effect"
+            );
+        }
+        let caller_module = provenance
+            .iter()
+            .find(|(_, source)| source.id() == caller)
+            .unwrap()
+            .0;
+        let lexical = program
+            .method_evidence()
+            .lexical_owners()
+            .iter()
+            .filter(|owner| {
+                owner.source.module() == caller_module
+                    && owner.method == method
+                    && owner.application.interface() == method.interface()
+            })
+            .count();
+        assert_eq!(
+            lexical, 2,
+            "both quoted lexical evidence owners use the API Read method"
+        );
+        assert_eq!(execute(&compiled).unwrap().value_display(), "84");
+        assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
     fn observe_generator_owner(
         owner: &crate::resolved::CheckedModule,
         plan: &crate::syntax::GeneratorPlan,
