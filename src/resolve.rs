@@ -2800,9 +2800,10 @@ fn prepay_diagnostic_location(
     Ok(())
 }
 
-fn validate_newtype_shape(
-    declaration: &SurfaceTypeDeclaration,
-) -> Result<(&SurfaceConstructorDeclaration, &SurfaceType), ResolveError> {
+fn validate_newtype_shape<'a>(
+    declaration: &'a SurfaceTypeDeclaration,
+    work: &mut TypeWorkBudget,
+) -> Result<(&'a SurfaceConstructorDeclaration, &'a SurfaceType), ResolveError> {
     let [constructor] = declaration.constructors.as_slice() else {
         return Err(error(
             ResolveReason::InternalState,
@@ -2826,17 +2827,31 @@ fn validate_newtype_shape(
         }));
     };
     if constructor.name.text != declaration.name.text {
+        prepay_diagnostic_location(
+            work,
+            constructor.name.diagnostic.as_deref(),
+            constructor.name.span,
+        )?;
+        prepay_diagnostic_location(
+            work,
+            declaration.name.diagnostic.as_deref(),
+            declaration.name.span,
+        )?;
         let mut diagnostic = Diagnostic::new(
             ResolveReason::NewtypeConstructorName,
             SourceLabel::new(
                 constructor.name.span,
                 "this newtype constructor must use the nominal type's spelling",
-            ),
+            )
+            .with_location_preserving_span(constructor.name.diagnostic.as_deref()),
         );
-        diagnostic.related.push(SourceLabel::new(
-            declaration.name.span,
-            "this nominal declaration defines the required spelling",
-        ));
+        diagnostic.related.push(
+            SourceLabel::new(
+                declaration.name.span,
+                "this nominal declaration defines the required spelling",
+            )
+            .with_location_preserving_span(declaration.name.diagnostic.as_deref()),
+        );
         diagnostic.expected = Some(declaration.name.text.clone());
         diagnostic.found = Some(constructor.name.text.clone());
         return Err(diagnostic.into());
@@ -3214,7 +3229,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn validate_local_namespaces(&self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+    fn validate_local_namespaces(&mut self, surface: &SurfaceModule) -> Result<(), ResolveError> {
         let mut type_names: HashMap<&str, (&SurfaceName, LocalTypeDeclarationKind)> =
             HashMap::new();
         let mut term_names: HashMap<&str, (&SurfaceName, Option<crate::source::Span>)> =
@@ -3308,18 +3323,32 @@ impl Resolver<'_, '_> {
                     let mut operations = HashMap::new();
                     for operation in &declaration.operations {
                         if let Some(first) =
-                            operations.insert(&operation.name.text, operation.name.span)
+                            operations.insert(&operation.name.text, &operation.name)
                         {
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                operation.name.diagnostic.as_deref(),
+                                operation.name.span,
+                            )?;
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                first.diagnostic.as_deref(),
+                                first.span,
+                            )?;
                             let mut diagnostic = Diagnostic::new(
                                 ResolveReason::DuplicateGlobal,
                                 SourceLabel::new(
                                     operation.name.span,
                                     "this effect operation is already declared",
+                                )
+                                .with_location_preserving_span(
+                                    operation.name.diagnostic.as_deref(),
                                 ),
                             );
-                            diagnostic
-                                .related
-                                .push(SourceLabel::new(first, "the first operation is here"));
+                            diagnostic.related.push(
+                                SourceLabel::new(first.span, "the first operation is here")
+                                    .with_location_preserving_span(first.diagnostic.as_deref()),
+                            );
                             diagnostic.found = Some(operation.name.text.clone());
                             return Err(diagnostic.into());
                         }
@@ -8613,12 +8642,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this qualified nominal type is not available in the syntax context",
+                        &name.member,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(&name.member, &self.diagnostic_frames)
                 });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8661,12 +8693,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this nominal type is not declared in the syntax context",
+                        name,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(name, &self.diagnostic_frames)
                 });
         }
         if self.interface_names.contains_key(&name.text) {
@@ -9382,12 +9417,15 @@ impl Resolver<'_, '_> {
                 ))
                 .copied();
             return selected.ok_or_else(|| {
-                error(
+                contextual_unknown_name(
                     ResolveReason::UnknownConstructor,
+                    ResolveContext::Constructor,
                     member.span,
                     "this constructor is not exported through the syntax owner's alias",
+                    member,
+                    &self.diagnostic_frames,
+                    &mut self.type_work,
                 )
-                .with_name(member, &self.diagnostic_frames)
             });
         }
         let mut checked_contextual_lexical = false;
@@ -9407,12 +9445,15 @@ impl Resolver<'_, '_> {
                     .get(&(member.text.clone(), member.introduction))
                     .copied()
                     .ok_or_else(|| {
-                        error(
+                        contextual_unknown_name(
                             ResolveReason::UnknownConstructor,
+                            ResolveContext::Constructor,
                             member.span,
                             "this constructor is not declared in the syntax owner",
+                            member,
+                            &self.diagnostic_frames,
+                            &mut self.type_work,
                         )
-                        .with_name(member, &self.diagnostic_frames)
                     });
             }
             checked_contextual_lexical = true;
@@ -10917,7 +10958,7 @@ impl Resolver<'_, '_> {
         let mut introduced_anchor = None;
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
-                let _ = validate_newtype_shape(declaration)?;
+                let _ = validate_newtype_shape(declaration, &mut self.type_work)?;
             }
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
@@ -11149,7 +11190,8 @@ impl Resolver<'_, '_> {
                 problem: "wrong",
             }));
         }
-        let (constructor, representation) = validate_newtype_shape(declaration)?;
+        let (constructor, representation) =
+            validate_newtype_shape(declaration, &mut self.type_work)?;
 
         let parameters = self.allocate_nominal_type_parameters(declaration)?;
         let type_scope_checkpoint = self.type_scopes.len();
@@ -16600,6 +16642,28 @@ fn kind_context_error(
 
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
+}
+
+fn contextual_unknown_name(
+    reason: ResolveReason,
+    context: ResolveContext,
+    span: Span,
+    message: &str,
+    name: &SurfaceName,
+    frames: &[Arc<crate::syntax::ExpansionFrame>],
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "contextual name diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(ResolveReason::TypeResourceExhausted, span, RESOURCE_MESSAGE);
+    }
+    let found = match try_clone_resolution_string(&name.text, span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    diagnostic.found = Some(found);
+    ResolveError::new(diagnostic, Some(context)).with_name(name, frames)
 }
 
 pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
