@@ -1627,6 +1627,7 @@ impl<'inv> SyntaxHost<'inv> {
             let type_accounting = self.type_accounting
                 || !self.types.is_empty()
                 || !self.patterns.is_empty()
+                || (self.syntax_work.is_some() && !self.declarations.is_empty())
                 || (self.syntax_work.is_some() && !self.expressions.is_empty());
             return self
                 .transfer_syntax_inner(
@@ -1813,11 +1814,12 @@ impl<'inv> SyntaxHost<'inv> {
                     else {
                         return Err(RuntimeFailure::InvalidControlState);
                     };
-                    let capture = self
-                        .declarations
-                        .get(index)
-                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    if self.declarations.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.declarations[index];
                     let budget = self
                         .syntax_work
                         .as_deref_mut()
@@ -1826,7 +1828,6 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge_units(2).map_err(syntax_failure)?; // retained Arc and output slot
                     reserve_type_push(&mut output, Some(budget), true)?;
                     let capture = capture.clone();
-                    let origin = self.copy_origin(origin, prefix)?;
                     output.push(MacroOutputNode::ForwardedDeclaration(capture, origin));
                     nodes = rest;
                     continue;

@@ -4712,6 +4712,7 @@ fn validate_template_syntax_inner(
     let mut contents = template.to_vec();
     let mut loan = admission_budget.as_deref_mut();
     let placeholders = loan.as_ref().map(|_| &mut identifiers);
+    let mut escape_placeholders = Vec::new();
     substitute_contents_at(
         &mut contents,
         matcher,
@@ -4724,6 +4725,7 @@ fn validate_template_syntax_inner(
         None,
         declaration.template_escapes.as_ref(),
         placeholders,
+        Some(&mut escape_placeholders),
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     match declaration.category {
@@ -4741,6 +4743,62 @@ fn validate_template_syntax_inner(
             let budget = admission_budget
                 .as_mut()
                 .expect("declaration admission owns its budget");
+            // A complete-line escape can produce a declaration. Its result
+            // category is known only after ordinary checking, so use an
+            // admission-only declaration placeholder at this position. The
+            // actual returned fragment is still parsed at invocation.
+            for index in 0..contents.len() {
+                budget.charge().map_err(resource)?;
+                let line_start = index == 0
+                    || matches!(
+                        contents.get(index - 1),
+                        Some(MacroOutputNode::Token(
+                            crate::lexer::TokenKind::LineEnd,
+                            _,
+                            _
+                        ))
+                    );
+                let line_end = index + 1 == contents.len()
+                    || matches!(
+                        contents.get(index + 1),
+                        Some(MacroOutputNode::Token(
+                            crate::lexer::TokenKind::LineEnd,
+                            _,
+                            _
+                        ))
+                    );
+                if !line_start || !line_end {
+                    continue;
+                }
+                let Some(MacroOutputNode::Identifier(name, _)) = contents.get(index) else {
+                    continue;
+                };
+                let mut admitted = false;
+                for placeholder in &escape_placeholders {
+                    budget
+                        .charge_units(
+                            name.text
+                                .len()
+                                .min(placeholder.text.len())
+                                .saturating_add(1),
+                        )
+                        .map_err(resource)?;
+                    if name == placeholder {
+                        admitted = true;
+                        break;
+                    }
+                }
+                if admitted {
+                    let span = name.span;
+                    budget.charge_units(2).map_err(resource)?;
+                    contents[index] = MacroOutputNode::ForwardedDeclaration(
+                        crate::surface::SurfaceDeclarationCapture {
+                            contents: Arc::from([]),
+                        },
+                        span.into(),
+                    );
+                }
+            }
             normalize_declaration_line_ends(&mut contents, budget).map_err(resource)?;
             if declaration.contains_quote_or_escape {
                 crate::parser::parse_quote_declaration_template_admission(
@@ -6184,6 +6242,7 @@ pub(crate) fn prepare_generator_template(
         Some(&mut planner),
         selection.declaration.template_escapes.as_ref(),
         None,
+        None,
     )
     .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     Ok((output, planner.plan))
@@ -6249,6 +6308,7 @@ pub(crate) fn substitute_contents(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -6285,6 +6345,7 @@ fn substitute_contents_at(
     mut generator: Option<&mut GeneratorPlanner>,
     escapes: Option<&Arc<[crate::surface::SurfaceTemplateEscape]>>,
     mut admission_identifiers: Option<&mut Vec<SurfaceName>>,
+    mut escape_placeholders: Option<&mut Vec<SurfaceName>>,
 ) -> Result<(), TemplateSubstitutionFailure> {
     let mut position = 0;
     while position < contents.len() {
@@ -6348,6 +6409,7 @@ fn substitute_contents_at(
                     generator.as_deref_mut(),
                     escapes,
                     admission_identifiers.as_deref_mut(),
+                    escape_placeholders.as_deref_mut(),
                 )?;
                 if let Some(saved) = saved {
                     generator
@@ -6461,6 +6523,7 @@ fn substitute_contents_at(
                     generator.as_deref_mut(),
                     escapes,
                     admission_identifiers.as_deref_mut(),
+                    escape_placeholders.as_deref_mut(),
                 )?;
             }
             MacroOutputNode::TemplateEscape(name) => {
@@ -6516,6 +6579,18 @@ fn substitute_contents_at(
                     diagnostic: None,
                 };
                 identifiers.push(placeholder.clone());
+                if let Some(escapes) = escape_placeholders.as_deref_mut() {
+                    charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
+                    if escapes.len() == escapes.capacity() {
+                        budget
+                            .charge_units(escapes.len().saturating_mul(2).saturating_add(1))
+                            .map_err(resource)?;
+                        escapes.reserve_exact(1);
+                    } else {
+                        budget.charge().map_err(resource)?;
+                    }
+                    escapes.push(placeholder.clone());
+                }
                 *node = MacroOutputNode::Identifier(placeholder, span.into());
             }
             MacroOutputNode::TemplateRepeat(repeat) => {
