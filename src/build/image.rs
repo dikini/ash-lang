@@ -5141,7 +5141,14 @@ mod tests {
             .unwrap();
         drop(build);
         drop(sources);
-        drop(compiled);
+        // This is the final owner of the original compiled foreign registry;
+        // the image has not yet been restored into a separate program.
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || drop(compiled))
+            .unwrap()
+            .join()
+            .unwrap();
         drop(tree);
 
         let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
@@ -5191,12 +5198,11 @@ mod tests {
     #[test]
     fn foreign_symbol_captured_after_introduction_keeps_original_context() {
         let tree = SourceTree::new();
+        let outer_source = "import inner (syntax inner)\npub syntax declaration: (outer) => {\n    inner Other\n}\n";
+        let entry_source = "import outer (syntax outer)\nouter\nmain : Unit -> Int\nmain () = 42\n";
         tree.write("inner.ash", "import @builtin.foreign as F\npub syntax declaration: (inner) $S:ident => {\n    pub foreign library Fixture {\n        profile \"x86_64-unknown-linux-gnu\"\n        symbol $S : Unit -> F.Address { name \"fixture_other\" }\n    }\n}\n");
-        tree.write("outer.ash", "import inner (syntax inner)\npub syntax declaration: (outer) => {\n    inner Other\n}\n");
-        tree.write(
-            "entry.ash",
-            "import outer (syntax outer)\nouter\nmain : Unit -> Int\nmain () = 42\n",
-        );
+        tree.write("outer.ash", outer_source);
+        tree.write("entry.ash", entry_source);
         let compiled = compile_path(tree.configuration()).unwrap();
         assert_eq!(
             crate::driver::execute(&compiled).unwrap().value_display(),
@@ -5217,17 +5223,43 @@ mod tests {
         else {
             panic!("the already-introduced captured symbol must retain its own direct expansion")
         };
-        let text = |span: Span| {
+        let location = |span: Span| {
             let source = provenance
                 .iter()
                 .find(|(_, source)| source.id() == span.source())
                 .unwrap()
                 .1
                 .as_ref();
-            source.text()[span.range().start() as usize..span.range().end() as usize].to_owned()
+            (
+                source.display_path().to_owned(),
+                span.range().start() as usize,
+                span.range().end() as usize,
+                source.text()[span.range().start() as usize..span.range().end() as usize]
+                    .to_owned(),
+            )
         };
-        assert_eq!(text(invocation), "outer");
-        assert_eq!(text(definition), "Other");
+        let invocation_location = location(invocation);
+        let definition_location = location(definition);
+        let invocation_start = entry_source.find("\nouter\n").unwrap() + 1;
+        let definition_start = outer_source.find("inner Other").unwrap() + "inner ".len();
+        assert!(invocation_location.0.ends_with("/entry.ash"));
+        assert_eq!(
+            (
+                invocation_location.1,
+                invocation_location.2,
+                invocation_location.3.as_str()
+            ),
+            (invocation_start, invocation_start + "outer".len(), "outer")
+        );
+        assert!(definition_location.0.ends_with("/outer.ash"));
+        assert_eq!(
+            (
+                definition_location.1,
+                definition_location.2,
+                definition_location.3.as_str()
+            ),
+            (definition_start, definition_start + "Other".len(), "Other")
+        );
         assert_ne!(invocation.source(), definition.source());
         assert_eq!(operation.id.owner(), effect.id);
         assert_eq!(operation.id.operation(), 0);
@@ -5240,6 +5272,61 @@ mod tests {
                 .same_source_provenance(effect, &mut TypeWorkBudget::default())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn ordinary_generated_and_handwritten_operations_keep_source_origins() {
+        for generated in [false, true] {
+            let tree = SourceTree::new();
+            tree.write(
+                "extra_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/declarations/extra_forms.ash"),
+            );
+            tree.write(
+                "entry.ash",
+                if generated {
+                    include_str!("../../docs/design/macros/fixtures/declarations/operations.ash")
+                } else {
+                    include_str!(
+                        "../../docs/design/macros/fixtures/declarations/control_operations.ash"
+                    )
+                },
+            );
+            let compiled = compile_path(tree.configuration()).unwrap();
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let effect = program
+                .registry()
+                .effects()
+                .iter()
+                .find(|effect| effect.spelling == "Ask")
+                .unwrap();
+            assert!(effect.native_contract.is_none());
+            assert_eq!(effect.operations.len(), 2);
+            for (ordinal, (operation, spelling)) in
+                effect.operations.iter().zip(["left", "right"]).enumerate()
+            {
+                assert_eq!(operation.spelling, spelling);
+                assert_eq!(operation.id.owner(), effect.id);
+                assert_eq!(operation.id.operation(), ordinal as u32);
+                let Origin::Source(span) = operation.origin else {
+                    panic!("ordinary operations retain Source")
+                };
+                let source = provenance
+                    .iter()
+                    .find(|(_, source)| source.id() == span.source())
+                    .unwrap()
+                    .1
+                    .as_ref();
+                assert_eq!(
+                    &source.text()[span.range().start() as usize..span.range().end() as usize],
+                    spelling
+                );
+            }
+        }
     }
 
     // This covers the newly supported declaration metadata, without claiming

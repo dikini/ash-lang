@@ -158,17 +158,36 @@ wrappers.
 The original G/E criteria and I01–I22 corpus remain at their named gates.
 [#303](https://github.com/dikini/ash-lang/issues/303) records the independent
 Core parameter-order boundary; [#314](https://github.com/dikini/ash-lang/issues/314)
-records the distinct unequal nominal-origin overlap. Neither is repaired by the
-caller-quote candidate. The bounded #303 repair and retention have been
-authorized for later work. #304 and #310 retain their partial issue records.
+records the distinct unequal nominal-origin overlap. Their bounded repairs and
+retention were separately authorized and are being delivered together with the
+authorized Method-local image repair [#319](https://github.com/dikini/ash-lang/issues/319)
+and Foreign symbol origin repair [#320](https://github.com/dikini/ash-lang/issues/320).
+The candidate retains checked original owner and nominal-pair facts across
+validation and the supported image path; its original examples and focused
+mutation controls have been exercised. Review, native execution, retention and
+acceptance remain gates. #304 and #310 retain their partial issue records until
+their complete original criteria are independently verified on the retained result.
+
+For #303 and #319 the user approved a supported-image proof amendment. The
+original concrete method and handwritten control still run to 42 and the actual
+Core-use mutation remains a refusal. A concrete method implementation remains
+unsupported by the existing MethodEvidence image boundary; the supported image
+case instead uses a genuine declaration-only Interface and Method-local owner.
+No concrete implementation or adaptor preservation after image restore is claimed.
+
 G7 [#245](https://github.com/dikini/ash-lang/issues/245) remains open because
 the original diverging generator diagnostic omits the actual step-function
 origin; [#317](https://github.com/dikini/ash-lang/issues/317) records that
-separate downstream boundary. Its native G4, G5, G6 and E5 successors remain
+separate downstream boundary. Only a later bounded #317 experiment is authorized;
+its repair and retention are not. Its native G4, G5, G6 and E5 successors remain
 at their original gates. Public publication H4
-[#233](https://github.com/dikini/ash-lang/issues/233) awaits this candidate's
-retention and acceptance; H6 [#237](https://github.com/dikini/ash-lang/issues/237)
-remains open. V1's I03 relation path remains subject to #303.
+[#233](https://github.com/dikini/ash-lang/issues/233) was retained and accepted;
+H6 [#237](https://github.com/dikini/ash-lang/issues/237) remains open pending
+its complete original matrix on the retained successor. V1 remains open for its
+full original criteria, including the distinct diagnostic gaps in
+[#313](https://github.com/dikini/ash-lang/issues/313),
+[#321](https://github.com/dikini/ash-lang/issues/321) and
+[#322](https://github.com/dikini/ash-lang/issues/322).
 
 Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
 V8 retained equality and acceptance remain required. The last full workspace
