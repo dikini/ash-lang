@@ -126,10 +126,36 @@ definition is admitted; unequal live drivers reject the invocation. Failure
 publishes no partial expansion. Completed output is handed to the existing
 module declaration parser without re-lexing generated text.
 
-Structured repetition currently applies to declarative declaration templates.
-Generator clauses, per-iteration escapes, and the remaining procedural repeated
-capture paths are still under development. See the
-[declaration grammar](../docs/design/macros/declaration-grammar.md) for the
+An imported declaration syntax template or one of its repetitions can have
+a `with` clause.
+Each binding has the form `$number from 0 step next_number`. Generator names
+are unique among the macro's generator and matcher-capture names. A generator
+does not drive a template repetition. Its seed is an ordinary expression that
+may splice an expression capture available at the clause's repetition depth.
+Definition-written references use the checked defining environment. A captured
+expression keeps its caller context; its available compile-time environment
+includes checked imports, but not calling-module globals unavailable during
+expansion. Caller-written quoted seeds with surviving caller contexts still
+have an incomplete consumer, tracked in [#312](https://github.com/dikini/ash-lang/issues/312).
+
+For an expression splice, the step is an ordinary function of type
+`State -> (State, Syntax.ExpressionFragment)`. It receives the current state
+and returns the next state and a fragment. Ordinary checking relates the step
+input, returned state and fragment, including for a zero-iteration repetition;
+where the seed expression is available, ordinary checking also relates it to
+the state. Output is admitted and checked at its actual position.
+
+A whole-template clause creates one instance of each generator per invocation;
+a repetition clause creates one instance for each of its iterations. Seeds
+are evaluated on entry in binding source order. The first read in a template
+or repetition iteration calls the step and caches its fragment; later reads in
+that iteration reuse it. Nested iterations use their own cached values, and
+returning to an outer iteration restores its value. An unused generator is not
+stepped. A zero-iteration repetition creates no instance owned by that
+repetition and evaluates neither that instance's seed nor its step.
+
+The remaining procedural repeated-capture paths are under development. The
+[declaration grammar](../docs/design/macros/declaration-grammar.md) records the
 accepted wider design.
 
 ## Derive syntax
@@ -141,7 +167,8 @@ ordinary lowercase identifier; the reserved-word metaname allowance for
 declaration matchers does not extend to derive bindings. A deriving clause on
 the next logical line after a top-level `type` or `newtype` lists one or more
 imported derive names, with an optional trailing comma. `derive` and
-`deriving` remain contextual identifiers outside these forms.
+`deriving` remain contextual identifiers outside these forms. Generator
+clauses on derive templates remain under development.
 
 Each listed derive receives the same complete original subject, including its
 deriving clause. A template's optional binding names the subject. A checked
@@ -172,17 +199,27 @@ A quotation requires an active compile-time syntax host when it is evaluated.
 Reaching one during ordinary runtime execution fails rather than publishing an
 internal fragment representation.
 
-A declaration template can contain `${ expression }` or a multiline escaped
-block. The escaped code runs during expansion and its `ExpressionFragment`
-result is inserted as protected syntax for ordinary admission and checking.
-An escaped expression fragment in a type position is rejected by syntax
-admission. A procedural expression transformer can return the token and group
-view of a quoted capture for reparsing; the tokens retain their syntax contexts
-and origins. Direct forwarding of a protected quoted expression remains under
-development. The currently connected escape path covers escaped code that does
-not read matcher captures. Capture reads in escaped code, per-iteration escapes,
-and generators in [CP-0034](../docs/proposals/CP-0034-top-level-declaration-macros.md)
-remain under development.
+An imported declaration syntax template can contain `${ expression }` or a
+multiline escaped block. Inside the escaped code, `$name` reads an in-scope
+matcher capture or generator value. Within a repetition it reads the current
+selected element; helpers receive these values through ordinary explicit
+arguments. Quotation holes inside escaped code refer to ordinary Ash variables.
+
+An escape can produce `Syntax.ExpressionFragment`, `Syntax.TypeFragment`,
+`Syntax.PatternFragment`, `Syntax.DeclarationFragment`, or the
+`(Syntax.Identifier, Syntax.Origin)` pair. The resulting syntax keeps its
+category, context and origin and is admitted and checked at its output
+position. For example, an expression fragment in a type position is rejected
+by syntax admission. Primitive values are not implicitly converted to syntax;
+diagnostics for other unclassified result types remain under development.
+Escapes in a repeated template run for reached iterations; an empty repetition
+does not evaluate its body. Failures publish no partial expansion.
+
+A procedural expression transformer can return the token and group view of a
+quoted capture for reparsing, preserving contexts and origins. The supported
+protected quote round trip retains the original syntax boundary. The
+caller-owned quote consumer described above remains incomplete; these cases do
+not establish every nested syntax or name role.
 
 ## Names and hygiene
 
@@ -228,6 +265,14 @@ not import the defining module's implementation evidence into the caller.
 Ordinary caller and lexical evidence selection applies. Handler and
 continuation capabilities likewise follow the actual expanded structure;
 spelling and origins do not install a capability.
+
+An introduced implementation method head first uses the binding in its
+authenticated syntax context. A bound method keeps its exact identity, and
+ordinary interface-membership checking applies; a bound non-method does not
+select an interface method. Only when that complete context has no term
+binding may the head select the same-named member of the implemented
+interface. An unavailable context is not an unbound context. Ordinary source
+method heads retain their existing rules.
 
 ## Canonical syntax interface
 

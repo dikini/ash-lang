@@ -55,6 +55,9 @@ cases, prerequisites and hard boundaries.
 
 ### Do not do
 
+Separately approved downstream repairs have their own reviewed scope and
+evidence. They do not relax these boundaries for other work.
+
 - Do not add or change downstream type checking, inference, semantic checking,
   name resolution, elaboration, publication rules or Core validation. Ordinary
   compiler stages check generated code and report its errors. Preserve spans,
@@ -83,6 +86,47 @@ effort or grant partial acceptance credit. Earlier
 partial-delivery records below describe their state at the time and are
 superseded where the later retained checkpoints say so.
 
+### Generator, escape, checked-capture, and downstream candidate
+
+**Candidate:** Local candidate `99e8e6d36683700d8c27d10ecac11927fc37f518`
+connects declaration generators, selected capture reads in escaped code, and
+the reached checked-capture fact handoff. It also includes the separately
+approved private effect-syntax provenance work for
+[#304](https://github.com/dikini/ash-lang/issues/304) and authenticated
+implementation method-head rule for
+[#310](https://github.com/dikini/ash-lang/issues/310). Private effect
+coordinates are taken from the admitted defining module and authenticated
+when retained facts are consumed; they do not grant source visibility.
+
+The original full I17 and I22 matrices ran on a production-equivalent
+candidate, and focused lifetime, privacy, identity and resource controls ran
+at `99e8e6d3`. Matching native builds of an original generator library and an
+original escape library, each with a separate importer, returned 310 and 246
+after their copied source paths were moved. These are candidate observations,
+not retained acceptance or the full V3 and V7 gates. The original #304 effect
+graph reaches the parameter-order guard tracked by
+[#303](https://github.com/dikini/ash-lang/issues/303); the original #310 nested
+derive reaches the separate unequal nominal-overlap guard tracked by
+[#314](https://github.com/dikini/ash-lang/issues/314).
+
+**Remaining:** Complete the original G/E criteria and the connected public
+corpus at their named gates. The focused E3
+[#246](https://github.com/dikini/ash-lang/issues/246) and checked-capture
+[#311](https://github.com/dikini/ash-lang/issues/311) criteria have candidate
+evidence awaiting retained acceptance. The bounded caller-owned quotation
+repair in [#312](https://github.com/dikini/ash-lang/issues/312) is separately
+authorized for subsequent work; its experiment is not on this candidate. #303
+and #314 remain separate downstream boundaries.
+
+**Awaiting:** The coherent PR, final integrated review and QA, V2/V3 and
+documentation gates, the fresh full V7 workspace gate, and V8 retained
+equality and acceptance readback. The last full workspace checkpoint was E4 at
+`17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`. No Main merge is part of this
+candidate.
+
+**Owner:** The developer owns the candidate and evidence; independent QA and
+review own their assessments; the orchestrator owns integration and acceptance.
+
 ### Later retained acceptances
 
 - D2 [#216](https://github.com/dikini/ash-lang/issues/216), D7
@@ -96,8 +140,11 @@ superseded where the later retained checkpoints say so.
   original focused context and refusal criteria using retained evidence and D8.
 - E4 [#242](https://github.com/dikini/ash-lang/issues/242) is closed after the
   independently reviewed E4 checkpoint and the retained PR #298 tree above.
-  E1 [#226](https://github.com/dikini/ash-lang/issues/226) and E2
-  [#239](https://github.com/dikini/ash-lang/issues/239) remain partial.
+  E1 [#226](https://github.com/dikini/ash-lang/issues/226) is closed on its
+  focused parsing and admission criteria after
+  [PR #307](https://github.com/dikini/ash-lang/pull/307), retained at
+  `f26860994b947a5899518b9ce9343ecf61b174fe`. E2
+  [#239](https://github.com/dikini/ash-lang/issues/239) remains partial.
 - S3 [#221](https://github.com/dikini/ash-lang/issues/221) is closed on its
   original focused host-transfer criteria. The exact I16 mutation and other
   later connected cases remain at their original gates.
@@ -106,9 +153,10 @@ superseded where the later retained checkpoints say so.
   [#223](https://github.com/dikini/ash-lang/issues/223), and G1
   [#228](https://github.com/dikini/ash-lang/issues/228) are closed on their
   original focused criteria after the I19 delivery and independent readback.
-  G2 [#231](https://github.com/dikini/ash-lang/issues/231) remains open: its
-  delivered scope is held on D6 [#219](https://github.com/dikini/ash-lang/issues/219),
-  which still needs the checked procedural transformer Import-output refusal.
+  D6 [#219](https://github.com/dikini/ash-lang/issues/219) and G2
+  [#231](https://github.com/dikini/ash-lang/issues/231) subsequently closed
+  on their focused criteria after PR #307. Other connected declaration,
+  repetition and generator graphs remain at their original gates.
 
 ### Introduced module-identity candidate
 

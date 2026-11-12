@@ -483,9 +483,11 @@ Aliases, targeted renames, and alternate routes never participate in these
 identities. Every interface, method, effect, operation, implementation,
 implementation method, requirement, and hidden implementation-method binder is
 allocated before a global or implementation-method body is resolved. An
-implementation method head resolves its spelling to the interface's `MethodId`;
-it does not introduce a lexical term binding. The hidden binder names the
-checked method body for later compiler phases, not for Ash source.
+implementation method head selects a `MethodId` without introducing a lexical
+term binding. An introduced head uses its authenticated syntax context as
+described in [names and hygiene](syntax-expansion.md#names-and-hygiene). The
+hidden binder names the checked method body for later compiler phases, not for
+Ash source.
 
 An interface application is valid in a constraint, implementation head, or
 local evidence header.
