@@ -107,6 +107,22 @@ fn constructed_quote_declarations_survive_targeted_syntax_imports() {
 }
 
 #[test]
+fn ordinary_transformers_can_call_handwritten_and_constructed_quotes() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/quote-constructed");
+    for entry in ["control_main.ash", "implicit_main.ash", "explicit_main.ash"] {
+        let program = compile_path(RunConfiguration {
+            entry: directory.join(entry),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+        let result = execute(&program).unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+        assert_eq!(result.value_display(), "42", "{entry}");
+        assert_eq!(result.type_display(), "Int", "{entry}");
+    }
+}
+
+#[test]
 fn expression_quotes_parse_as_primaries_without_resolving_holes() {
     let (source, tree) =
         parse_source("probe : Unit -> Unit\nprobe () = consume(syntax { $fragment + 1 })\n");

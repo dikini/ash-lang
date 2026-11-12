@@ -6084,6 +6084,41 @@ mod tests {
         definitions: Vec<(String, bool, bool, Vec<(usize, usize, bool, String)>)>,
     }
 
+    #[derive(Debug)]
+    struct OrdinaryQuoteSiteObservation {
+        owner: usize,
+        module: ModuleId,
+        source: String,
+        source_matches: bool,
+        text: String,
+        range: (u32, u32),
+        ordinal: usize,
+        holes: usize,
+        application: crate::core::NodeId,
+        callee: crate::core::NodeId,
+        argument: crate::core::NodeId,
+        mapped_application: bool,
+        canonical_constructor: bool,
+    }
+
+    #[derive(Debug)]
+    struct OrdinaryQuoteEntryObservation {
+        reused: Option<bool>,
+        sites: Vec<OrdinaryQuoteSiteObservation>,
+        reaches: usize,
+        completions: usize,
+    }
+
+    #[derive(Debug)]
+    struct OrdinaryQuoteOutputObservation {
+        value: Option<String>,
+        empty_input_sites: bool,
+        retained_input: bool,
+        closed: usize,
+        dropped: usize,
+        active_drops: usize,
+    }
+
     std::thread_local! {
         static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
         static DERIVE_INPUTS: RefCell<Vec<Vec<crate::surface::SurfaceSyntaxCapture>>> = const { RefCell::new(Vec::new()) };
@@ -6113,6 +6148,9 @@ mod tests {
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
         static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
         static CONSTRUCTED_QUOTE_OBSERVATIONS: RefCell<Vec<ConstructedQuoteObservation>> = const { RefCell::new(Vec::new()) };
+        static ORDINARY_QUOTE_ENTRY: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
+        static ORDINARY_QUOTE_ENTRIES: RefCell<Vec<OrdinaryQuoteEntryObservation>> = const { RefCell::new(Vec::new()) };
+        static ORDINARY_QUOTE_OUTPUTS: RefCell<Vec<OrdinaryQuoteOutputObservation>> = const { RefCell::new(Vec::new()) };
     }
 
     fn observe_h4_public_names(source: &SourceFile, module: &crate::surface::SurfaceModule) {
@@ -7400,6 +7438,199 @@ main () = one(()) + two(())
             assert_eq!(execute(&program).unwrap().value_display(), "42", "{entry}");
             drop(program);
         }
+        hooks::reset();
+    }
+
+    fn observe_ordinary_quote_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::{
+            core::{EffectExprKind, PureComputation, PureExprKind},
+            eval::machine_test_hooks as hooks,
+        };
+
+        let reused = ORDINARY_QUOTE_ENTRY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let reused = slot.as_ref().map(|previous| {
+                previous
+                    .upgrade()
+                    .is_some_and(|previous| Arc::ptr_eq(&previous, &entry.quote_sites))
+            });
+            if slot.is_none() {
+                *slot = Some(Arc::downgrade(&entry.quote_sites));
+            }
+            reused
+        });
+        let sites = entry
+            .quote_sites
+            .iter()
+            .map(|site| {
+                let nodes = &site.nodes;
+                let span = nodes.template.origin;
+                let range = span.range();
+                let mapped_application = matches!(
+                    entry.program.node(nodes.application).map(|node| &node.kind),
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::Apply(application)
+                    ))) if application.function() == nodes.callee
+                        && application.argument() == nodes.argument
+                );
+                let canonical_constructor = nodes.constructor.owner().module()
+                    == entry.syntax_module
+                    && entry
+                        .program
+                        .registry()
+                        .constructors()
+                        .iter()
+                        .any(|constructor| {
+                            constructor.id == nodes.constructor
+                                && constructor.spelling == "HiddenExpressionFragment"
+                        });
+                OrdinaryQuoteSiteObservation {
+                    owner: site.owner,
+                    module: nodes.owner,
+                    source: site.source.display_path().to_owned(),
+                    source_matches: span.source() == site.source.id(),
+                    text: site
+                        .source
+                        .text()
+                        .get(range.start() as usize..range.end() as usize)
+                        .unwrap_or("")
+                        .to_owned(),
+                    range: (range.start(), range.end()),
+                    ordinal: nodes.template.ordinal,
+                    holes: nodes.template.holes,
+                    application: nodes.application,
+                    callee: nodes.callee,
+                    argument: nodes.argument,
+                    mapped_application,
+                    canonical_constructor,
+                }
+            })
+            .collect();
+        ORDINARY_QUOTE_ENTRIES.with(|slot| {
+            slot.borrow_mut().push(OrdinaryQuoteEntryObservation {
+                reused,
+                sites,
+                reaches: hooks::QUOTE_REACHES.get(),
+                completions: hooks::QUOTE_COMPLETIONS.get(),
+            })
+        });
+    }
+
+    fn observe_ordinary_quote_output(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{CapturedQuoteSites, SurfaceExprKind, SurfaceSyntaxCapture},
+            syntax::MacroOutputNode,
+        };
+
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        fn retains(nodes: &[MacroOutputNode], original: &Arc<[MacroOutputNode]>) -> bool {
+            nodes.iter().any(|node| match node {
+                MacroOutputNode::Group(_, children, _) => retains(children, original),
+                MacroOutputNode::Expression(capture, _)
+                | MacroOutputNode::ForwardedExpression(capture, _) => {
+                    Arc::ptr_eq(&capture.contents, original) || retains(&capture.contents, original)
+                }
+                _ => false,
+            })
+        }
+        let (value, empty_input_sites, retained_input) = match captures {
+            [SurfaceSyntaxCapture::Expression(capture)] => (
+                match &capture.expression.kind {
+                    SurfaceExprKind::Integer(value) => Some(value.to_string()),
+                    _ => None,
+                },
+                matches!(capture.quote_sites, CapturedQuoteSites::Empty),
+                retains(output, &capture.contents),
+            ),
+            _ => (None, false, false),
+        };
+        ORDINARY_QUOTE_OUTPUTS.with(|slot| {
+            slot.borrow_mut().push(OrdinaryQuoteOutputObservation {
+                value,
+                empty_input_sites,
+                retained_input,
+                closed: hooks::ROOT_CLOSES.get(),
+                dropped: hooks::TRANSFORMER_DROPS.get(),
+                active_drops: hooks::ACTIVE_ROOT_DROPS.get(),
+            })
+        });
+    }
+
+    #[test]
+    fn ordinary_quote_helpers_use_checked_sites_and_reuse_only_the_entry() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        TRANSFORMER_ENTRY_PREPARATIONS.set(0);
+        TRANSFORMER_ENTRY_VALIDATIONS.set(0);
+        ORDINARY_QUOTE_ENTRY.with(|slot| *slot.borrow_mut() = None);
+        ORDINARY_QUOTE_ENTRIES.with(|slot| slot.borrow_mut().clear());
+        ORDINARY_QUOTE_OUTPUTS.with(|slot| slot.borrow_mut().clear());
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_ordinary_quote_entry));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_ordinary_quote_output));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/quote-constructed/control_twice.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let program = result.expect("both ordinary transformer calls compile");
+        let entries = ORDINARY_QUOTE_ENTRIES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        let outputs = ORDINARY_QUOTE_OUTPUTS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(outputs.len(), 2, "{outputs:?}");
+        assert_eq!(TRANSFORMER_ENTRY_PREPARATIONS.get(), 1);
+        assert_eq!(TRANSFORMER_ENTRY_VALIDATIONS.get(), 1);
+        assert_eq!(entries[0].reused, None);
+        assert_eq!(entries[1].reused, Some(true));
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.reaches, (index + 1) * 2, "{entry:?}");
+            assert_eq!(entry.completions, (index + 1) * 2, "{entry:?}");
+            let [first, second] = entry.sites.as_slice() else {
+                panic!("expected the two real helper sites: {entry:?}")
+            };
+            assert_eq!(first.owner, second.owner);
+            assert_eq!(first.module, second.module);
+            assert_ne!(first.ordinal, second.ordinal);
+            assert_ne!(first.range, second.range);
+            assert_ne!(first.application, second.application);
+            assert_ne!(first.callee, second.callee);
+            assert_ne!(first.argument, second.argument);
+            for site in [first, second] {
+                assert!(site.source.ends_with("quote-constructed/control.ash"));
+                assert!(
+                    site.source_matches && site.mapped_application && site.canonical_constructor
+                );
+                assert_eq!(site.text, "syntax { $fragment }");
+                assert_eq!(site.holes, 1);
+            }
+        }
+        for (index, (output, expected)) in outputs.iter().zip(["20", "22"]).enumerate() {
+            assert_eq!(output.value.as_deref(), Some(expected), "{output:?}");
+            assert!(
+                output.empty_input_sites && output.retained_input,
+                "{output:?}"
+            );
+            assert_eq!((output.closed, output.dropped), (index + 1, index + 1));
+            assert_eq!(output.active_drops, 0);
+        }
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 2);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        ORDINARY_QUOTE_ENTRY.with(|slot| {
+            assert!(slot.borrow().as_ref().unwrap().upgrade().is_none());
+        });
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
         hooks::reset();
     }
 
