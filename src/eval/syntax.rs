@@ -9424,6 +9424,515 @@ mod tests {
         );
     }
 
+    // Extend the existing validated fixture so constructor registration is paid
+    // by the real host constructor before the capture request begins.
+    fn repeated_test_fixture() -> DeclarationHostFixture {
+        use crate::{
+            core::{EffectCoreBuilder, validate_effect},
+            resolved::{ResolvedConstructor, ResolvedRegistry},
+            source::Origin,
+            types::{ConstructorId, Type},
+        };
+        use std::sync::Arc;
+
+        let mut fixture = DeclarationHostFixture::new();
+        let registry = fixture.entry.program.registry();
+        let mut nominals = registry.nominals().to_vec();
+        let mut constructors = registry.constructors().to_vec();
+        let effects = registry.effects().to_vec();
+        let owner = nominals[0].id;
+        let mut ids = nominals[0].constructors.to_vec();
+        for (index, name) in ["NoCaptures", "MoreCaptures", "RepeatedCapture"]
+            .iter()
+            .enumerate()
+        {
+            let id = ConstructorId::new(owner, 17 + index as u32);
+            ids.push(id);
+            constructors.push(ResolvedConstructor {
+                id,
+                owner,
+                spelling: (*name).into(),
+                payload: (*name != "NoCaptures").then_some(Type::Unit),
+                origin: Origin::Source(fixture.caller.span),
+            });
+        }
+        nominals[0].constructors = ids.into_boxed_slice();
+        let registry = ResolvedRegistry::new(nominals, constructors).with_effects(effects);
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+        let occurrence = builder
+            .unit(Type::Unit, Origin::Source(fixture.caller.span))
+            .unwrap();
+        fixture.entry.program =
+            validate_effect(builder.finish(occurrence).unwrap(), &[&fixture.source]).unwrap();
+        fixture.entry.occurrence = occurrence;
+        fixture
+    }
+
+    fn repeated_test_identifier(
+        fixture: &DeclarationHostFixture,
+        spelling: String,
+    ) -> crate::surface::SurfaceSyntaxCapture {
+        use crate::surface::{SurfaceIdentifierCapture, SurfaceSyntaxCapture};
+        let mut name = fixture.caller.clone();
+        name.text = spelling;
+        SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name,
+            origin: fixture.caller.span.into(),
+        })
+    }
+
+    fn repeated_test_value(
+        values: Vec<crate::surface::SurfaceSyntaxCapture>,
+    ) -> crate::surface::SurfaceSyntaxCapture {
+        use crate::surface::{SurfaceRepeatedCapture, SurfaceSyntaxCapture};
+        SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(SurfaceRepeatedCapture { values }))
+    }
+
+    fn repeated_test_argument(
+        host: &super::SyntaxHost<'_>,
+        heap: &mut Vec<super::HeapCell>,
+    ) -> super::Value {
+        use super::{HeapCell, Value, allocate_heap};
+        use crate::integer::Integer;
+        Value::Location(
+            allocate_heap(
+                heap,
+                HeapCell::Tuple(vec![host.input(), Value::integer(Integer::from_i64(0))].into()),
+            )
+            .unwrap(),
+        )
+    }
+
+    // Decode returned constructors and authenticated leaf handles, including list
+    // boundaries. The wide case iterates the list; recursion here is only nesting.
+    fn repeated_test_shape(
+        host: &super::SyntaxHost<'_>,
+        heap: &[super::HeapCell],
+        capture: &super::Value,
+        shape: &mut Vec<String>,
+    ) {
+        use super::{constructor_fields, pair};
+        use crate::eval::value::CompilerSyntaxHandleKind;
+        let (tag, payload) = constructor_fields(capture, heap).unwrap();
+        if tag == host.constructor("RepeatedCapture").unwrap() {
+            shape.push("[".into());
+            let mut rest = payload.unwrap();
+            loop {
+                let (tag, payload) = constructor_fields(rest, heap).unwrap();
+                if tag == host.constructor("NoCaptures").unwrap() {
+                    assert!(payload.is_none());
+                    break;
+                }
+                assert_eq!(tag, host.constructor("MoreCaptures").unwrap());
+                let (first, tail) = pair(payload.unwrap(), heap).unwrap();
+                repeated_test_shape(host, heap, first, shape);
+                rest = tail;
+            }
+            shape.push("]".into());
+        } else if tag == host.constructor("IdentifierCapture").unwrap() {
+            let (identifier, _) = pair(payload.unwrap(), heap).unwrap();
+            let CompilerSyntaxHandleKind::Identifier(index) =
+                host.admitted_handle(identifier).unwrap()
+            else {
+                panic!("expected an authenticated identifier")
+            };
+            shape.push(host.identifiers[index].text.clone());
+        } else {
+            assert_eq!(tag, host.constructor("DeclarationCapture").unwrap());
+            let CompilerSyntaxHandleKind::Declaration(index) =
+                host.admitted_handle(payload.unwrap()).unwrap()
+            else {
+                panic!("expected an authenticated declaration")
+            };
+            assert!(host.declarations[index].contents.is_empty());
+            shape.push("declaration".into());
+        }
+    }
+
+    #[derive(Debug)]
+    enum RepeatedTestOutcome {
+        Constructor(super::RuntimeFailure),
+        Request(super::RuntimeFailure, usize, usize, usize),
+        Returned(Vec<String>),
+    }
+
+    fn repeated_test_probe(
+        fixture: &DeclarationHostFixture,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        limit: usize,
+        spent: usize,
+    ) -> (Option<usize>, usize, RepeatedTestOutcome) {
+        use crate::{syntax_resource::SyntaxBudget, types::TypeWorkBudget};
+        let mut budget = SyntaxBudget::with_limit(limit);
+        budget.charge_units(spent).unwrap();
+        let mut constructor_total = None;
+        let outcome = match fixture.host(captures, &mut budget) {
+            Err(error) => RepeatedTestOutcome::Constructor(error),
+            Ok(mut host) => {
+                constructor_total = Some(host.syntax_work.as_ref().unwrap().consumed());
+                let mut heap = Vec::new();
+                let argument = repeated_test_argument(&host, &mut heap);
+                match host.request(
+                    fixture.capture,
+                    argument,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                ) {
+                    Err(error) => RepeatedTestOutcome::Request(
+                        error,
+                        heap.len(),
+                        host.identifiers.len(),
+                        host.declarations.len(),
+                    ),
+                    Ok(value) => {
+                        let (tag, Some(capture)) =
+                            super::constructor_fields(&value, &heap).unwrap()
+                        else {
+                            panic!("expected Captured")
+                        };
+                        assert_eq!(tag, host.constructor("Captured").unwrap());
+                        let mut shape = Vec::new();
+                        repeated_test_shape(&host, &heap, capture, &mut shape);
+                        RepeatedTestOutcome::Returned(shape)
+                    }
+                }
+            }
+        };
+        (constructor_total, budget.consumed(), outcome)
+    }
+
+    fn repeated_test_failure(error: super::RuntimeFailure, reason: &str) {
+        let super::RuntimeFailure::Report(report) = error else {
+            panic!("expected resource failure: {error:?}")
+        };
+        assert_eq!(report.primary.reason_code(), reason);
+    }
+
+    fn repeated_test_graph(
+        fixture: &DeclarationHostFixture,
+    ) -> (
+        [crate::surface::SurfaceSyntaxCapture; 1],
+        std::sync::Weak<crate::surface::SurfaceRepeatedCapture>,
+        std::sync::Weak<crate::surface::SurfaceRepeatedCapture>,
+        std::sync::Weak<[crate::syntax::MacroOutputNode]>,
+    ) {
+        use crate::surface::{
+            SurfaceDeclarationCapture, SurfaceRepeatedCapture, SurfaceSyntaxCapture,
+        };
+        use crate::syntax::MacroOutputNode;
+        use std::sync::Arc;
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let contents_weak = Arc::downgrade(&contents);
+        let nested = Arc::new(SurfaceRepeatedCapture {
+            values: vec![
+                repeated_test_identifier(fixture, "a".into()),
+                repeated_test_identifier(fixture, "b".into()),
+            ],
+        });
+        let nested_weak = Arc::downgrade(&nested);
+        let root = Arc::new(SurfaceRepeatedCapture {
+            values: vec![
+                SurfaceSyntaxCapture::Repeated(nested),
+                repeated_test_value(vec![]),
+                repeated_test_value(vec![
+                    repeated_test_identifier(fixture, "c".into()),
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture { contents }),
+                ]),
+            ],
+        });
+        let root_weak = Arc::downgrade(&root);
+        (
+            [SurfaceSyntaxCapture::Repeated(root)],
+            root_weak,
+            nested_weak,
+            contents_weak,
+        )
+    }
+
+    #[test]
+    fn repeated_host_budget_order_and_owner_lifetime() {
+        use super::{RuntimeFailure, SyntaxHost};
+        use crate::{
+            syntax_resource::{SYNTAX_WORK_LIMIT, SyntaxBudget},
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+        fn exercise() {
+            let fixture = repeated_test_fixture();
+            let (captures, root, nested, contents) = repeated_test_graph(&fixture);
+            assert!(matches!(
+                SyntaxHost::new(
+                    &fixture.entry,
+                    &captures,
+                    &fixture.source,
+                    &fixture.caller,
+                    0,
+                    Arc::clone(&fixture.contexts),
+                    Arc::clone(&fixture.frame),
+                    None,
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(
+                (
+                    root.strong_count(),
+                    nested.strong_count(),
+                    contents.strong_count()
+                ),
+                (1, 1, 1)
+            );
+            let expected = [
+                "[",
+                "[",
+                "a",
+                "b",
+                "]",
+                "[",
+                "]",
+                "[",
+                "c",
+                "declaration",
+                "]",
+                "]",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+            let (constructor, total, outcome) =
+                repeated_test_probe(&fixture, &captures, SYNTAX_WORK_LIMIT, 17);
+            let constructor = constructor.unwrap();
+            assert!(
+                matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+            assert!(constructor > 17 && total > constructor);
+            let (unspent_phase, unspent_total, unspent) =
+                repeated_test_probe(&fixture, &captures, total - 17, 0);
+            assert_eq!(
+                (unspent_phase, unspent_total),
+                (Some(constructor - 17), total - 17)
+            );
+            assert!(
+                matches!(unspent, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+            let (phase, paid, outcome) =
+                repeated_test_probe(&fixture, &captures, constructor - 1, 17);
+            assert_eq!(phase, None);
+            assert!(paid >= 17 && paid < constructor);
+            let RepeatedTestOutcome::Constructor(error) = outcome else {
+                panic!("constructor: {outcome:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, total - 1, 17);
+            assert_eq!(phase, Some(constructor));
+            assert_eq!(paid, total - 1);
+            let RepeatedTestOutcome::Request(error, heap_cells, identifiers, declarations) =
+                outcome
+            else {
+                panic!("request: {outcome:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            // A failed final publication can leave paid private staging until teardown.
+            assert!(heap_cells > 1);
+            assert_eq!((identifiers, declarations), (3, 1));
+            // Every request prefix refuses without returning a value, including
+            // frame, list, leaf-arena and final wrapper reservations.
+            for limit in constructor..total {
+                let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, limit, 17);
+                assert_eq!(phase, Some(constructor));
+                assert!(paid >= constructor && paid <= limit);
+                let RepeatedTestOutcome::Request(error, _, _, _) = outcome else {
+                    panic!("request at {limit}: {outcome:?}")
+                };
+                repeated_test_failure(error, "internal.resource.syntax-work");
+            }
+            for _ in 0..2 {
+                let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, total, 17);
+                assert_eq!((phase, paid), (Some(constructor), total));
+                assert!(
+                    matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+                );
+            }
+            assert_eq!(
+                (
+                    root.strong_count(),
+                    nested.strong_count(),
+                    contents.strong_count()
+                ),
+                (1, 1, 1)
+            );
+            drop(captures);
+            assert!(
+                root.upgrade().is_none()
+                    && nested.upgrade().is_none()
+                    && contents.upgrade().is_none()
+            );
+
+            // The host owns the retained graph after the producer releases it;
+            // both a returned result and late refusal release it on host teardown.
+            for late_failure in [true, false] {
+                let (captures, root, nested, contents) = repeated_test_graph(&fixture);
+                let mut budget =
+                    SyntaxBudget::with_limit(if late_failure { total - 1 } else { total });
+                budget.charge_units(17).unwrap();
+                let mut host = fixture.host(&captures, &mut budget).unwrap();
+                assert!(
+                    !host.type_accounting,
+                    "nested declaration selects declaration accounting"
+                );
+                assert_eq!(root.strong_count(), 2);
+                drop(captures);
+                assert_eq!(
+                    (
+                        root.strong_count(),
+                        nested.strong_count(),
+                        contents.strong_count()
+                    ),
+                    (1, 1, 1)
+                );
+                let mut heap = Vec::new();
+                let argument = repeated_test_argument(&host, &mut heap);
+                let result = host.request(
+                    fixture.capture,
+                    argument.clone(),
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                );
+                if late_failure {
+                    let Err(error) = result else {
+                        panic!("one-short request returned a value")
+                    };
+                    repeated_test_failure(error, "internal.resource.syntax-work");
+                    assert_eq!(host.declarations.len(), 1);
+                    assert!(heap.len() > 1);
+                    let heap_len = heap.len();
+                    let paid = host.syntax_work.as_ref().unwrap().consumed();
+                    let retry = host.request(
+                        fixture.capture,
+                        argument,
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    );
+                    let Err(error) = retry else {
+                        panic!("exhausted budget allowed a retry")
+                    };
+                    repeated_test_failure(error, "internal.resource.syntax-work");
+                    assert_eq!(host.syntax_work.as_ref().unwrap().consumed(), paid);
+                    assert_eq!(heap.len(), heap_len);
+                } else {
+                    assert!(result.is_ok());
+                }
+                assert!(
+                    contents.strong_count() >= 2,
+                    "the private declaration arena retains contents"
+                );
+                drop(host);
+                assert!(
+                    root.upgrade().is_none()
+                        && nested.upgrade().is_none()
+                        && contents.upgrade().is_none()
+                );
+                drop(heap);
+            }
+
+            let empty = [repeated_test_value(vec![])];
+            let (_, _, outcome) = repeated_test_probe(&fixture, &empty, SYNTAX_WORK_LIMIT, 17);
+            assert!(
+                matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if shape.len() == 2 && shape[0] == "[" && shape[1] == "]")
+            );
+            let wide = [repeated_test_value(
+                (0..256)
+                    .map(|i| repeated_test_identifier(&fixture, format!("i{i}")))
+                    .collect(),
+            )];
+            let (_, wide_total, outcome) =
+                repeated_test_probe(&fixture, &wide, SYNTAX_WORK_LIMIT, 17);
+            assert!(wide_total > total);
+            let RepeatedTestOutcome::Returned(shape) = outcome else {
+                panic!("wide: {outcome:?}")
+            };
+            let mut expected = vec!["[".to_owned()];
+            expected.extend((0..256).map(|i| format!("i{i}")));
+            expected.push("]".into());
+            assert_eq!(shape, expected);
+            let (_, paid, short) = repeated_test_probe(&fixture, &wide, wide_total - 1, 17);
+            assert_eq!(paid, wide_total - 1);
+            let RepeatedTestOutcome::Request(error, _, identifiers, declarations) = short else {
+                panic!("wide one-short: {short:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            assert_eq!((identifiers, declarations), (256, 0));
+            let (_, paid, exact) = repeated_test_probe(&fixture, &wide, wide_total, 17);
+            assert_eq!(paid, wide_total);
+            assert!(
+                matches!(exact, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(exercise)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn repeated_host_composes_repetition_and_leaf_depth_on_small_stack() {
+        use crate::{
+            parser::STRUCTURAL_DEPTH_LIMIT, surface::SurfaceSyntaxCapture, syntax::MacroOrigin,
+            syntax_resource::SyntaxBudget, types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let fixture = repeated_test_fixture();
+                for depth in [STRUCTURAL_DEPTH_LIMIT - 1, STRUCTURAL_DEPTH_LIMIT] {
+                    let SurfaceSyntaxCapture::Identifier(mut leaf) =
+                        repeated_test_identifier(&fixture, "deep".into())
+                    else {
+                        unreachable!()
+                    };
+                    leaf.origin = MacroOrigin::combined(
+                        vec![fixture.caller.span.into()],
+                        Arc::clone(&fixture.frame),
+                    )
+                    .unwrap();
+                    let mut value = SurfaceSyntaxCapture::Identifier(leaf);
+                    for _ in 0..depth {
+                        value = repeated_test_value(vec![value]);
+                    }
+                    let mut budget = SyntaxBudget::default();
+                    let captures = [value];
+                    match fixture.host(&captures, &mut budget) {
+                        Ok(mut host) => {
+                            assert_eq!(depth, STRUCTURAL_DEPTH_LIMIT - 1);
+                            let mut heap = Vec::new();
+                            let argument = repeated_test_argument(&host, &mut heap);
+                            let value = host
+                                .request(
+                                    fixture.capture,
+                                    argument,
+                                    &mut heap,
+                                    &mut TypeWorkBudget::unbounded(),
+                                )
+                                .unwrap();
+                            assert_eq!(
+                                super::constructor_fields(&value, &heap).unwrap().0,
+                                host.constructor("Captured").unwrap()
+                            );
+                        }
+                        Err(error) => {
+                            assert_eq!(depth, STRUCTURAL_DEPTH_LIMIT);
+                            repeated_test_failure(error, "internal.resource.structural-depth");
+                        }
+                    };
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn d5_host_refuses_declaration_before_its_constructor_and_request_clone() {
         use super::{
