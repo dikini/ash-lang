@@ -62,6 +62,19 @@ fn add(count: usize, amount: usize) -> Result<usize, PreparationError> {
     count.checked_add(amount).ok_or(PreparationError::Resource)
 }
 
+fn primary_span(origin: &Origin, work: &mut TypeWorkBudget) -> Result<Span, PreparationError> {
+    let mut current = origin;
+    loop {
+        charge(work, 1)?;
+        match current {
+            Origin::Source(span) => return Ok(*span),
+            Origin::Expansion { invocation, .. } => return Ok(*invocation),
+            Origin::Generated { cause, .. } => current = cause,
+            Origin::Related { primary, .. } => current = primary,
+        }
+    }
+}
+
 fn row(
     owner: OriginalOwner,
     ids: impl ExactSizeIterator<Item = TypeVariableId>,
@@ -82,7 +95,7 @@ fn row(
             .ok_or(PreparationError::Invalid)?;
         if id.module() != Some(module)
             || canonical.id != id
-            || canonical.origin.primary_span().source() != source
+            || primary_span(&canonical.origin, work)?.source() != source
         {
             return Err(PreparationError::Invalid);
         }

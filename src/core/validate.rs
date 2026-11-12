@@ -6,6 +6,7 @@ mod declaration_closure_tests;
 mod effect_signature_borrow_tests;
 mod network;
 
+mod checked_owner_anchors;
 mod source_declarations;
 
 static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
@@ -3229,6 +3230,7 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
+    validator.prepared_owner_anchors = prepared_anchors.as_deref();
     let result = validator.run_effect().and_then(|()| {
         macro_entry
             .map(|contract| validator.check_macro_entry(contract))
@@ -3548,6 +3550,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     linked: Option<&'program crate::evidence_validation::ValidatedInterfaceProgram>,
+    prepared_owner_anchors: Option<&'program GeneratedParameterAnchors>,
+    checked_owner_anchors_authenticated: Cell<bool>,
     network_api: Option<crate::resolved::NetworkApi>,
     authenticated_network_requests: Cell<[Option<NodeId>; 9]>,
     network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
@@ -3790,6 +3794,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .collect(),
             module_sources: None,
             linked: None,
+            prepared_owner_anchors: None,
+            checked_owner_anchors_authenticated: Cell::new(false),
             network_api: None,
             authenticated_network_requests: Cell::new([None; 9]),
             network_admissions: std::cell::RefCell::new(Vec::new()),
@@ -7484,7 +7490,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let type_variable_count = u32::try_from(registry.type_variable_count())
             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
-        let mut previous_type_variable_start = None;
+        let mut previous_type_variable: Option<(&ResolvedTypeVariable, Span)> = None;
         let resolved_type_variables = registry_module.is_some_and(|module| {
             registry
                 .type_variable(crate::types::TypeVariableId::resolved(module, 0))
@@ -7505,27 +7511,34 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
+            let non_increasing = previous_type_variable
+                .is_some_and(|(_, previous)| parameter_range.start() <= previous.range().start());
             let mut contextual = self.is_lexical_source_parameter(parameter.id)?;
-            if !contextual
-                && previous_type_variable_start
-                    .is_some_and(|previous| parameter_range.start() <= previous)
-            {
+            if !contextual && non_increasing {
                 contextual = self.is_structural_store_identity(parameter.id)?
                     || self.is_structural_region_identity(parameter.id)?;
             }
+            let original_tie = if !contextual && non_increasing {
+                self.allows_original_expansion_tie(
+                    previous_type_variable
+                        .expect("a non-increasing position has a predecessor")
+                        .0,
+                    parameter,
+                )?
+            } else {
+                false
+            };
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || !contextual
-                    && previous_type_variable_start
-                        .is_some_and(|previous| parameter_range.start() <= previous)
+                || !contextual && non_increasing && !original_tie
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             if !contextual {
-                previous_type_variable_start = Some(parameter_range.start());
+                previous_type_variable = Some((parameter, parameter_span));
             }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
@@ -7921,7 +7934,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         });
         {
             let mut next_type_variable = HashMap::<ModuleId, u32>::new();
-            let mut previous_type_variable_start = HashMap::new();
+            let mut previous_type_variable: HashMap<ModuleId, (&ResolvedTypeVariable, Span)> =
+                HashMap::new();
             for parameter in &type_variables {
                 let Some(module) = parameter.id.module() else {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -7933,6 +7947,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
+                let previous = previous_type_variable.get(&module).copied();
                 let mut contextual = self.is_lexical_source_parameter(parameter.id)?
                     || generatives.is_some_and(|original| original.contains(&parameter.id));
                 if parameter.id.local() != *expected
@@ -7944,13 +7959,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
                 if !contextual
-                    && previous_type_variable_start
-                        .get(&module)
-                        .is_some_and(|previous| parameter_range.start() <= *previous)
+                    && previous.is_some_and(|(_, previous)| {
+                        parameter_range.start() <= previous.range().start()
+                    })
                 {
                     contextual = self.is_structural_store_identity(parameter.id)?
                         || self.is_structural_region_identity(parameter.id)?;
-                    if !contextual {
+                    if !contextual
+                        && !self.allows_original_expansion_tie(
+                            previous
+                                .expect("a non-increasing position has a predecessor")
+                                .0,
+                            parameter,
+                        )?
+                    {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
                 }
@@ -7958,7 +7980,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .checked_add(1)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
                 if !contextual {
-                    previous_type_variable_start.insert(module, parameter_range.start());
+                    if previous.is_none() {
+                        let growth =
+                            if previous_type_variable.len() == previous_type_variable.capacity() {
+                                previous_type_variable
+                                    .capacity()
+                                    .saturating_mul(2)
+                                    .saturating_add(previous_type_variable.len())
+                                    .saturating_add(1)
+                            } else {
+                                1
+                            };
+                        self.charge_type_work(growth)?;
+                        previous_type_variable
+                            .try_reserve(1)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    }
+                    previous_type_variable.insert(module, (parameter, parameter_span));
                 }
                 self.validate_origin(&parameter.origin, self.program.root)?;
             }

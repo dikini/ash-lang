@@ -11,7 +11,7 @@ use std::{
 };
 
 mod catalog_relocation;
-mod checked_owner_anchors;
+pub(super) mod checked_owner_anchors;
 mod zonk;
 
 pub(super) use checked_owner_anchors::PreparationError as OwnerAnchorPreparationError;
