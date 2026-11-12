@@ -5629,6 +5629,219 @@ mod tests {
         static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
+        static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn observe_h4_public_names(source: &SourceFile, module: &crate::surface::SurfaceModule) {
+        use crate::surface::{SurfaceDefinitionKind, SurfaceTypeVisibility};
+
+        let filename = std::path::Path::new(source.display_path())
+            .file_name()
+            .unwrap();
+        if filename == "literal_public_generated.ash" {
+            let answer = module
+                .definitions
+                .iter()
+                .find_map(|definition| match &definition.kind {
+                    SurfaceDefinitionKind::Equational(global)
+                        if global.interface.name.text == "answer" =>
+                    {
+                        assert!(definition.public);
+                        assert_eq!(
+                            global.interface.name.introduction,
+                            global.equations[0].name.introduction
+                        );
+                        Some(&global.interface.name)
+                    }
+                    _ => None,
+                })
+                .expect("the generated public function is staged");
+            let shade = module
+                .type_declarations
+                .iter()
+                .find(|item| item.name.text == "Shade")
+                .expect("the generated public type is staged");
+            assert_eq!(shade.visibility, SurfaceTypeVisibility::PublicTransparent);
+            assert_eq!(shade.constructors.len(), 1);
+            assert_eq!(shade.constructors[0].name.text, "Bright");
+            for name in [answer, &shade.name, &shade.constructors[0].name] {
+                H4_PUBLIC_NAMES.with(|slot| {
+                    slot.borrow_mut().push((
+                        name.text.clone(),
+                        name.introduction,
+                        name.span,
+                        name.introduced_at,
+                    ))
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn original_h4_public_names_reach_the_checked_importer() {
+        use crate::{
+            core::{CorePatternKind, EffectExprKind, PureComputation, PureExprKind},
+            parser::STAGED_MODULE_OBSERVER,
+        };
+
+        H4_PUBLIC_NAMES.with(|slot| slot.borrow_mut().clear());
+        STAGED_MODULE_OBSERVER.set(Some(observe_h4_public_names));
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/design/macros/fixtures/hygiene");
+        let result = compile_path(RunConfiguration {
+            entry: fixture.join("literal_public_main.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        STAGED_MODULE_OBSERVER.set(None);
+        let compiled = result.expect("the original public-name importer compiles");
+        let names = H4_PUBLIC_NAMES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(
+            names
+                .iter()
+                .map(|entry| entry.0.as_str())
+                .collect::<Vec<_>>(),
+            ["answer", "Shade", "Bright"]
+        );
+        assert_ne!(names[0].1, 0);
+        assert!(
+            names
+                .iter()
+                .all(|entry| entry.1 == names[0].1 && entry.3 == names[0].3 && entry.3.is_some())
+        );
+        let invocation = names[0].3.unwrap();
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("the actual linked program is validated");
+        let generated = provenance
+            .iter()
+            .find(|(_, source)| {
+                source
+                    .display_path()
+                    .ends_with("/literal_public_generated.ash")
+            })
+            .expect("invoking source");
+        let importer = provenance
+            .iter()
+            .find(|(_, source)| source.display_path().ends_with("/literal_public_main.ash"))
+            .expect("importing source");
+        assert_eq!(invocation.source(), generated.1.id());
+        let expansion = |origin: &crate::source::Origin| {
+            let mut current = origin;
+            loop {
+                match current {
+                    crate::source::Origin::Expansion {
+                        invocation,
+                        definition,
+                    } => break Some((*invocation, *definition)),
+                    crate::source::Origin::Generated { cause, .. } => current = cause,
+                    crate::source::Origin::Related { primary, .. } => current = primary,
+                    crate::source::Origin::Source(_) => break None,
+                }
+            }
+        };
+        let contains = |outer: crate::source::Span, inner: crate::source::Span| {
+            outer.source() == inner.source()
+                && outer.range().start() <= inner.range().start()
+                && outer.range().end() >= inner.range().end()
+        };
+        let nominal = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == generated.0 && nominal.spelling == "Shade")
+            .expect("the generated public nominal has its invoking module identity");
+        assert_eq!(
+            nominal.declaration_kind,
+            crate::resolved::ResolvedNominalDeclarationKind::Data
+        );
+        let (type_invocation, type_definition) =
+            expansion(&nominal.origin).expect("the nominal keeps its expansion origin");
+        assert_eq!(type_invocation, invocation);
+        assert!(contains(type_definition, names[1].2));
+        let constructor = program
+            .registry()
+            .constructors()
+            .iter()
+            .find(|constructor| constructor.owner == nominal.id && constructor.spelling == "Bright")
+            .expect("the public constructor belongs to that nominal");
+        assert_eq!(&*nominal.constructors, &[constructor.id]);
+        assert_eq!(
+            expansion(&constructor.origin),
+            Some((invocation, names[2].2))
+        );
+        let binders = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(group),
+                )) => Some(group.members()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|member| expansion(member.binder().origin()) == Some((invocation, names[0].2)))
+            .map(|member| member.binder().id())
+            .collect::<Vec<_>>();
+        let [answer] = binders.as_slice() else {
+            panic!("exactly one generated answer binder survives linking")
+        };
+        for (_, source) in [generated, importer] {
+            let occurrences = program
+                .nodes()
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                        let span = node.origin.primary_span();
+                        let range = span.range();
+                        (span.source() == source.id()
+                            && source
+                                .text()
+                                .get(range.start() as usize..range.end() as usize)
+                                == Some("answer"))
+                        .then_some(variable.binder())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!occurrences.is_empty(), "each actual module uses answer");
+            assert!(
+                occurrences.iter().all(|binder| binder == answer),
+                "both uses retain the generated function identity"
+            );
+            assert!(program.nodes().iter().any(|node| {
+                node.origin.primary_span().source() == source.id()
+                    && matches!(&node.kind,
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching)))
+                            if matching.arms().iter().any(|arm| arm.pattern().ty == crate::types::Type::Nominal(nominal.id)
+                                && matches!(arm.pattern().kind,
+                                    CorePatternKind::Constructor { constructor: id, .. } if id == constructor.id)))
+            }), "each actual module matches the generated constructor identity");
+        }
+        assert_eq!(execute(&compiled).unwrap().value_display(), "84");
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.join("literal_public_duplicate.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the original duplicate cannot publish a completed caller");
+        assert_eq!(failure.reason_code(), "resolve.duplicate-global");
+
+        let collision = TestSource::write(include_str!(
+            "../docs/design/macros/fixtures/hygiene/literal_public_main.ash"
+        ));
+        collision.write_sibling(
+            "literal_public_forms.ash",
+            include_str!("../docs/design/macros/fixtures/hygiene/literal_public_forms.ash"),
+        );
+        collision.write_sibling(
+            "literal_public_generated.ash",
+            &format!(
+                "{}\npub answer : Unit -> Int\nanswer () = 42\n",
+                include_str!("../docs/design/macros/fixtures/hygiene/literal_public_generated.ash")
+            ),
+        );
+        let failure = compile_path(collision.configuration())
+            .expect_err("a handwritten collision cannot publish a completed caller");
+        assert_eq!(failure.reason_code(), "resolve.duplicate-global");
     }
 
     fn observe_caller_quote_reference(
