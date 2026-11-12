@@ -90,20 +90,25 @@ generator, escape, checked-capture, and separately approved #304/#310 work at
 `b345ce18b4fec10ae9d88ef466776c4504131391`. E3
 [#246](https://github.com/dikini/ash-lang/issues/246) and checked capture
 [#311](https://github.com/dikini/ash-lang/issues/311) were closed on their
-original focused criteria after independent acceptance readback. Other
-partial issues retain their original open criteria.
+original focused criteria after independent acceptance readback. G3
+[#236](https://github.com/dikini/ash-lang/issues/236) and E2
+[#239](https://github.com/dikini/ash-lang/issues/239) have also closed on their
+original focused criteria after independent retained readback. Other partial
+issues retain their original open criteria.
 
-### Caller-owned quotation candidate
+### Retained caller-owned quotation
 
-The separately authorized [#312](https://github.com/dikini/ash-lang/issues/312)
-candidate `d9f970f296462755b232a5fd5c683f538d838d6d` connects the authentic
+[PR #316](https://github.com/dikini/ash-lang/pull/316) retained the separately
+authorized [#312](https://github.com/dikini/ash-lang/issues/312) repair at
+`e9ab68f24487db53a04623cd4b38ef5d0d8c840a`, tree
+`1476cdc6b3298c33c9574462052b609a88714be6`. It connects the authentic
 caller-owned quote to the completed caller's ordinary term, constructor,
-nominal type, interface, and effect consumers. It also accounts for the first
-quote-aware resource preflight. The candidate preserves the existing source,
-owner, module, binder, checking, and resource boundaries. Acceptance of #312's
-original criteria remains pending retention and independent readback.
+nominal type, interface, and effect consumers, and accounts for the first
+quote-aware resource preflight. Existing source, owner, module, binder,
+checking and resource boundaries are preserved. #312 was closed on its
+original criteria after independent retained and live readback.
 
-On the pinned candidate the original imported-name, literal, and handwritten
+On the reviewed candidate the original imported-name, literal, and handwritten
 controls each return 84. Two distinct quote introductions retain the actual
 API-owned nominal, constructor, interface, method, effect, and operation
 identities through final linking and host teardown. Ordinary unknown, private,
@@ -115,7 +120,7 @@ their copied source paths, returning 310 and 246. The original caller-quote
 library and importer also build and run source-free, returning 84. A combined
 caller-role importer interprets to 84 but its native build reaches a
 `RegistryMetadata` image refusal; the handwritten combined control reaches the
-same refusal. No image or Core repair is included in this candidate.
+same refusal. No image or Core repair is included in this delivery.
 
 The original #312 completion requires authentic caller context, ordinary
 imported and private visibility, unchanged module and binder identities,
@@ -126,6 +131,28 @@ Three later syntax probes currently fail: plain and quoted nested syntax return
 `runtime.invalid-control-state`; the syntax bridge reaches `type.internal`.
 Their exact internal causes are unproved. They are outside this bounded repair.
 
+### Publication evidence candidate
+
+The test-only H4 candidate `213fb092e85bd8e74579aa94548f2e142e677a3b`
+observes the original generated public `answer`, `Shade` and `Bright` names
+with one fresh introduction and their actual expansion origins. The validated
+linked program retains the invoking module's function, type and constructor
+identities in both the invoking and importing modules. The original literal
+public graph and handwritten control return 84; the nominal graph and control
+return 42. Repeated invocation and handwritten collisions reject through
+ordinary duplicate checks. These focused H4 results await exact retention and
+independent live acceptance; they do not close H6 or the integrated gates.
+
+The original H6 hygiene caller and handwritten control return 252; private type
+and owner controls retain their ordinary results and refusals. The fixed
+interface and implementation cases and handwritten controls return 42; the
+copied duplicate-implementation variant and its handwritten control both
+reject with `impl.overlap`. Supplemental importer controls return 42. The
+unchanged relation graph still reaches `core.validation.registry` while its
+handwritten control returns 42, so H6 and the full declaration coverage remain
+open. Original source and failure results are not replaced by the supplemental
+wrappers.
+
 ### Remaining work and gates
 
 The original G/E criteria and I01–I22 corpus remain at their named gates.
@@ -134,10 +161,14 @@ Core parameter-order boundary; [#314](https://github.com/dikini/ash-lang/issues/
 records the distinct unequal nominal-origin overlap. Neither is repaired by the
 caller-quote candidate. The bounded #303 repair and retention have been
 authorized for later work. #304 and #310 retain their partial issue records.
-Public publication work H4 [#233](https://github.com/dikini/ash-lang/issues/233)
-and H6 [#237](https://github.com/dikini/ash-lang/issues/237) is the next
-independent original delivery after this candidate's acceptance. V1's I03
-relation path remains subject to #303.
+G7 [#245](https://github.com/dikini/ash-lang/issues/245) remains open because
+the original diverging generator diagnostic omits the actual step-function
+origin; [#317](https://github.com/dikini/ash-lang/issues/317) records that
+separate downstream boundary. Its native G4, G5, G6 and E5 successors remain
+at their original gates. Public publication H4
+[#233](https://github.com/dikini/ash-lang/issues/233) awaits this candidate's
+retention and acceptance; H6 [#237](https://github.com/dikini/ash-lang/issues/237)
+remains open. V1's I03 relation path remains subject to #303.
 
 Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
 V8 retained equality and acceptance remain required. The last full workspace
@@ -164,7 +195,8 @@ corpus and verification gates remain in the work structure.
   focused parsing and admission criteria after
   [PR #307](https://github.com/dikini/ash-lang/pull/307), retained at
   `f26860994b947a5899518b9ce9343ecf61b174fe`. E2
-  [#239](https://github.com/dikini/ash-lang/issues/239) remains partial.
+  [#239](https://github.com/dikini/ash-lang/issues/239) subsequently closed
+  on its original focused quotation criteria after PRs #315 and #316.
 - S3 [#221](https://github.com/dikini/ash-lang/issues/221) is closed on its
   original focused host-transfer criteria. The exact I16 mutation and other
   later connected cases remain at their original gates.
@@ -229,6 +261,16 @@ the original caller and handwritten controls are in
 These paths are relative to the local task handoff's `evidence/generator-escape/`
 unless stated otherwise. Pinned source, tool, fixture, protected-input and
 before/after details are in the receipts.
+
+The H4 public receipt is `evidence/h4-h6-retained-e9ab68f2/h4-receipt.json`
+(SHA-256 `1a70bcdbd9ad236b8bfb07690a8c4232d2a6c3897e0dccc5f524d4a3f2271ae5`),
+and its exact test-only observation is `h4-focused-receipt.json` in that
+same directory (SHA-256
+`12bf998d82aa2b5d63e8cf161a1e11078e85006b1589fa444c8f7bc385ff0a7d`). The
+H6 original and copied-variant matrix is `h6-receipt.json` there (SHA-256
+`5096f354d33b55631e97eadfff2b1d73254170b2116ade3861272d9b1bc60bf9`);
+the corrected interface-importer control is `h6-interface-v2-receipt.json`
+(SHA-256 `336be70489fd2e2867dc9b7fea8370d1f0aa8a8619eb4e01f7b6a2183249eae2`).
 
 The complete superseded chronology, individual historical evidence links,
 accepted changes, and prior local findings remain in the
