@@ -7722,14 +7722,24 @@ fn capture_source_declaration_contents(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
-    capture_source_declaration_contents_inner(source, node, tokens, None)
+    capture_source_declaration_contents_selected(source, node, tokens, None, true)
 }
 
 fn capture_source_declaration_contents_inner(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
+    budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+    capture_source_declaration_contents_selected(source, node, tokens, budget, false)
+}
+
+fn capture_source_declaration_contents_selected(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
     mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    preserve_quote: bool,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
@@ -7759,25 +7769,33 @@ fn capture_source_declaration_contents_inner(
     }
 
     let mut indices = Vec::new();
+    let quoted =
+        preserve_quote && matches!(node.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
     let mut pending = if let Some(budget) = budget.as_deref_mut() {
         budget
             .charge_units(node.children.len())
             .map_err(ProjectionError::ResourceLimit)?;
         let mut pending = Vec::with_capacity(node.children.len());
-        pending.extend(node.children.iter().rev());
+        pending.extend(node.children.iter().rev().map(|child| (child, quoted)));
         pending
     } else {
-        node.children.iter().rev().collect::<Vec<_>>()
+        node.children
+            .iter()
+            .rev()
+            .map(|child| (child, quoted))
+            .collect::<Vec<_>>()
     };
-    while let Some(element) = pending.pop() {
+    while let Some((element, quoted)) = pending.pop() {
         match element {
             ConcreteElement::Node(child) => {
                 reserve_growth!(pending, child.children.len());
-                pending.extend(child.children.iter().rev());
+                let quoted = preserve_quote
+                    && matches!(child.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
+                pending.extend(child.children.iter().rev().map(|element| (element, quoted)));
             }
             ConcreteElement::Token(index) => {
                 reserve_growth!(indices, 1);
-                indices.push(*index);
+                indices.push((*index, quoted));
             }
             ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
                 return Err(ProjectionError::RecoveryNodesPresent);
@@ -7787,7 +7805,7 @@ fn capture_source_declaration_contents_inner(
     let mut output = Vec::new();
     let mut frames: Vec<GroupFrame> = Vec::new();
     let mut position = 0;
-    while let Some(&index) = indices.get(position) {
+    while let Some(&(index, quoted)) = indices.get(position) {
         let token = tokens.get(index).ok_or(ProjectionError::MalformedTree(
             InternalReason::TokenOutOfRange,
         ))?;
@@ -7836,10 +7854,10 @@ fn capture_source_declaration_contents_inner(
                     join_spans(source, frame.opening, token.span)?.into(),
                 )
             }
-            TokenKind::Dollar => {
+            TokenKind::Dollar if !quoted => {
                 let next = indices
                     .get(position)
-                    .and_then(|index| tokens.projection_token(*index))
+                    .and_then(|(index, _)| tokens.projection_token(*index))
                     .ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
