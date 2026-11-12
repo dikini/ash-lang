@@ -1215,12 +1215,27 @@ impl Encoder<'_> {
     pub(super) fn encode_interface_owners(
         &mut self,
         registry: &crate::resolved::ResolvedRegistry,
+        originals: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
     ) -> Result<(), ImageFailure> {
         for (id, parameters) in registry.image_interface_owner_definitions() {
-            let id = self.interface_identity(id)?;
+            let owner = id;
+            let id = self.interface_identity(owner)?;
             let start = self.image.parameters.len();
-            for parameter in parameters {
-                self.encode_parameter(parameter)?;
+            for (ordinal, parameter) in parameters.iter().enumerate() {
+                if matches!(parameter.origin, crate::source::Origin::Source(_)) {
+                    self.encode_parameter(parameter)?;
+                } else {
+                    let expected =
+                        crate::core::dialect::checked_owner_anchors::OriginalOwner::Interface(
+                            owner,
+                        );
+                    if self.original_parameter_slot(originals, parameter)?
+                        != Some((expected, ordinal))
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    self.encode_checked_parameter(parameter)?;
+                }
             }
             push(
                 &mut self.image.interface_owners,

@@ -959,7 +959,7 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
     }
     encoder.encode_registry(registry)?;
     if effect_dialect {
-        encoder.encode_extended_registry(registry)?;
+        encoder.encode_extended_registry(registry, program.checked_owner_modules())?;
     }
     if effect_dialect {
         encoder.image.main_method_catalog = Some(encoder.encode_method_catalog(catalog)?);
@@ -8653,6 +8653,73 @@ impl Encoder<'_> {
         self.encode_parameter_data(original)
     }
 
+    // Resolve only an existing checked declaring slot. The reverse index is
+    // derived at checked Core admission and cannot be supplied by a caller.
+    fn original_parameter_slot(
+        &mut self,
+        modules: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
+        parameter: &crate::resolved::ResolvedTypeVariable,
+    ) -> Result<
+        Option<(
+            crate::core::dialect::checked_owner_anchors::OriginalOwner,
+            usize,
+        )>,
+        ImageFailure,
+    > {
+        let Some(module_id) = parameter.id.module() else {
+            return Ok(None);
+        };
+        charge(
+            self.work,
+            (usize::BITS - modules.len().leading_zeros()) as usize + 1,
+        )?;
+        let Ok(position) = modules.binary_search_by_key(&module_id, |module| module.module) else {
+            return Ok(None);
+        };
+        let module = &modules[position];
+        charge(
+            self.work,
+            (usize::BITS - module.slots.len().leading_zeros()) as usize + 1,
+        )?;
+        let Ok(position) = module
+            .slots
+            .binary_search_by_key(&parameter.id, |slot| slot.parameter)
+        else {
+            return Ok(None);
+        };
+        let slot = module.slots[position];
+        let row = module
+            .rows
+            .get(usize::try_from(slot.row).map_err(|_| ImageFailure::InvalidRecord)?)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let ordinal = usize::try_from(slot.slot).map_err(|_| ImageFailure::InvalidRecord)?;
+        let original = row
+            .parameters
+            .get(ordinal)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let primary = match parameter.origin {
+            Origin::Source(span) if span.source() == module.source => None,
+            Origin::Expansion { invocation, .. } if invocation.source() == module.source => {
+                Some(invocation)
+            }
+            _ => return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
+        };
+        if original.parameter != parameter.id || original.expansion_primary != primary {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(Some((row.owner, ordinal)))
+    }
+
+    fn encode_checked_parameter(
+        &mut self,
+        original: &crate::resolved::ResolvedTypeVariable,
+    ) -> Result<u32, ImageFailure> {
+        if original.kind != crate::kind::Kind::Type {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
+        self.encode_parameter_data(original)
+    }
+
     // Global records are consumed by their owning registry helper, so recursive
     // origins can use the existing paid flat Origin codec without cloning.
     fn encode_parameter_data(
@@ -8800,8 +8867,9 @@ impl Encoder<'_> {
     fn encode_extended_registry(
         &mut self,
         registry: &ResolvedRegistry,
+        originals: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
     ) -> Result<(), ImageFailure> {
-        self.encode_interface_owners(registry)?;
+        self.encode_interface_owners(registry, originals)?;
         let mut nominal_parameters = Vec::new();
         for (owner, parameters) in registry.nominal_parameter_entries() {
             let key = self.nominal(owner)?;
@@ -8979,7 +9047,13 @@ impl Encoder<'_> {
         for (_, parameter) in parameters {
             charge(self.work, 1)?;
             if !selected.contains_key(&parameter.id) {
-                let slot = self.encode_parameter(parameter)?;
+                let slot = match self.original_parameter_slot(originals, parameter)? {
+                    Some((
+                        crate::core::dialect::checked_owner_anchors::OriginalOwner::Method(_),
+                        _,
+                    )) => self.encode_checked_parameter(parameter)?,
+                    _ => self.encode_parameter(parameter)?,
+                };
                 push(&mut self.image.scope_parameters, slot, self.work)?;
             }
         }
@@ -11146,6 +11220,134 @@ pub(crate) fn encode_effect_for_build(
     encode_native_preparation(program, provenance, quote_guards, target, work)
 }
 
+// Only locally declaring Method rows from genuine checked Core can supply
+// the additional native inventory category. Inherited Interface slots are
+// not Method declarations.
+fn checked_method_inventory(
+    program: &crate::core::ValidatedEffectProgram,
+    scope_identities: &[crate::types::TypeVariableId],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<crate::types::TypeVariableId>, ImageFailure> {
+    use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+    use crate::kind::Kind;
+
+    let modules = program.checked_owner_modules();
+    let mut count = 0usize;
+    for module in modules {
+        charge(work, 1)?;
+        for row in &module.rows {
+            charge(work, 1)?;
+            if matches!(row.owner, OriginalOwner::Method(_)) {
+                count = count
+                    .checked_add(row.parameters.len())
+                    .ok_or(ImageFailure::Resource)?;
+            }
+        }
+    }
+    charge(work, count)?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve_exact(count)
+        .map_err(|_| ImageFailure::Resource)?;
+    for module in modules {
+        charge(work, 1)?;
+        for (row_index, row) in module.rows.iter().enumerate() {
+            charge(work, 1)?;
+            let OriginalOwner::Method(method) = row.owner else {
+                continue;
+            };
+            if method.interface().module() != module.module {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            for (ordinal, original) in row.parameters.iter().enumerate() {
+                charge(
+                    work,
+                    (usize::BITS - module.slots.len().leading_zeros()) as usize + 3,
+                )?;
+                let slot = module
+                    .slots
+                    .binary_search_by_key(&original.parameter, |slot| slot.parameter)
+                    .ok()
+                    .and_then(|position| module.slots.get(position))
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let canonical = program
+                    .registry()
+                    .type_variable(original.parameter)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let primary = match canonical.origin {
+                    Origin::Source(span) if span.source() == module.source => None,
+                    Origin::Expansion { invocation, .. }
+                        if invocation.source() == module.source =>
+                    {
+                        Some(invocation)
+                    }
+                    _ => return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
+                };
+                if original.parameter.module() != Some(module.module)
+                    || canonical.id != original.parameter
+                    || canonical.kind != Kind::Type
+                    || original.expansion_primary != primary
+                    || usize::try_from(slot.row).ok() != Some(row_index)
+                    || usize::try_from(slot.slot).ok() != Some(ordinal)
+                {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                methods.push(original.parameter);
+            }
+        }
+    }
+    sort_image_records(&mut methods, |id| *id, work)?;
+    charge(work, methods.len())?;
+    if methods.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(ImageFailure::InvalidRecord);
+    }
+    if methods.is_empty() {
+        return Ok(methods);
+    }
+    fn disjoint(
+        methods: &[crate::types::TypeVariableId],
+        id: crate::types::TypeVariableId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ImageFailure> {
+        charge(
+            work,
+            (usize::BITS - methods.len().leading_zeros()) as usize + 1,
+        )?;
+        if methods.binary_search(&id).is_ok() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(())
+    }
+    for (_, parameters) in program.registry().nominal_parameter_entries() {
+        charge(work, 1)?;
+        for parameter in parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for effect in program.registry().effects() {
+        charge(work, 1)?;
+        for parameter in &effect.parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for (_, parameters) in program.registry().image_interface_owner_definitions() {
+        charge(work, 1)?;
+        for parameter in parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for row in program.registry().global_parameter_rows() {
+        charge(work, 1)?;
+        for id in row.parameters() {
+            disjoint(&methods, *id, work)?;
+        }
+    }
+    for id in scope_identities {
+        disjoint(&methods, *id, work)?;
+    }
+    Ok(methods)
+}
+
 fn encode_native_preparation(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
@@ -11180,9 +11382,10 @@ fn encode_native_preparation(
             push(&mut identities, scope.identity(), work)?;
         }
     }
+    let method_variables = checked_method_inventory(program, &identities, work)?;
     if !program
         .registry()
-        .native_image_subset_with_source_scopes(&identities, &[], work)
+        .native_image_subset_with_source_scopes(&identities, &method_variables, work)
         .map_err(|_| ImageFailure::RegistryAdmission)?
     {
         return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
