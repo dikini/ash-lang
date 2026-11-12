@@ -152,6 +152,16 @@ the unchanged relation graph and the original method, Global and nested derive
 graphs now return 42 with their recorded controls. The H6 acceptance does not
 replace the remaining integrated corpus and verification gates.
 
+[PR #324](https://github.com/dikini/ash-lang/pull/324), retained at
+`3285587c2461ecd9cc3088a70cabaf946dd32a35`, completed V1
+[#241](https://github.com/dikini/ash-lang/issues/241) and the separately
+authorized diagnostic repairs in [#313](https://github.com/dikini/ash-lang/issues/313),
+[#321](https://github.com/dikini/ash-lang/issues/321) and
+[#322](https://github.com/dikini/ash-lang/issues/322). The original I01–I08
+driver corpus, handwritten controls and prescribed negative variants were
+reviewed in human and JSON modes, alongside the focused provenance, locale and
+work-budget checks. Independent retained and issue-state readbacks completed.
+
 ### Remaining work and gates
 
 The original G/E criteria and I01–I22 corpus remain at their named gates. The
@@ -169,24 +179,14 @@ No concrete implementation or adaptor preservation after image restore is claime
 G7 [#245](https://github.com/dikini/ash-lang/issues/245) remains open because
 the original diverging generator diagnostic omits the actual step-function
 origin; [#317](https://github.com/dikini/ash-lang/issues/317) records that
-separate downstream boundary. Only a later bounded #317 experiment is authorized;
-its repair and retention are not. Its native G4, G5, G6 and E5 successors remain
-at their original gates. V1 remains open for its full original criteria,
-including the distinct diagnostic gaps in
-[#313](https://github.com/dikini/ash-lang/issues/313),
-[#321](https://github.com/dikini/ash-lang/issues/321) and
-[#322](https://github.com/dikini/ash-lang/issues/322). The user has authorized
-one bounded diagnostic repair and retention for these three issues. The
-candidate retains the existing contextual names, source labels and profile
-causes through the diagnostic presenter. Its original I01–I08 driver corpus,
-handwritten controls and prescribed negative variants were replayed in human
-and JSON modes; focused locale, provenance and work-budget checks also passed.
-Independent final review, retention and issue acceptance remain in progress.
+separate downstream boundary. A bounded #317 experiment has been completed and
+independently reviewed; a separate repair and retention decision remains pending.
+Its native G4, G5, G6 and E5 successors remain at their original gates.
 
-Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
-V8 retained equality and acceptance remain required. The last full workspace
-checkpoint was E4 at `17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`; focused and
-native checks above do not replace it. Main integration is separate.
+Full V2/V3, acceptance of the original I16 mutation and native/image evidence,
+fresh V7, and V8 retained equality and acceptance remain required. The last
+full workspace checkpoint was E4 at `17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`;
+focused and native checks above do not replace it. Main integration is separate.
 
 ### Earlier retained acceptances
 
