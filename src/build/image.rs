@@ -4983,6 +4983,401 @@ mod tests {
         );
     }
 
+    // This covers the newly supported declaration metadata, without claiming
+    // native support for a concrete implementation or method invocation.
+    #[test]
+    fn checked_image_restores_declared_method_originals_and_bounds() {
+        use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+
+        fn origin_shape(
+            origin: &Origin,
+            sources: &[&SourceFile],
+        ) -> (u8, String, u32, u32, Option<(String, u32, u32)>) {
+            fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32) {
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                (
+                    source.display_path().to_owned(),
+                    span.range().start(),
+                    span.range().end(),
+                )
+            }
+            match origin {
+                Origin::Source(span) => {
+                    let (path, start, end) = place(*span, sources);
+                    (0, path, start, end, None)
+                }
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    let (path, start, end) = place(*invocation, sources);
+                    (1, path, start, end, Some(place(*definition, sources)))
+                }
+                _ => panic!("the fixture has only Source or direct Expansion origins"),
+            }
+        }
+
+        fn rows(
+            program: &crate::core::ValidatedEffectProgram,
+            sources: &[&SourceFile],
+        ) -> Vec<(
+            bool,
+            String,
+            (u8, String, u32, u32, Option<(String, u32, u32)>),
+        )> {
+            let mut result = Vec::new();
+            let mut interface = None;
+            let mut method = None;
+            for module in program.checked_owner_modules() {
+                for row in &module.rows {
+                    let is_method = match row.owner {
+                        OriginalOwner::Interface(id) if row.parameters.len() == 1 => {
+                            interface = Some(id);
+                            false
+                        }
+                        OriginalOwner::Method(id) if row.parameters.len() == 1 => {
+                            method = Some(id);
+                            true
+                        }
+                        _ => continue,
+                    };
+                    let original = row.parameters[0];
+                    let parameter = program
+                        .registry()
+                        .type_variable(original.parameter)
+                        .unwrap();
+                    assert_eq!(parameter.id, original.parameter);
+                    assert_eq!(parameter.kind, crate::types::Kind::Type);
+                    assert_eq!(
+                        original.expansion_primary,
+                        match parameter.origin {
+                            Origin::Expansion { invocation, .. } => Some(invocation),
+                            _ => None,
+                        }
+                    );
+                    result.push((
+                        is_method,
+                        parameter.spelling.clone(),
+                        origin_shape(&parameter.origin, sources),
+                    ));
+                }
+            }
+            assert_eq!(method.unwrap().interface(), interface.unwrap());
+            result.sort_by_key(|row| row.0);
+            assert_eq!(result.len(), 2);
+            assert_eq!((&*result[0].1, &*result[1].1), ("A", "B"));
+            result
+        }
+
+        for generated in [false, true] {
+            let tree = SourceTree::new();
+            tree.write(
+                "forms.ash",
+                "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+            );
+            tree.write(
+                "entry.ash",
+                if generated {
+                    "import forms (syntax emit)\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n"
+                } else {
+                    "interface Choose<A> {\n    choose<B> : (A, B) -> B\n}\nmain : Unit -> Int\nmain () = 42\n"
+                },
+            );
+            let compiled = compile_path(tree.configuration()).unwrap();
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let source_refs = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let original_rows = rows(program, &source_refs);
+            assert!(
+                original_rows
+                    .iter()
+                    .all(|row| row.2.0 == u8::from(generated))
+            );
+            let build = encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            let bytes = build
+                .image
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            let expected = build
+                .image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap();
+            drop(build);
+            drop(compiled);
+            drop(tree);
+
+            let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let mut measured = TypeWorkBudget::unbounded();
+            let restored = image
+                .restore_effect_checked(&expected, &[], &mut measured)
+                .unwrap();
+            let cost = measured.used();
+            eprintln!(
+                "declared method image restore (generated={generated}) uses exactly {cost} work units"
+            );
+            let sources = restored._sources.iter().collect::<Vec<_>>();
+            assert_eq!(rows(&restored.program, &sources), original_rows);
+            let module_sources = restored
+                .modules
+                .iter()
+                .copied()
+                .zip(restored._sources.iter().map(SourceFile::id))
+                .collect::<Vec<_>>();
+            for transformed in [
+                crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+                crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+            ] {
+                let checked =
+                    crate::core::validate_effect_modules(transformed, &sources, &module_sources)
+                        .unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&checked)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
+            }
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(
+                    image
+                        .restore_effect_checked(&expected, &[], &mut short)
+                        .is_err()
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    image
+                        .restore_effect_checked(&expected, &[], &mut exact)
+                        .unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+            }
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            drop(sources);
+            std::thread::Builder::new()
+                .stack_size(64 * 1024)
+                .spawn(move || drop(restored))
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn checked_image_declared_method_facts_refuse_fixed_image_changes() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let method_row = image
+            .original_owner_rows
+            .iter()
+            .position(|row| {
+                matches!(row.owner, OriginalOwnerIdentity::Method { .. }) && row.parameters.len == 1
+            })
+            .unwrap();
+        let interface_row = image
+            .original_owner_rows
+            .iter()
+            .position(|row| {
+                matches!(row.owner, OriginalOwnerIdentity::Interface { .. })
+                    && row.parameters.len == 1
+            })
+            .unwrap();
+        let method_parameter = image.original_owner_rows[method_row].parameters.start as usize;
+        let interface_parameter =
+            image.original_owner_rows[interface_row].parameters.start as usize;
+        let method_id = image.original_owner_parameters[method_parameter].parameter;
+        let method_scope = image
+            .scope_parameters
+            .iter()
+            .position(|slot| image.parameters[*slot as usize].id == method_id)
+            .unwrap();
+        let parameter_slot = image.scope_parameters[method_scope] as usize;
+        let origin_slot = image.parameters[parameter_slot].origin as usize;
+        assert!(matches!(
+            image.origins[origin_slot],
+            OriginRecord::Expansion { .. }
+        ));
+        assert!(
+            image.original_owner_parameters[method_parameter]
+                .expansion_primary
+                .is_some()
+        );
+        fn refuses(image: &PureImage, expected: &[u8]) {
+            assert!(
+                image
+                    .compare_native_expectations(expected, &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            assert!(
+                image
+                    .restore_effect_checked(expected, &[], &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+        }
+
+        let mut changed = decode();
+        changed.original_owner_rows[method_row].owner =
+            changed.original_owner_rows[interface_row].owner;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_rows[method_row].parameters.len = 0;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_parameters[method_parameter].parameter =
+            changed.original_owner_parameters[interface_parameter].parameter;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_parameters[method_parameter].expansion_primary = None;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion { invocation, .. } = changed.origins[origin_slot] else {
+            unreachable!()
+        };
+        changed.origins[origin_slot] = OriginRecord::Source(invocation);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion {
+            ref mut invocation, ..
+        } = changed.origins[origin_slot]
+        else {
+            unreachable!()
+        };
+        invocation.start = invocation.start.saturating_add(1);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion {
+            ref mut definition, ..
+        } = changed.origins[origin_slot]
+        else {
+            unreachable!()
+        };
+        definition.start = definition.start.saturating_add(1);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.kinds.push(KindRecord::EffectRow);
+        changed.parameters[parameter_slot].kind = (changed.kinds.len() - 1) as u32;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.parameters.push(changed.parameters[parameter_slot]);
+        changed.scope_parameters[method_scope] = (changed.parameters.len() - 1) as u32;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed
+            .original_owner_rows
+            .push(changed.original_owner_rows[method_row]);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_parameters.remove(method_parameter);
+        refuses(&changed, &expected);
+
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        donor_tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let mut changed = decode();
+        changed.original_owner_modules = donor.original_owner_modules.clone();
+        changed.original_owner_rows = donor.original_owner_rows.clone();
+        changed.original_owner_parameters = donor.original_owner_parameters.clone();
+        refuses(&changed, &expected);
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checked_image_keeps_non_type_method_locals_unsupported() {
+        let tree = SourceTree::new();
+        tree.write(
+            "entry.ash",
+            "interface Transform<A> {\n    transform<F : Type -> Type> : F<A> -> F<A>\n}\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        assert!(matches!(
+            encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default()
+            ),
+            Err(NativeImageFailure::Image(ImageFailure::Unsupported(
+                Unsupported::RegistryMetadata
+            )))
+        ));
+    }
+
     #[test]
     fn checked_image_rejects_coordinated_restored_owner_swap() {
         let tree = SourceTree::new();
