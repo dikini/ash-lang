@@ -3923,8 +3923,8 @@ pub(crate) fn project_declaration_expansions_with_resource(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
                     );
                 };
-                let (forwarded_expression, forwarded_pattern) =
-                    charge_forwarded_declaration(capture, depth, budget)?;
+                let (contents, forwarded_expression, forwarded_pattern) =
+                    crate::syntax::copy_forwarded_declaration(&capture.contents, depth, budget)?;
                 let anchor = current.invocation.unwrap_or_else(|| origin.primary());
                 budget.charge()?;
                 let frame = current.frame.clone();
@@ -3940,7 +3940,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
                 let parsed = super::parse_macro_tree_with_expression_scratch(
                     source,
                     anchor,
-                    capture.contents.to_vec(),
+                    contents,
                     &contexts,
                     &[],
                     super::MacroOutputPosition::StagedDeclarations,
@@ -7607,69 +7607,6 @@ fn capture_declaration_node(argument: &ConcreteNode) -> Result<&ConcreteNode, Pr
         return malformed(InternalReason::UnexpectedShape);
     }
     Ok(declaration)
-}
-
-/// Reserve the independent packet copy before the module parser consumes it.
-fn charge_forwarded_declaration(
-    capture: &SurfaceDeclarationCapture,
-    prefix: usize,
-    budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<(bool, bool), DeclarationExpansionFailure> {
-    use crate::syntax::MacroOutputNode;
-
-    let mut has_expression = false;
-    let mut has_pattern = false;
-    budget.charge_units(capture.contents.len().saturating_mul(3))?;
-    let mut pending = capture
-        .contents
-        .iter()
-        .map(|node| (node, prefix))
-        .collect::<Vec<_>>();
-    while let Some((node, depth)) = pending.pop() {
-        budget.charge()?;
-        match node {
-            MacroOutputNode::Identifier(name, origin) => {
-                crate::syntax::charge_type_name_copy(name, depth, budget)?;
-                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
-            }
-            MacroOutputNode::Token(kind, _, origin) => {
-                crate::syntax::charge_type_token_copy(kind, budget)?;
-                budget.charge()?;
-                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
-            }
-            MacroOutputNode::Group(_, children, origin) => {
-                let next = crate::syntax::type_depth(depth, 1)?;
-                crate::syntax::charge_type_origin_copy(origin, next, budget)?;
-                budget.charge_units(children.len().saturating_mul(2))?;
-                let live = pending.len();
-                let requested = live.saturating_add(children.len());
-                if requested > pending.capacity() {
-                    budget.charge_units(requested.saturating_add(live))?;
-                    pending.reserve_exact(children.len());
-                }
-                pending.extend(children.iter().map(|node| (node, next)));
-            }
-            MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedType(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _) => {
-                has_expression |= matches!(node, MacroOutputNode::ForwardedExpression(_, _));
-                has_pattern |= matches!(node, MacroOutputNode::ForwardedPattern(_, _));
-                if crate::syntax::charge_captured_ep_original_selected(node, depth, true, budget)? {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-            }
-            MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedDeclaration(_, _)
-            | MacroOutputNode::Splice(_)
-            | MacroOutputNode::TemplateRepeat(_)
-            | MacroOutputNode::TemplateEscape(_) => {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            }
-        }
-    }
-    Ok((has_expression, has_pattern))
 }
 
 /// Reserve the source-only packet and check its retained delimiter depth.

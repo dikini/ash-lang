@@ -1917,7 +1917,8 @@ pub(crate) fn copy_fragment_output_with_type(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
-    copy_fragment_output_inner(output, budget, false)
+    copy_fragment_output_inner(output, budget, FragmentCopy::Existing)
+        .map(|(contents, has_type, has_expression, _)| (contents, has_type, has_expression))
 }
 
 /// Copy a declaration-service packet without interpreting its quoted tokens.
@@ -1925,14 +1926,32 @@ pub(crate) fn copy_declaration_output(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
-    copy_fragment_output_inner(output, budget, true).map(|(contents, _, _)| contents)
+    copy_fragment_output_inner(output, budget, FragmentCopy::DeclarationParse)
+        .map(|(contents, _, _, _)| contents)
+}
+
+/// Copy one retained declaration into its staged module parser.
+pub(crate) fn copy_forwarded_declaration(
+    output: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, FragmentCopy::ForwardedDeclaration(prefix))
+        .map(|(contents, _, expression, pattern)| (contents, expression, pattern))
+}
+
+#[derive(Clone, Copy)]
+enum FragmentCopy {
+    Existing,
+    DeclarationParse,
+    ForwardedDeclaration(usize),
 }
 
 fn copy_fragment_output_inner(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
-    declarations: bool,
-) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
+    mode: FragmentCopy,
+) -> Result<(Vec<MacroOutputNode>, bool, bool, bool), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1948,7 +1967,11 @@ fn copy_fragment_output_inner(
     }
     // Expression, Type and Pattern captures own an AST plus a contents Arc;
     // a declaration capture owns only the contents Arc.
-    let base_depth = if declarations { 1 } else { 2 };
+    let base_depth = match mode {
+        FragmentCopy::Existing => 2,
+        FragmentCopy::DeclarationParse => 1,
+        FragmentCopy::ForwardedDeclaration(prefix) => prefix,
+    };
     let mut pending = output
         .iter()
         .map(|node| (node, base_depth))
@@ -1957,6 +1980,7 @@ fn copy_fragment_output_inner(
     let mut group_depth = 0usize;
     let mut contains_protected_type = false;
     let mut contains_expression = false;
+    let mut contains_pattern = false;
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(resource)?;
         match node {
@@ -1996,6 +2020,7 @@ fn copy_fragment_output_inner(
                 charge_new_type_retention(capture, depth, budget)?;
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
+                contains_pattern = true;
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 if charge_new_pattern_copy(&capture.pattern, child, false, budget)
@@ -2009,6 +2034,11 @@ fn copy_fragment_output_inner(
             }
             MacroOutputNode::Expression(capture, origin)
             | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                if matches!(mode, FragmentCopy::ForwardedDeclaration(_))
+                    && matches!(node, MacroOutputNode::Expression(_, _))
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
                 contains_expression = true;
                 contains_protected_type |= capture.contains_protected_type;
                 let child = type_depth(depth, 1).map_err(resource)?;
@@ -2022,7 +2052,9 @@ fn copy_fragment_output_inner(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::ForwardedDeclaration(capture, origin) if declarations => {
+            MacroOutputNode::ForwardedDeclaration(capture, origin)
+                if matches!(mode, FragmentCopy::DeclarationParse) =>
+            {
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 charge_declaration_retention(&capture.contents, depth, budget)?;
@@ -2068,7 +2100,12 @@ fn copy_fragment_output_inner(
             Some(node) => copied.push(node.clone()),
             None => {
                 let Some(group) = groups.pop() else {
-                    return Ok((copied, contains_protected_type, contains_expression));
+                    return Ok((
+                        copied,
+                        contains_protected_type,
+                        contains_expression,
+                        contains_pattern,
+                    ));
                 };
                 let node = MacroOutputNode::Group(group.delimiter, copied, group.origin.clone());
                 nodes = group.nodes;
