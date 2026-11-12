@@ -2867,6 +2867,16 @@ pub(crate) enum DeclarationExpansionFailure {
     },
 }
 
+impl DeclarationExpansionFailure {
+    fn resource(&self) -> Option<ResourceFailure> {
+        match self {
+            Self::Syntax { resource, .. } => *resource,
+            Self::Projection(ProjectionError::ResourceLimit(resource)) => Some(*resource),
+            Self::Projection(_) => None,
+        }
+    }
+}
+
 impl From<ProjectionError> for DeclarationExpansionFailure {
     fn from(error: ProjectionError) -> Self {
         Self::Projection(error)
@@ -2910,6 +2920,14 @@ fn staged_template_failure(
             mut diagnostics,
             resource,
         } => {
+            // Once the original resource is exhausted, do not perform more
+            // paid inheritance or replace its cause with a later failure.
+            if resource.is_some() {
+                return Ok(DeclarationExpansionFailure::Syntax {
+                    diagnostics,
+                    resource,
+                });
+            }
             for diagnostic in &mut diagnostics {
                 let existing = diagnostic
                     .primary
@@ -3053,6 +3071,7 @@ fn prepare_deriving_outputs<'a>(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     staged_owners: &mut Vec<crate::syntax::SyntaxOwner>,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     transformer: &mut Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<std::collections::VecDeque<DeclarationFrame<'a>>, DeclarationExpansionFailure> {
@@ -3167,10 +3186,17 @@ fn prepare_deriving_outputs<'a>(
             owner_imports,
             staged_owners,
             staging_frames,
+            failure_frame,
             transformer,
             budget,
         )?;
-        outputs.push_back(admit_staged_output(output, source, staging_frames, budget)?);
+        outputs.push_back(admit_staged_output(
+            output,
+            source,
+            staging_frames,
+            failure_frame,
+            budget,
+        )?);
     }
     Ok(outputs)
 }
@@ -3187,6 +3213,7 @@ fn prepare_staged_output(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     staged_owners: &mut Vec<crate::syntax::SyntaxOwner>,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     transformer: &mut Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<PendingDeclarationOutput, DeclarationExpansionFailure> {
@@ -3209,46 +3236,151 @@ fn prepare_staged_output(
         invocation: anchor,
         definition: invocation.selection.declaration.span,
     });
-    let mut actual_pattern = false;
-    let mut actual_expression = false;
-    let output = match &invocation.selection.declaration.implementation {
-        SurfaceSyntaxImplementation::Template => {
-            if invocation.selection.declaration.contains_generators
-                || invocation.selection.declaration.template_escapes.is_some()
-            {
-                let (mut output, plan) = match crate::syntax::prepare_generator_template(
-                    &invocation.selection,
-                    template_captures,
-                    introduction,
-                    anchor,
-                    budget,
-                ) {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
+    let prepared = (|| -> Result<_, DeclarationExpansionFailure> {
+        let mut actual_pattern = false;
+        let mut actual_expression = false;
+        let output = match &invocation.selection.declaration.implementation {
+            SurfaceSyntaxImplementation::Template => {
+                if invocation.selection.declaration.contains_generators
+                    || invocation.selection.declaration.template_escapes.is_some()
+                {
+                    let (mut output, plan) = match crate::syntax::prepare_generator_template(
+                        &invocation.selection,
+                        template_captures,
+                        introduction,
+                        anchor,
+                        budget,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            return Err(staged_template_failure(
+                                error,
+                                staging_frames,
+                                &frame,
+                                budget,
+                            )?);
+                        }
+                    };
+                    let callback =
+                        transformer
+                            .as_deref_mut()
+                            .ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?;
+                    let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                        selected,
+                        owner_imports,
+                        staged_owners,
+                        budget,
+                    )?;
+                    budget.charge_units(2)?;
+                    let (results, fresh_count) = callback(
+                        &invocation.selection,
+                        crate::syntax::DeclarationAdapter::Generators(&plan),
+                        template_captures,
+                        source,
+                        &invocation.name,
+                        introduction,
+                        std::sync::Arc::new(contexts),
+                        std::sync::Arc::clone(&frame),
+                        staged_owners,
+                        budget,
+                    )
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                    budget.charge_units(fresh_count)?;
+                    staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                        caller_quote_owner: None,
+                        owner: None,
+                        declaration: invocation.selection.declaration.span,
+                        import_span: invocation.selection.import_span,
+                    }));
+                    if results.len() != plan.results {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    apply_generator_results(&mut output, &results, budget, 0)?;
+                    crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                    (actual_pattern, actual_expression) =
+                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                    output
+                } else {
+                    let mut output = match crate::syntax::prepare_declaration_template(
+                        &invocation.selection,
+                        template_captures,
+                        anchor,
+                        budget,
+                    ) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            return Err(staged_template_failure(
+                                error,
+                                staging_frames,
+                                &frame,
+                                budget,
+                            )?);
+                        }
+                    };
+                    let escaped = materialize_template_escapes(
+                        &mut output,
+                        &invocation.selection,
+                        template_captures,
+                        source,
+                        &invocation.name,
+                        introduction,
+                        selected,
+                        owner_imports,
+                        staged_owners,
+                        &frame,
+                        transformer,
+                        budget,
+                        0,
+                    )?;
+                    if let Err(error) = crate::syntax::substitute_contents(
+                        &mut output,
+                        &invocation.selection.declaration.matcher,
+                        template_captures,
+                        introduction,
+                        anchor,
+                        Some(&mut *budget),
+                    ) {
                         return Err(staged_template_failure(
-                            error,
+                            error.into_macro_failure(),
                             staging_frames,
                             &frame,
                             budget,
                         )?);
                     }
-                };
-                let callback = transformer
-                    .as_deref_mut()
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
+                    crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                    if escaped {
+                        (actual_pattern, actual_expression) =
+                            charge_transformer_type_metadata_copies_with_expression(
+                                &output, budget,
+                            )?;
+                    }
+                    output
+                }
+            }
+            SurfaceSyntaxImplementation::Transformer(_) => {
+                let transformer =
+                    transformer
+                        .as_deref_mut()
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
                 let contexts = crate::syntax::SyntaxContexts::new_budgeted(
                     selected,
                     owner_imports,
                     staged_owners,
                     budget,
                 )?;
+                // The context allocation and the passed frame retention.
                 budget.charge_units(2)?;
-                let (results, fresh_count) = callback(
+                let (output, fresh_count) = transformer(
                     &invocation.selection,
-                    crate::syntax::DeclarationAdapter::Generators(&plan),
-                    template_captures,
+                    crate::syntax::DeclarationAdapter::Transformer,
+                    &invocation.captures,
                     source,
                     &invocation.name,
                     introduction,
@@ -3265,138 +3397,63 @@ fn prepare_staged_output(
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
                 }));
-                if results.len() != plan.results {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-                apply_generator_results(&mut output, &results, budget, 0)?;
-                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
                 (actual_pattern, actual_expression) =
                     charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
                 output
-            } else {
-                let mut output = match crate::syntax::prepare_declaration_template(
-                    &invocation.selection,
-                    template_captures,
-                    anchor,
-                    budget,
-                ) {
-                    Ok(output) => output,
-                    Err(error) => {
-                        return Err(staged_template_failure(
-                            error,
-                            staging_frames,
-                            &frame,
-                            budget,
-                        )?);
-                    }
-                };
-                let escaped = materialize_template_escapes(
-                    &mut output,
-                    &invocation.selection,
-                    template_captures,
-                    source,
-                    &invocation.name,
-                    introduction,
-                    selected,
-                    owner_imports,
-                    staged_owners,
-                    &frame,
-                    transformer,
-                    budget,
-                    0,
-                )?;
-                if let Err(error) = crate::syntax::substitute_contents(
-                    &mut output,
-                    &invocation.selection.declaration.matcher,
-                    template_captures,
-                    introduction,
-                    anchor,
-                    Some(&mut *budget),
-                ) {
-                    return Err(staged_template_failure(
-                        error.into_macro_failure(),
-                        staging_frames,
-                        &frame,
-                        budget,
-                    )?);
-                }
-                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
-                if escaped {
-                    (actual_pattern, actual_expression) =
-                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-                }
-                output
             }
-        }
-        SurfaceSyntaxImplementation::Transformer(_) => {
-            let transformer = transformer
-                .as_deref_mut()
-                .ok_or(ProjectionError::MalformedTree(
-                    InternalReason::UnexpectedShape,
-                ))?;
-            let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-                selected,
-                owner_imports,
-                staged_owners,
-                budget,
-            )?;
-            // The context allocation and the passed frame retention.
-            budget.charge_units(2)?;
-            let (output, fresh_count) = transformer(
-                &invocation.selection,
-                crate::syntax::DeclarationAdapter::Transformer,
-                &invocation.captures,
-                source,
-                &invocation.name,
-                introduction,
-                std::sync::Arc::new(contexts),
-                std::sync::Arc::clone(&frame),
-                staged_owners,
-                budget,
-            )
-            .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
-            budget.charge_units(fresh_count)?;
-            staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
-                caller_quote_owner: None,
-                owner: None,
-                declaration: invocation.selection.declaration.span,
-                import_span: invocation.selection.import_span,
-            }));
-            (actual_pattern, actual_expression) =
-                charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-            output
-        }
-    };
-    expression_pattern |= actual_pattern;
-    let pattern_accounting = expression_pattern
-        && matches!(
+        };
+        expression_pattern |= actual_pattern;
+        let pattern_accounting = expression_pattern
+            && matches!(
+                invocation.selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+        let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+            selected,
+            owner_imports,
+            staged_owners,
+            budget,
+        )?;
+        budget.charge_units(2)?;
+        let transformer_output = matches!(
             invocation.selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
-    let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-        selected,
-        owner_imports,
-        staged_owners,
-        budget,
-    )?;
-    budget.charge_units(2)?;
-    let transformer_output = matches!(
-        invocation.selection.declaration.implementation,
-        SurfaceSyntaxImplementation::Transformer(_)
-    );
-    Ok(PendingDeclarationOutput {
-        output,
-        contexts,
-        anchor,
-        construction: (invocation.selection.declaration.span, introduction),
-        frame,
-        expression_pattern,
-        pattern_accounting,
-        actual_expression,
-        transformer_output,
-    })
+        Ok((
+            output,
+            contexts,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        ))
+    })();
+    match prepared {
+        Ok((
+            output,
+            contexts,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        )) => Ok(PendingDeclarationOutput {
+            output,
+            contexts,
+            anchor,
+            construction: (invocation.selection.declaration.span, introduction),
+            frame,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        }),
+        Err(error) => {
+            if error.resource().is_some() {
+                *failure_frame = Some(frame);
+            }
+            Err(error)
+        }
+    }
 }
 
 fn apply_generator_results(
@@ -3503,6 +3560,7 @@ fn admit_staged_output<'a>(
     pending: PendingDeclarationOutput,
     source: &SourceFile,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<DeclarationFrame<'a>, DeclarationExpansionFailure> {
     let PendingDeclarationOutput {
@@ -3516,73 +3574,95 @@ fn admit_staged_output<'a>(
         actual_expression,
         transformer_output,
     } = pending;
-    // Admission sees the current expansion frame, but does not enter it on
-    // the traversal stack until this output is selected for descent.
-    budget.charge_units(staging_frames.len().saturating_mul(2).saturating_add(2))?;
-    let mut admission_frames = Vec::with_capacity(staging_frames.len().saturating_add(1));
-    admission_frames.extend(staging_frames.iter().cloned());
-    admission_frames.push(std::sync::Arc::clone(&frame));
-    let parsed = match super::parse_macro_tree_with_expression_scratch(
-        source,
-        anchor,
-        output,
-        &contexts,
-        &[],
-        super::MacroOutputPosition::StagedDeclarations,
-        pattern_accounting,
-        actual_expression,
-        budget,
-    ) {
-        Ok(parsed) => parsed,
-        Err(super::MacroParseFailure::Syntax {
-            mut diagnostics,
-            resource,
-        }) => {
-            for diagnostic in &mut diagnostics {
-                let existing = diagnostic
-                    .primary
-                    .diagnostic_location()
-                    .map_or(0, |location| location.frames.len());
-                charge_frame_additions(admission_frames.len(), existing, budget)?;
-                diagnostic
-                    .diagnostic
-                    .primary
-                    .inherit_frames(&admission_frames);
-            }
-            return Err(DeclarationExpansionFailure::Syntax {
-                diagnostics,
+    let admitted = (|| -> Result<_, DeclarationExpansionFailure> {
+        // Admission sees the current expansion frame, but does not enter it on
+        // the traversal stack until this output is selected for descent.
+        budget.charge_units(staging_frames.len().saturating_mul(2).saturating_add(2))?;
+        let mut admission_frames = Vec::with_capacity(staging_frames.len().saturating_add(1));
+        admission_frames.extend(staging_frames.iter().cloned());
+        admission_frames.push(std::sync::Arc::clone(&frame));
+        let parsed = match super::parse_macro_tree_with_expression_scratch(
+            source,
+            anchor,
+            output,
+            &contexts,
+            &[],
+            super::MacroOutputPosition::StagedDeclarations,
+            pattern_accounting,
+            actual_expression,
+            budget,
+        ) {
+            Ok(parsed) => parsed,
+            Err(super::MacroParseFailure::Syntax {
+                mut diagnostics,
                 resource,
-            });
+            }) => {
+                if resource.is_some() {
+                    return Err(DeclarationExpansionFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    });
+                }
+                for diagnostic in &mut diagnostics {
+                    let existing = diagnostic
+                        .primary
+                        .diagnostic_location()
+                        .map_or(0, |location| location.frames.len());
+                    charge_frame_additions(admission_frames.len(), existing, budget)?;
+                    diagnostic
+                        .diagnostic
+                        .primary
+                        .inherit_frames(&admission_frames);
+                }
+                return Err(DeclarationExpansionFailure::Syntax {
+                    diagnostics,
+                    resource,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // Recovery, depth, coverage, and shape checks each build a worklist.
+        for _ in 0..4 {
+            budget.charge_units(parsed.tree.events.len())?;
         }
-        Err(error) => return Err(error.into()),
-    };
-    // Recovery, depth, coverage, and shape checks each build a worklist.
-    for _ in 0..4 {
-        budget.charge_units(parsed.tree.events.len())?;
+        budget.charge_units(parsed.tree.tokens.len())?;
+        let output_root = validated_macro_root(source, &parsed.tree)?;
+        validate_node_shape_with_admission(
+            output_root,
+            &parsed.tree.tokens,
+            Some(&parsed.admission_identifiers),
+        )?;
+        if transformer_output {
+            check_narrow_protected_refusal(
+                output_root,
+                Some(&parsed.original_nodes),
+                true,
+                budget,
+            )?;
+        }
+        budget.charge_units(2)?;
+        Ok(parsed)
+    })();
+    match admitted {
+        Ok(parsed) => Ok(DeclarationFrame {
+            tree: DeclarationTree::Output(Box::new(parsed)),
+            contexts,
+            next: 0,
+            invocation: Some(anchor),
+            construction: Some(construction),
+            frame: Some(frame),
+            expression_pattern,
+            pattern_accounting,
+            owns_staging_frame: true,
+            deferred: std::collections::VecDeque::new(),
+        }),
+        Err(error) => {
+            if error.resource().is_some() {
+                *failure_frame = Some(frame);
+            }
+            Err(error)
+        }
     }
-    budget.charge_units(parsed.tree.tokens.len())?;
-    let output_root = validated_macro_root(source, &parsed.tree)?;
-    validate_node_shape_with_admission(
-        output_root,
-        &parsed.tree.tokens,
-        Some(&parsed.admission_identifiers),
-    )?;
-    if transformer_output {
-        check_narrow_protected_refusal(output_root, Some(&parsed.original_nodes), true, budget)?;
-    }
-    budget.charge_units(2)?;
-    Ok(DeclarationFrame {
-        tree: DeclarationTree::Output(Box::new(parsed)),
-        contexts,
-        next: 0,
-        invocation: Some(anchor),
-        construction: Some(construction),
-        frame: Some(frame),
-        expression_pattern,
-        pattern_accounting,
-        owns_staging_frame: true,
-        deferred: std::collections::VecDeque::new(),
-    })
 }
 
 fn enter_staged_frame(
@@ -3606,6 +3686,22 @@ fn enter_staged_frame(
         budget.charge()?;
     }
     staging_frames.push(std::sync::Arc::clone(expansion));
+    Ok(())
+}
+
+fn reserve_staged_failure_frame(
+    staging_frames: &mut Vec<std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    if staging_frames.len() == staging_frames.capacity() {
+        let live = staging_frames.len();
+        let work = live
+            .checked_add(1)
+            .and_then(|requested| requested.checked_add(live))
+            .unwrap_or(usize::MAX);
+        budget.charge_units(work)?;
+        staging_frames.reserve_exact(1);
+    }
     Ok(())
 }
 
@@ -3633,7 +3729,32 @@ pub(crate) fn project_declaration_expansions(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn project_declaration_expansions_with_quotes(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+    selected: &[crate::syntax::SelectedSyntax],
+    owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+    quote_sites: Option<&std::cell::RefCell<QuoteProjection>>,
+) -> Result<SurfaceModule, DeclarationExpansionFailure> {
+    project_declaration_expansions_with_resource(
+        source,
+        tree,
+        selected,
+        owner_imports,
+        owners,
+        budget,
+        transformer,
+        quote_sites,
+        &mut None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn project_declaration_expansions_with_resource(
     source: &SourceFile,
     tree: &ConcreteTree,
     selected: &[crate::syntax::SelectedSyntax],
@@ -3642,6 +3763,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
     budget: &mut crate::syntax_resource::SyntaxBudget,
     mut transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     quote_sites: Option<&std::cell::RefCell<QuoteProjection>>,
+    resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
 ) -> Result<SurfaceModule, DeclarationExpansionFailure> {
     let (root, raw_tokens) = validated_root(source, tree)?;
     let source_tokens = ProjectionTokens::source(raw_tokens);
@@ -3689,272 +3811,323 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         deferred: std::collections::VecDeque::new(),
     }];
     let mut staging_frames = Vec::new();
-    let mut module = ModuleProjection::default();
-    loop {
-        if let Some(output) = pending
-            .last_mut()
-            .and_then(|frame| frame.deferred.pop_front())
-        {
-            enter_staged_frame(&output, &mut staging_frames, budget)?;
-            pending.push(output);
-            continue;
-        }
-        let depth = pending.len();
-        let Some(current) = pending.last_mut() else {
-            break;
-        };
-        let index = current.next;
-        current.next += 1;
-        let Some(element) = current
-            .tree()
-            .root
-            .as_ref()
-            .and_then(|root| root.children.get(index))
-        else {
-            if current.owns_staging_frame {
-                staging_frames.pop();
-            }
-            pending.pop();
-            continue;
-        };
-        let ConcreteElement::Node(child) = element else {
-            continue;
-        };
-        let mut tokens = current.tokens(&staging_frames);
-        if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
-            // Caller-authored capture quotes share this module's actual quote
-            // introduction and ordinal, while their sites remain capture-owned.
-            tokens.quote_sites = quote_sites;
-        }
-        let deriving = if matches!(
-            child.kind,
-            NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
-        ) {
-            child_nodes(child).find(|node| node.kind == NodeKind::DerivingClause)
-        } else {
-            None
-        };
-        let mut derived_outputs = if let Some(clause) = deriving {
-            if depth > super::STRUCTURAL_DEPTH_LIMIT {
-                return Err(ResourceFailure::StructuralDepth {
-                    limit: super::STRUCTURAL_DEPTH_LIMIT,
-                }
-                .into());
-            }
-            Some(prepare_deriving_outputs(
-                source,
-                child,
-                clause,
-                &tokens,
-                &current.contexts,
-                selected,
-                owner_imports,
-                &mut staged_owners,
-                &staging_frames,
-                &mut transformer,
-                budget,
-            )?)
-        } else {
-            None
-        };
-        if child.kind == NodeKind::DeclarationFragment {
-            let [ConcreteElement::Token(index)] = child.children.as_slice() else {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            };
-            let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, origin)) =
-                tokens.originals.and_then(|nodes| nodes.get(index))
-            else {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            };
-            charge_forwarded_declaration(capture, depth, budget)?;
-            let anchor = current.invocation.unwrap_or_else(|| origin.primary());
-            budget.charge()?;
-            let frame = current.frame.clone();
-            let expression_pattern = current.expression_pattern;
-            let pattern_accounting = current.pattern_accounting;
-            let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-                selected,
-                owner_imports,
-                &staged_owners,
-                budget,
-            )?;
-            let parsed = super::parse_macro_tree_with_expression_scratch(
-                source,
-                anchor,
-                capture.contents.to_vec(),
-                &contexts,
-                &[],
-                super::MacroOutputPosition::StagedDeclarations,
-                pattern_accounting,
-                false,
-                budget,
-            )?;
-            for _ in 0..4 {
-                budget.charge_units(parsed.tree.events.len())?;
-            }
-            budget.charge_units(parsed.tree.tokens.len())?;
-            let root = validated_macro_root(source, &parsed.tree)?;
-            validate_node_shape_with_admission(
-                root,
-                &parsed.tree.tokens,
-                Some(&parsed.admission_identifiers),
-            )?;
-            let mut declarations = child_nodes(root);
-            if !declarations
-                .next()
-                .is_some_and(|node| is_capturable_declaration(node.kind))
-                || declarations.next().is_some()
+    let mut failure_frame = None;
+    let staged = (|| -> Result<SurfaceModule, DeclarationExpansionFailure> {
+        let mut module = ModuleProjection::default();
+        loop {
+            if let Some(mut output) = pending
+                .last_mut()
+                .and_then(|frame| frame.deferred.pop_front())
             {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+                if let Err(error) = enter_staged_frame(&output, &mut staging_frames, budget) {
+                    if error.resource().is_some() {
+                        failure_frame = output.frame.take();
+                    }
+                    return Err(error);
+                }
+                pending.push(output);
+                continue;
             }
-            drop(declarations);
-            budget.charge_units(2)?;
-            pending.push(DeclarationFrame {
-                tree: DeclarationTree::Output(Box::new(parsed)),
-                contexts,
-                next: 0,
-                invocation: Some(anchor),
-                construction: None,
-                frame,
-                expression_pattern,
-                pattern_accounting,
-                owns_staging_frame: false,
-                deferred: std::collections::VecDeque::new(),
-            });
-            continue;
-        }
-        if child.kind != NodeKind::DeclarationSyntaxInvocation {
-            if current.invocation.is_some() {
-                if matches!(
-                    child.kind,
-                    NodeKind::ImportDeclaration | NodeKind::SyntaxDeclaration
-                ) {
+            let depth = pending.len();
+            let Some(current) = pending.last_mut() else {
+                break;
+            };
+            let index = current.next;
+            current.next += 1;
+            let Some(element) = current
+                .tree()
+                .root
+                .as_ref()
+                .and_then(|root| root.children.get(index))
+            else {
+                if current.owns_staging_frame {
+                    staging_frames.pop();
+                }
+                pending.pop();
+                continue;
+            };
+            let ConcreteElement::Node(child) = element else {
+                continue;
+            };
+            let deriving = if matches!(
+                child.kind,
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
+            ) {
+                child_nodes(child).find(|node| node.kind == NodeKind::DerivingClause)
+            } else {
+                None
+            };
+            if deriving.is_some() || child.kind == NodeKind::DeclarationSyntaxInvocation {
+                if depth > super::STRUCTURAL_DEPTH_LIMIT {
+                    return Err(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    }
+                    .into());
+                }
+                reserve_staged_failure_frame(&mut staging_frames, budget)?;
+            }
+            let mut tokens = current.tokens(&staging_frames);
+            if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
+                // Caller-authored capture quotes share this module's actual quote
+                // introduction and ordinal, while their sites remain capture-owned.
+                tokens.quote_sites = quote_sites;
+            }
+            let mut derived_outputs = if let Some(clause) = deriving {
+                Some(prepare_deriving_outputs(
+                    source,
+                    child,
+                    clause,
+                    &tokens,
+                    &current.contexts,
+                    selected,
+                    owner_imports,
+                    &mut staged_owners,
+                    &staging_frames,
+                    &mut failure_frame,
+                    &mut transformer,
+                    budget,
+                )?)
+            } else {
+                None
+            };
+            if child.kind == NodeKind::DeclarationFragment {
+                let [ConcreteElement::Token(index)] = child.children.as_slice() else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, origin)) =
+                    tokens.originals.and_then(|nodes| nodes.get(index))
+                else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                charge_forwarded_declaration(capture, depth, budget)?;
+                let anchor = current.invocation.unwrap_or_else(|| origin.primary());
+                budget.charge()?;
+                let frame = current.frame.clone();
+                let expression_pattern = current.expression_pattern;
+                let pattern_accounting = current.pattern_accounting;
+                let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                    selected,
+                    owner_imports,
+                    &staged_owners,
+                    budget,
+                )?;
+                let parsed = super::parse_macro_tree_with_expression_scratch(
+                    source,
+                    anchor,
+                    capture.contents.to_vec(),
+                    &contexts,
+                    &[],
+                    super::MacroOutputPosition::StagedDeclarations,
+                    pattern_accounting,
+                    false,
+                    budget,
+                )?;
+                for _ in 0..4 {
+                    budget.charge_units(parsed.tree.events.len())?;
+                }
+                budget.charge_units(parsed.tree.tokens.len())?;
+                let root = validated_macro_root(source, &parsed.tree)?;
+                validate_node_shape_with_admission(
+                    root,
+                    &parsed.tree.tokens,
+                    Some(&parsed.admission_identifiers),
+                )?;
+                let mut declarations = child_nodes(root);
+                if !declarations
+                    .next()
+                    .is_some_and(|node| is_capturable_declaration(node.kind))
+                    || declarations.next().is_some()
+                {
                     return Err(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
                     );
                 }
-                let protected_type = check_narrow_protected_refusal_inner(
-                    child,
-                    tokens.originals,
-                    false,
-                    Some(&current.contexts),
-                    budget,
-                )?;
-                if protected_type {
-                    if charge_projection_preflight_with_expression(
-                        child,
-                        &tokens,
-                        true,
-                        current.pattern_accounting,
-                        true,
-                        Some(&current.contexts),
-                        0,
-                        false,
-                        budget,
-                    )? {
-                        return Err(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        )
-                        .into());
-                    }
-                    let expression_budget = std::cell::RefCell::new(&mut *budget);
-                    let mut selected_tokens = current.tokens(&staging_frames);
-                    selected_tokens.expression_budget = Some(&expression_budget);
-                    if derived_outputs.is_some() {
-                        module.project_consumed_nominal(source, child, &selected_tokens)?;
-                    } else {
-                        module.project_child(source, child, &selected_tokens)?;
-                    }
-                    if let Some(outputs) = derived_outputs.take() {
-                        current.deferred = outputs;
-                    }
-                    continue;
-                } else if current.expression_pattern {
-                    if charge_projection_preflight_selected(
-                        child,
-                        &tokens,
-                        true,
-                        current.pattern_accounting,
-                        budget,
-                    )? {
-                        return Err(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        )
-                        .into());
-                    }
-                } else {
-                    charge_projection_preflight(child, &tokens, false, budget)?;
-                }
-            }
-            if derived_outputs.is_some() {
+                drop(declarations);
                 budget.charge_units(2)?;
-                module.project_consumed_nominal(source, child, &tokens)?;
-            } else {
-                match &current.tree {
-                    DeclarationTree::Source(tree) => project_staged_source_child_with_quotes(
-                        &mut module,
-                        source,
+                pending.push(DeclarationFrame {
+                    tree: DeclarationTree::Output(Box::new(parsed)),
+                    contexts,
+                    next: 0,
+                    invocation: Some(anchor),
+                    construction: None,
+                    frame,
+                    expression_pattern,
+                    pattern_accounting,
+                    owns_staging_frame: false,
+                    deferred: std::collections::VecDeque::new(),
+                });
+                continue;
+            }
+            if child.kind != NodeKind::DeclarationSyntaxInvocation {
+                if current.invocation.is_some() {
+                    if matches!(
+                        child.kind,
+                        NodeKind::ImportDeclaration | NodeKind::SyntaxDeclaration
+                    ) {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    let protected_type = check_narrow_protected_refusal_inner(
                         child,
-                        &tree.tokens,
+                        tokens.originals,
+                        false,
+                        Some(&current.contexts),
                         budget,
-                        quote_sites,
-                    )?,
-                    DeclarationTree::Output(_) => module.project_child(source, child, &tokens)?,
+                    )?;
+                    if protected_type {
+                        if charge_projection_preflight_with_expression(
+                            child,
+                            &tokens,
+                            true,
+                            current.pattern_accounting,
+                            true,
+                            Some(&current.contexts),
+                            0,
+                            false,
+                            budget,
+                        )? {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        let expression_budget = std::cell::RefCell::new(&mut *budget);
+                        let mut selected_tokens = current.tokens(&staging_frames);
+                        selected_tokens.expression_budget = Some(&expression_budget);
+                        if derived_outputs.is_some() {
+                            module.project_consumed_nominal(source, child, &selected_tokens)?;
+                        } else {
+                            module.project_child(source, child, &selected_tokens)?;
+                        }
+                        if let Some(outputs) = derived_outputs.take() {
+                            current.deferred = outputs;
+                        }
+                        continue;
+                    } else if current.expression_pattern {
+                        if charge_projection_preflight_selected(
+                            child,
+                            &tokens,
+                            true,
+                            current.pattern_accounting,
+                            budget,
+                        )? {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    } else {
+                        charge_projection_preflight(child, &tokens, false, budget)?;
+                    }
                 }
+                if derived_outputs.is_some() {
+                    budget.charge_units(2)?;
+                    module.project_consumed_nominal(source, child, &tokens)?;
+                } else {
+                    match &current.tree {
+                        DeclarationTree::Source(tree) => project_staged_source_child_with_quotes(
+                            &mut module,
+                            source,
+                            child,
+                            &tree.tokens,
+                            budget,
+                            quote_sites,
+                        )?,
+                        DeclarationTree::Output(_) => {
+                            module.project_child(source, child, &tokens)?
+                        }
+                    }
+                }
+                if let Some(outputs) = derived_outputs.take() {
+                    current.deferred = outputs;
+                }
+                continue;
             }
-            if let Some(outputs) = derived_outputs.take() {
-                current.deferred = outputs;
-            }
-            continue;
-        }
 
-        if depth > super::STRUCTURAL_DEPTH_LIMIT {
-            return Err(ResourceFailure::StructuralDepth {
-                limit: super::STRUCTURAL_DEPTH_LIMIT,
+            let expression_pattern = charge_declaration_invocation(
+                source,
+                child,
+                &tokens,
+                &current.contexts,
+                true,
+                budget,
+            )?;
+            let invocation = project_declaration_invocation_node_inner(
+                source,
+                child,
+                &tokens,
+                &current.contexts,
+                true,
+                Some(budget),
+            )?;
+            #[cfg(test)]
+            G1_CAPTURE_OBSERVER.with(|observer| {
+                if let Some(observe) = observer.get() {
+                    observe(source, &invocation.captures, budget);
+                }
+            });
+            let output = prepare_staged_output(
+                invocation,
+                expression_pattern,
+                false,
+                source,
+                selected,
+                owner_imports,
+                &mut staged_owners,
+                &staging_frames,
+                &mut failure_frame,
+                &mut transformer,
+                budget,
+            )?;
+            let mut next =
+                admit_staged_output(output, source, &staging_frames, &mut failure_frame, budget)?;
+            if let Err(error) = enter_staged_frame(&next, &mut staging_frames, budget) {
+                if error.resource().is_some() {
+                    failure_frame = next.frame.take();
+                }
+                return Err(error);
             }
-            .into());
+            pending.push(next);
         }
-        let expression_pattern =
-            charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
-        let invocation = project_declaration_invocation_node_inner(
-            source,
-            child,
-            &tokens,
-            &current.contexts,
-            true,
-            Some(budget),
-        )?;
+        *owners = staged_owners;
+        let module = module.finish(span);
         #[cfg(test)]
-        G1_CAPTURE_OBSERVER.with(|observer| {
+        STAGED_MODULE_OBSERVER.with(|observer| {
             if let Some(observe) = observer.get() {
-                observe(source, &invocation.captures, budget);
+                observe(source, &module);
             }
         });
-        let output = prepare_staged_output(
-            invocation,
-            expression_pattern,
-            false,
-            source,
-            selected,
-            owner_imports,
-            &mut staged_owners,
-            &staging_frames,
-            &mut transformer,
-            budget,
-        )?;
-        let next = admit_staged_output(output, source, &staging_frames, budget)?;
-        enter_staged_frame(&next, &mut staging_frames, budget)?;
-        pending.push(next);
-    }
-    *owners = staged_owners;
-    let module = module.finish(span);
-    #[cfg(test)]
-    STAGED_MODULE_OBSERVER.with(|observer| {
-        if let Some(observe) = observer.get() {
-            observe(source, &module);
+        Ok(module)
+    })();
+    match staged {
+        Err(error) if error.resource().is_some() => {
+            if let Some(frame) = failure_frame {
+                // The slot was paid before this frame was prepared/admitted.
+                debug_assert!(staging_frames.len() < staging_frames.capacity());
+                staging_frames.push(frame);
+            }
+            if let Some(frame) = staging_frames.last() {
+                let mut location = crate::syntax::DiagnosticLocation::new(frame.invocation.into());
+                location.frames = staging_frames;
+                *resource_location = Some(location);
+            }
+            if let DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) = error
+            {
+                Err(resource.into())
+            } else {
+                Err(error)
+            }
         }
-    });
-    Ok(module)
+        result => result,
+    }
 }
 
 // Evaluate each actual outer escape through its checked defining-module

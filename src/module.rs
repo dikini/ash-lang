@@ -1016,6 +1016,7 @@ mod presentation_tests {
                 failure: Box::new(failure),
                 sources: vec![module.source].into_boxed_slice(),
                 compilation_work: None,
+                resource_location: None,
             };
             let diagnostics = crate::presentation::compile_graph_diagnostics(&context).unwrap();
             let mut output = Vec::new();
@@ -1316,9 +1317,14 @@ pub struct GraphDiagnostic {
     failure: Box<LoadGraphError>,
     sources: Box<[SourceFile]>,
     compilation_work: Option<Box<crate::compiler_work::CompilationWork>>,
+    resource_location: Option<crate::syntax::DiagnosticLocation>,
 }
 
 impl GraphDiagnostic {
+    pub(crate) fn resource_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        self.resource_location.as_ref()
+    }
+
     pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
         self.compilation_work.as_deref()
     }
@@ -1396,6 +1402,7 @@ impl From<LoadGraphError> for GraphDiagnostic {
             failure: Box::new(failure),
             sources: Box::default(),
             compilation_work: None,
+            resource_location: None,
         }
     }
 }
@@ -1710,6 +1717,7 @@ impl StagedModule {
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut StagedDeclarationTransformer<'_>>,
         quote: (Option<crate::syntax::SyntaxOwner>, &mut usize),
+        resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
     ) -> Result<LoadedModule, LoadGraphError> {
         let (quote_owner, next_quote_ordinal) = quote;
         let StagedSyntax {
@@ -1837,6 +1845,7 @@ impl StagedModule {
                         budget,
                         callback,
                         quote_projection.as_ref(),
+                        resource_location,
                     )?
                 };
                 if surface.imports != imports {
@@ -1991,6 +2000,7 @@ impl HeaderGraph {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
+        let mut resource_location = None;
         match module.into_loaded(
             &mut self.syntax_budget,
             syntax,
@@ -1998,6 +2008,7 @@ impl HeaderGraph {
             owners,
             transformer,
             (quote_owner, &mut self.next_quote_ordinal),
+            &mut resource_location,
         ) {
             Ok(module) => {
                 self.loaded.push(module);
@@ -2015,6 +2026,7 @@ impl HeaderGraph {
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                     compilation_work: None,
+                    resource_location,
                 })
             }
         }
@@ -2592,6 +2604,7 @@ fn discover_graph_with_budget(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
         compilation_work: None,
+        resource_location: None,
     })
 }
 
@@ -3166,6 +3179,7 @@ fn project_finished_module(
     budget: &mut SyntaxBudget,
     transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     quote_sites: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
+    resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -3179,7 +3193,7 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match crate::parser::project_declaration_expansions_with_quotes(
+    match crate::parser::project_declaration_expansions_with_resource(
         &source,
         &tree,
         syntax,
@@ -3188,6 +3202,7 @@ fn project_finished_module(
         budget,
         transformer,
         quote_sites,
+        resource_location,
     ) {
         Ok(surface) => Ok((source, surface)),
         Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {

@@ -2038,6 +2038,17 @@ fn compile_graph_syntax<'a>(
         &sources,
         Some(failure.source.display_path()),
     )?;
+    if let (Some(_), Some(location), Some(diagnostic)) = (
+        failure.resource,
+        context.resource_location(),
+        diagnostics.first_mut(),
+    ) {
+        append_diagnostic_locations(
+            diagnostic,
+            std::iter::once((location, location.primary.primary())),
+            &sources,
+        )?;
+    }
     for diagnostic in &mut diagnostics {
         if let Some(import) = import_label(context, "import_context")? {
             diagnostic.related.push(import);

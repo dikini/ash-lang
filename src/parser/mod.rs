@@ -21,6 +21,8 @@ pub(crate) use project::STAGED_MODULE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
 #[cfg(test)]
 pub(crate) use project::project_declaration_expansions;
+#[cfg(test)]
+pub(crate) use project::project_declaration_expansions_with_quotes;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
 pub(crate) use project::project_module_header;
@@ -28,7 +30,7 @@ pub(crate) use project::project_module_header;
 pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
 pub(crate) use project::{
-    DeclarationExpansionFailure, QuoteProjection, project_declaration_expansions_with_quotes,
+    DeclarationExpansionFailure, QuoteProjection, project_declaration_expansions_with_resource,
 };
 pub use project::{ProjectionError, project_module};
 
