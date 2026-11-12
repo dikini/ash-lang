@@ -1870,96 +1870,192 @@ where
                                 teardown: None,
                             }))
                         };
-                        let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
-                            &selected,
-                            &checked_syntax_imports,
-                            loan.owners,
-                            loan.budget,
-                        ) {
-                            Ok(contexts) => contexts,
-                            Err(resource) => {
+                        if let Some((next_quote_ordinal, quote_introduction)) = loan.quote_source {
+                            let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
+                                &selected,
+                                &checked_syntax_imports,
+                                loan.owners,
+                                loan.budget,
+                            ) {
+                                Ok(contexts) => contexts,
+                                Err(resource) => {
+                                    transformer_failure = Some(resource_failure(resource));
+                                    return Err(span);
+                                }
+                            };
+                            if let Err(resource) = loan.budget.charge_units(2) {
                                 transformer_failure = Some(resource_failure(resource));
                                 return Err(span);
                             }
-                        };
-                        if let Err(resource) = loan.budget.charge_units(2) {
-                            transformer_failure = Some(resource_failure(resource));
-                            return Err(span);
+                            let mut contexts = Some(Arc::new(contexts));
+                            let evaluated = evaluate_selected_transformer(
+                                selection,
+                                None,
+                                captures,
+                                module.source(),
+                                caller,
+                                introduction,
+                                TransformerContexts::Quote(&mut contexts),
+                                Arc::clone(frame),
+                                &checked,
+                                &mut transformer_entries,
+                                constraint_work,
+                                Some(&mut *loan.budget),
+                                Some(&mut *loan.owners),
+                            );
+                            return match evaluated {
+                                Ok((
+                                    crate::syntax::TransformerOutput::Expanded(output),
+                                    fresh_count,
+                                )) => {
+                                    #[cfg(test)]
+                                    if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                                        observe(selection, captures, &output);
+                                    }
+                                    let Some(contexts) = contexts.as_deref() else {
+                                        transformer_failure = Some(internal_file_failure());
+                                        return Err(span);
+                                    };
+                                    match crate::parser::parse_macro_expression_with_quotes(
+                                        module.source(),
+                                        span,
+                                        output,
+                                        contexts,
+                                        frame,
+                                        loan.budget,
+                                        next_quote_ordinal,
+                                        quote_introduction,
+                                    ) {
+                                        Ok(mut expression) => {
+                                            expression.expression.span = span;
+                                            Ok((expression, fresh_count))
+                                        }
+                                        Err(crate::parser::MacroParseFailure::Syntax {
+                                            diagnostics,
+                                            resource,
+                                        }) => {
+                                            transformer_failure = Some(FileFailure::from(
+                                                PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                                    diagnostics,
+                                                    resource,
+                                                    invocation: span,
+                                                    definition: selection.declaration.span,
+                                                    teardown: None,
+                                                }),
+                                            ));
+                                            Err(span)
+                                        }
+                                        Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
+                                    }
+                                }
+                                Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
+                                    transformer_failure = Some(FileFailure::from(
+                                        PipelineFailure::SyntaxExpansion(failure),
+                                    ));
+                                    Err(span)
+                                }
+                                Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
+                                    transformer_failure =
+                                        Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+                                    Err(span)
+                                }
+                                Err(error) => {
+                                    transformer_failure = Some(error);
+                                    Err(span)
+                                }
+                            };
                         }
-                        let mut contexts = Some(Arc::new(contexts));
-                        let evaluated = evaluate_selected_transformer(
+                        let entry = match selected_transformer_entry(
                             selection,
                             None,
-                            captures,
-                            module.source(),
-                            caller,
-                            introduction,
-                            TransformerContexts::Quote(&mut contexts),
-                            Arc::clone(frame),
                             &checked,
                             &mut transformer_entries,
                             constraint_work,
                             Some(&mut *loan.budget),
-                            Some(&mut *loan.owners),
-                        );
-                        return match evaluated {
-                            Ok((
-                                crate::syntax::TransformerOutput::Expanded(output),
-                                fresh_count,
-                            )) => {
-                                #[cfg(test)]
-                                if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
-                                    observe(selection, captures, &output);
-                                }
-                                let Some(contexts) = contexts.as_deref() else {
-                                    transformer_failure = Some(internal_file_failure());
-                                    return Err(span);
-                                };
-                                match crate::parser::parse_macro_expression_with_quotes(
-                                    module.source(),
-                                    span,
-                                    output,
-                                    contexts,
-                                    frame,
-                                    loan.budget,
-                                    loan.next_quote_ordinal,
-                                    loan.quote_introduction,
-                                ) {
-                                    Ok(mut expression) => {
-                                        expression.expression.span = span;
-                                        Ok((expression, fresh_count))
-                                    }
-                                    Err(crate::parser::MacroParseFailure::Syntax {
-                                        diagnostics,
-                                        resource,
-                                    }) => {
-                                        transformer_failure = Some(FileFailure::from(
-                                            PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                                diagnostics,
-                                                resource,
-                                                invocation: span,
-                                                definition: selection.declaration.span,
-                                                teardown: None,
-                                            }),
-                                        ));
-                                        Err(span)
-                                    }
-                                    Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
-                                }
-                            }
-                            Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
-                                transformer_failure = Some(FileFailure::from(
-                                    PipelineFailure::SyntaxExpansion(failure),
-                                ));
-                                Err(span)
-                            }
-                            Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
-                                transformer_failure =
-                                    Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
-                                Err(span)
-                            }
+                        ) {
+                            Ok(entry) => entry,
                             Err(error) => {
                                 transformer_failure = Some(error);
+                                return Err(span);
+                            }
+                        };
+                        if !entry.quote_sites.is_empty() {
+                            let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
+                                &selected,
+                                &checked_syntax_imports,
+                                loan.owners,
+                                loan.budget,
+                            ) {
+                                Ok(contexts) => contexts,
+                                Err(resource) => {
+                                    transformer_failure = Some(resource_failure(resource));
+                                    return Err(span);
+                                }
+                            };
+                            if let Err(resource) = loan.budget.charge_units(2) {
+                                transformer_failure = Some(resource_failure(resource));
+                                return Err(span);
+                            }
+                            let mut contexts = Some(Arc::new(contexts));
+                            let evaluated = evaluate_prepared_transformer(
+                                entry,
+                                selection,
+                                captures,
+                                module.source(),
+                                caller,
+                                introduction,
+                                TransformerContexts::Quote(&mut contexts),
+                                Arc::clone(frame),
+                                Some(&mut *loan.budget),
+                                Some(&mut *loan.owners),
+                            );
+                            return match finish_ordinary_expression_output(
+                                evaluated,
+                                selection,
+                                captures,
+                                module.source(),
+                                span,
+                                contexts.as_deref(),
+                                frame,
+                                Some(&mut *loan.budget),
+                            ) {
+                                Ok(result) => Ok(result),
+                                Err(error) => {
+                                    transformer_failure = error;
+                                    Err(span)
+                                }
+                            };
+                        }
+                        let contexts = Arc::new(crate::syntax::SyntaxContexts::new(
+                            &selected,
+                            &checked_syntax_imports,
+                            owners,
+                        ));
+                        let evaluated = evaluate_prepared_transformer(
+                            entry,
+                            selection,
+                            captures,
+                            module.source(),
+                            caller,
+                            introduction,
+                            TransformerContexts::Shared(Arc::clone(&contexts)),
+                            Arc::clone(frame),
+                            None,
+                            None,
+                        );
+                        return match finish_ordinary_expression_output(
+                            evaluated,
+                            selection,
+                            captures,
+                            module.source(),
+                            span,
+                            Some(&contexts),
+                            frame,
+                            None,
+                        ) {
+                            Ok(result) => Ok(result),
+                            Err(error) => {
+                                transformer_failure = error;
                                 Err(span)
                             }
                         };
@@ -1969,7 +2065,7 @@ where
                         &checked_syntax_imports,
                         owners,
                     ));
-                    match evaluate_selected_transformer(
+                    let evaluated = evaluate_selected_transformer(
                         selection,
                         None,
                         captures,
@@ -1983,55 +2079,20 @@ where
                         constraint_work,
                         None,
                         None,
+                    );
+                    match finish_ordinary_expression_output(
+                        evaluated,
+                        selection,
+                        captures,
+                        module.source(),
+                        span,
+                        Some(&contexts),
+                        frame,
+                        None,
                     ) {
-                        Ok((crate::syntax::TransformerOutput::Expanded(output), fresh_count)) => {
-                            #[cfg(test)]
-                            if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
-                                observe(selection, captures, &output);
-                            }
-                            match crate::syntax::admit_transformer_output(
-                                module.source(),
-                                output,
-                                &contexts,
-                                frame,
-                            ) {
-                                Ok(expression) => Ok((
-                                    crate::syntax::ExpandedExpression {
-                                        expression,
-                                        quote_sites: Vec::new(),
-                                    },
-                                    fresh_count,
-                                )),
-                                Err(crate::parser::MacroParseFailure::Syntax {
-                                    diagnostics,
-                                    resource,
-                                }) => {
-                                    transformer_failure = Some(FileFailure::from(
-                                        PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                            diagnostics,
-                                            resource,
-                                            invocation: span,
-                                            definition: selection.declaration.span,
-                                            teardown: None,
-                                        }),
-                                    ));
-                                    Err(span)
-                                }
-                                Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
-                            }
-                        }
-                        Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
-                            transformer_failure =
-                                Some(FileFailure::from(PipelineFailure::SyntaxExpansion(failure)));
-                            Err(span)
-                        }
-                        Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
-                            transformer_failure =
-                                Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
-                            Err(span)
-                        }
+                        Ok(result) => Ok(result),
                         Err(error) => {
-                            transformer_failure = Some(error);
+                            transformer_failure = error;
                             Err(span)
                         }
                     }
@@ -3068,8 +3129,41 @@ fn evaluate_selected_transformer(
     mut syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
     staged_owners: Option<&mut Vec<crate::syntax::SyntaxOwner>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
+    let entry = selected_transformer_entry(
+        selection,
+        adapter,
+        checked,
+        entries,
+        constraint_work,
+        syntax_work.as_deref_mut(),
+    )?;
+    evaluate_prepared_transformer(
+        entry,
+        selection,
+        captures,
+        source,
+        caller,
+        introduction,
+        contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+    )
+}
+
+fn selected_transformer_entry<'a>(
+    selection: &crate::syntax::SelectedSyntax,
+    adapter: Option<&crate::surface::SurfaceName>,
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    entries: &'a mut HashMap<
+        (ModuleId, crate::resolved::BinderId),
+        crate::core::validate::ValidatedMacroEntry,
+    >,
+    constraint_work: &mut InterfaceConstraintBudget,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<&'a crate::core::validate::ValidatedMacroEntry, FileFailure> {
     let (owner, binder) = transformer_owner_and_binder(selection, adapter, checked)?;
-    let entry = match entries.entry((owner.module(), binder)) {
+    Ok(match entries.entry((owner.module(), binder)) {
         std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(prepare_transformer_entry(
@@ -3077,12 +3171,27 @@ fn evaluate_selected_transformer(
                 binder,
                 checked,
                 constraint_work,
-                syntax_work.as_deref_mut(),
+                syntax_work,
                 None,
                 None,
             )?)
         }
-    };
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_prepared_transformer(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    selection: &crate::syntax::SelectedSyntax,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: TransformerContexts<'_>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
     let invocation = frame.invocation;
     let staged_owners =
         if entry.quote_sites.is_empty() && matches!(&contexts, TransformerContexts::Shared(_)) {
@@ -3124,6 +3233,73 @@ fn evaluate_selected_transformer(
             step: None,
         }))
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_ordinary_expression_output(
+    evaluated: Result<(crate::syntax::TransformerOutput, usize), FileFailure>,
+    selection: &crate::syntax::SelectedSyntax,
+    _captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    invocation: Span,
+    contexts: Option<&crate::syntax::SyntaxContexts>,
+    frame: &Arc<crate::syntax::ExpansionFrame>,
+    budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<(crate::syntax::ExpandedExpression, usize), Option<FileFailure>> {
+    match evaluated {
+        Ok((crate::syntax::TransformerOutput::Expanded(output), fresh_count)) => {
+            #[cfg(test)]
+            if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                observe(selection, _captures, &output);
+            }
+            let contexts = contexts.ok_or_else(|| Some(internal_file_failure()))?;
+            let parsed = if let Some(budget) = budget {
+                crate::parser::parse_macro_expression_budgeted(
+                    source,
+                    invocation,
+                    None,
+                    output,
+                    contexts,
+                    Some(frame),
+                    budget,
+                )
+            } else {
+                crate::syntax::admit_transformer_output(source, output, contexts, frame)
+            };
+            match parsed {
+                Ok(mut expression) => {
+                    expression.span = invocation;
+                    Ok((
+                        crate::syntax::ExpandedExpression {
+                            expression,
+                            quote_sites: Vec::new(),
+                        },
+                        fresh_count,
+                    ))
+                }
+                Err(crate::parser::MacroParseFailure::Syntax {
+                    diagnostics,
+                    resource,
+                }) => Err(Some(FileFailure::from(PipelineFailure::SyntaxParse(
+                    SyntaxParseFailure {
+                        diagnostics,
+                        resource,
+                        invocation,
+                        definition: selection.declaration.span,
+                        teardown: None,
+                    },
+                )))),
+                Err(crate::parser::MacroParseFailure::Invalid) => Err(None),
+            }
+        }
+        Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => Err(Some(
+            FileFailure::from(PipelineFailure::SyntaxExpansion(failure)),
+        )),
+        Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => Err(Some(
+            FileFailure::from(PipelineFailure::SyntaxParse(failure)),
+        )),
+        Err(error) => Err(Some(error)),
+    }
 }
 
 fn transformer_owner_and_binder<'a>(

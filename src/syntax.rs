@@ -4072,8 +4072,7 @@ pub(crate) struct ExpandedExpression {
 pub(crate) struct QuoteExpansionLoan<'a> {
     pub(crate) budget: &'a mut SyntaxBudget,
     pub(crate) owners: &'a mut Vec<SyntaxOwner>,
-    pub(crate) next_quote_ordinal: &'a mut usize,
-    pub(crate) quote_introduction: usize,
+    pub(crate) quote_source: Option<(&'a mut usize, usize)>,
 }
 
 pub(crate) fn has_quoted_capture(captures: &[SurfaceSyntaxCapture]) -> bool {
@@ -4257,6 +4256,7 @@ impl<'a> SyntaxExpansion<'a> {
         }
         let anchor = name.introduced_at.unwrap_or(invocation);
         let selection = self.selected(name).cloned().ok_or(invocation)?;
+        let owner_checkpoint = self.owners.len();
         self.owners.push(SyntaxOwner {
             caller_quote_owner: None,
             owner: Some(selection.owner),
@@ -4338,17 +4338,33 @@ impl<'a> SyntaxExpansion<'a> {
                     0,
                 )
             }
-            SurfaceSyntaxImplementation::Transformer(_) => (self.transformer)(
-                &selection,
-                captures,
-                anchor,
-                name,
-                introduction,
-                &owners,
-                &frame,
-                constraint_work,
-                None,
-            )?,
+            SurfaceSyntaxImplementation::Transformer(_) => {
+                let loan = self
+                    .syntax_budget
+                    .as_deref_mut()
+                    .map(|budget| QuoteExpansionLoan {
+                        budget,
+                        owners: &mut self.owners,
+                        quote_source: None,
+                    });
+                match (self.transformer)(
+                    &selection,
+                    captures,
+                    anchor,
+                    name,
+                    introduction,
+                    &owners,
+                    &frame,
+                    constraint_work,
+                    loan,
+                ) {
+                    Ok(output) => output,
+                    Err(span) => {
+                        self.owners.truncate(owner_checkpoint);
+                        return Err(span);
+                    }
+                }
+            }
         };
         self.owners.extend((0..fresh_count).map(|_| SyntaxOwner {
             caller_quote_owner: None,
@@ -4446,8 +4462,7 @@ impl<'a> SyntaxExpansion<'a> {
                 Some(QuoteExpansionLoan {
                     budget,
                     owners: &mut self.owners,
-                    next_quote_ordinal,
-                    quote_introduction,
+                    quote_source: Some((next_quote_ordinal, quote_introduction)),
                 }),
             )
             .map_err(|_| charged())?;
