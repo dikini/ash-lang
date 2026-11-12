@@ -25359,9 +25359,14 @@ mod tests {
         }
 
         let fixture = ImportBudgetFixture::create(
-            "import dependency (bound)\nmain : Unit -> Int\nmain () = 42\n",
-            "pub bound : Unit -> Int\nbound () = 1\n",
+            "import dependency (bound, Marker, mark)\nimport other (other_value)\nmain : Unit -> Int\nmain () = 42\n",
+            "pub bound : Unit -> Int\nbound () = 1\npub interface Marker<A> {\n    mark : A -> Bool\n}\n",
         );
+        fs::write(
+            fixture.0.join("other.ash"),
+            "pub other_value : Unit -> Int\nother_value () = 1\n",
+        )
+        .unwrap();
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
         let entry = graph.module(graph.entry()).unwrap();
         let checked = checked_import_dependencies(&graph)
@@ -25481,6 +25486,189 @@ mod tests {
                 assert_eq!(exact.unwrap(), SyntaxTermOutcome::BoundNonMethod);
                 assert_eq!(used, prefix + total);
                 assert_eq!(installed, 1);
+            }
+        }
+        // A real checked interface supplies the bound method and the member
+        // selected after an independently complete, genuinely unbound owner.
+        let other_index = checked
+            .iter()
+            .position(|candidate| {
+                candidate
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "other_value")
+            })
+            .unwrap();
+        let expected_method = owner.exports().method("mark").unwrap();
+        let interface = owner
+            .interface_facts()
+            .iter()
+            .find(|fact| fact.id == expected_method.interface())
+            .unwrap();
+        let attempt_member = |bound: bool, limit: usize, prefix: usize| {
+            let selected_index = if bound { owner_index } else { other_index };
+            let selected = &checked[selected_index];
+            let selected_loaded = graph.module(selected.module()).unwrap();
+            let views = checked
+                .iter()
+                .enumerate()
+                .map(|(index, checked_owner)| {
+                    if index == selected_index {
+                        crate::syntax::SyntaxOwnerBindings::new(
+                            checked_owner,
+                            selected_loaded,
+                            &checked,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap()
+                    } else {
+                        crate::syntax::SyntaxOwnerBindings::empty(checked_owner.module())
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    owner: Some(selected_index),
+                    declaration: selected.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver = Resolver::with_budgets(
+                entry.id(),
+                TypeWorkBudget::with_limit(limit),
+                InterfaceConstraintBudget::default(),
+            );
+            resolver.type_work.charge(prefix).unwrap();
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &views,
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let name = SurfaceName {
+                text: "mark".to_owned(),
+                span: selected.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            };
+            assert_eq!(resolver.syntax_terms.capacity(), 0);
+            let mut reached_scan = false;
+            let result = (|| -> Result<_, ResolveError> {
+                if !bound {
+                    resolver.retain_imported_interface_fact(
+                        interface.as_ref(),
+                        owner.exports(),
+                        ImportedInterfaceAccess::PublicExport,
+                        owner.module(),
+                        entry.surface().span,
+                    )?;
+                }
+                let selected = resolver.contextual_implementation_head(&name)?;
+                let member = if selected == SyntaxTermOutcome::GenuineUnbound {
+                    reached_scan = true;
+                    resolver.unbound_implementation_member(expected_method.interface(), &name)?
+                } else {
+                    None
+                };
+                Ok((selected, member))
+            })();
+            (
+                result,
+                resolver.type_work.used(),
+                resolver.syntax_terms.len(),
+                resolver.syntax_terms.capacity(),
+                resolver
+                    .imported
+                    .interface(expected_method.interface())
+                    .is_some(),
+                reached_scan,
+            )
+        };
+        // An empty syntax-term map must pay the reached growth and rehash
+        // charge before it reserves storage for the retained method.
+        for prefix in [0, 17] {
+            let mut short_map = HashMap::new();
+            let mut short = TypeWorkBudget::with_limit(prefix + 4);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                Resolver::prepare_method_head_insertion(&mut short_map, &mut short, owner.span())
+                    .unwrap_err()
+                    .reason,
+                ResolveReason::TypeResourceExhausted,
+            );
+            assert_eq!(short_map.capacity(), 0);
+            for _ in 0..2 {
+                let mut map = HashMap::new();
+                let mut exact = TypeWorkBudget::with_limit(prefix + 5);
+                exact.charge(prefix).unwrap();
+                Resolver::prepare_method_head_insertion(&mut map, &mut exact, owner.span())
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + 5);
+                assert!(map.capacity() > 0);
+            }
+        }
+        for bound in [true, false] {
+            let (result, total, entries, capacity, retained, scanned) =
+                attempt_member(bound, usize::MAX, 0);
+            if bound {
+                assert_eq!(
+                    result.unwrap(),
+                    (SyntaxTermOutcome::BoundMethod(expected_method), None)
+                );
+                assert_eq!(entries, 1);
+                assert!(capacity > 0 && retained);
+                assert!(!scanned);
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    (SyntaxTermOutcome::GenuineUnbound, Some(expected_method))
+                );
+                assert_eq!((entries, capacity), (0, 0));
+                assert!(retained && scanned);
+            }
+            assert_eq!(expected_method.interface(), interface.id);
+            for prefix in [0, 17] {
+                let (short, _, entries, capacity, retained, scanned) =
+                    attempt_member(bound, prefix + total - 1, prefix);
+                assert_eq!(
+                    short.unwrap_err().reason,
+                    ResolveReason::TypeResourceExhausted
+                );
+                assert_eq!(entries, 0);
+                if bound {
+                    assert!(capacity > 0 && !scanned);
+                } else {
+                    assert!(retained && scanned);
+                }
+                for _ in 0..2 {
+                    let (exact, used, entries, capacity, retained, scanned) =
+                        attempt_member(bound, prefix + total, prefix);
+                    assert_eq!(used, prefix + total);
+                    if bound {
+                        assert_eq!(
+                            exact.unwrap(),
+                            (SyntaxTermOutcome::BoundMethod(expected_method), None)
+                        );
+                        assert_eq!(entries, 1);
+                        assert!(capacity > 0 && retained && !scanned);
+                    } else {
+                        assert_eq!(
+                            exact.unwrap(),
+                            (SyntaxTermOutcome::GenuineUnbound, Some(expected_method))
+                        );
+                        assert_eq!((entries, capacity), (0, 0));
+                        assert!(retained && scanned);
+                    }
+                }
             }
         }
     }

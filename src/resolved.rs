@@ -21043,15 +21043,9 @@ mod tests {
             summary: &ExportSummary,
             work: &mut TypeWorkBudget,
         ) -> Result<(), ResolvedBuildFailure> {
-            let capture = &summary.term("invoke").expect("public callable").capture;
-            let mut visits = crate::core::capture::CaptureGraphVisits::default();
-            let mut originals = OriginalEffectMemo::new();
-            summary.authenticate_capture_effect_closure(
-                capture,
-                &KindEnvironments::new(),
-                &mut visits,
-                &mut originals,
+            summary.authenticate(
                 work,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
             )
         }
 
