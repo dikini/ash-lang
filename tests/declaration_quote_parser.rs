@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use ash::{
-    driver::{RunConfiguration, compile_path},
+    driver::{RunConfiguration, compile_path, execute},
     lexer::lex,
     module::{LoadGraphError, ModuleRoots},
     parser::{
@@ -88,6 +88,22 @@ fn fixed_wrong_category_reaches_output_syntax_admission() {
     };
     assert!(Path::new(output.source.display_path()).ends_with("wrong_category.ash"));
     assert!(!output.parser.is_empty());
+}
+
+#[test]
+fn constructed_quote_declarations_survive_targeted_syntax_imports() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/quote-constructed");
+    for entry in ["implicit_referenced.ash", "explicit_referenced.ash"] {
+        let program = compile_path(RunConfiguration {
+            entry: directory.join(entry),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+        let result = execute(&program).unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+        assert_eq!(result.value_display(), "42", "{entry}");
+        assert_eq!(result.type_display(), "Int", "{entry}");
+    }
 }
 
 #[test]

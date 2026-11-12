@@ -135,3 +135,118 @@ main () = classify(Syntax.RepeatedCapture(Syntax.MoreCaptures(Syntax.RepeatedCap
     let compiled = compile_path(tree.configuration(&entry)).expect("extended sums check");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }
+
+fn declaration_service_fixture(name: &str) -> RunConfiguration {
+    RunConfiguration {
+        entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/declaration-service")
+            .join(name),
+        roots: ModuleRoots::empty(),
+    }
+}
+
+fn declaration_service_runs(name: &str) {
+    let compiled = compile_path(declaration_service_fixture(name))
+        .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+    let result = execute(&compiled).unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+    assert_eq!(result.value_display(), "42", "{name}");
+    assert_eq!(result.type_display(), "Int", "{name}");
+}
+
+#[test]
+fn declaration_parse_returns_authentic_declarations_and_handles_rejection() {
+    for name in ["parse/plain.ash", "parse/node.ash", "parse/handled.ash"] {
+        declaration_service_runs(name);
+    }
+}
+
+#[test]
+fn declaration_parse_does_not_resolve_check_or_expand_discarded_syntax() {
+    for name in [
+        "parse/unresolved.ash",
+        "parse/type-invalid.ash",
+        "parse/no-expansion.ash",
+        "parse/quoted-inspect.ash",
+    ] {
+        declaration_service_runs(name);
+    }
+}
+
+#[test]
+fn declaration_parse_rejects_empty_and_multiple_declarations() {
+    use ash::{
+        driver::PipelineFailure,
+        presentation::{compile_file_diagnostics, write_json},
+    };
+
+    for (entry, found) in [("empty.ash", "end-of-file"), ("two.ash", "identifier")] {
+        let name = format!("parse/{entry}");
+        let failure = compile_path(declaration_service_fixture(&name))
+            .expect_err("parse_declaration rejects this input");
+        assert!(failure.is_source_rejection(), "{name}: {failure:?}");
+        assert!(
+            matches!(
+                failure.pipeline_failure(),
+                Some(PipelineFailure::SyntaxParse(_))
+            ),
+            "{name}: {failure:?}"
+        );
+        assert_eq!(failure.reason_code(), "parse.unexpected-token", "{name}");
+        let diagnostics = compile_file_diagnostics(&failure).expect("parser diagnostic");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("{name}: expected one diagnostic, got {}", diagnostics.len())
+        };
+        let mut json = Vec::new();
+        write_json(&mut json, diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["reason"], "parse.unexpected-token", "{name}: {json}");
+        assert!(
+            json["facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| { fact["name"] == "found" && fact["value"] == found }),
+            "{name}: {json}"
+        );
+        let labels = json["labels"].as_array().expect("source labels");
+        for (relationship, path) in [
+            ("syntax_invocation", name.as_str()),
+            ("syntax_definition", "parse/forms.ash"),
+        ] {
+            assert!(
+                labels.iter().any(|label| {
+                    label["relationship"] == relationship
+                        && label["path"]
+                            .as_str()
+                            .is_some_and(|path_text| Path::new(path_text).ends_with(path))
+                }),
+                "{name}: {json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_captures_preserve_nested_order_and_protected_leaf_consumers() {
+    for name in [
+        "repeated/nested.ash",
+        "repeated/declaration.ash",
+        "mixed/main.ash",
+    ] {
+        declaration_service_runs(name);
+    }
+}
+
+#[test]
+fn protected_fragments_survive_parsed_declaration_output() {
+    for name in ["protected-control/main.ash", "protected/main.ash"] {
+        declaration_service_runs(name);
+    }
+}
+
+#[test]
+fn quoted_declaration_survives_parsed_declaration_output() {
+    for name in ["quote/source_control.ash", "quote/emitted.ash"] {
+        declaration_service_runs(name);
+    }
+}

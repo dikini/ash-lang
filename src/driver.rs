@@ -1780,6 +1780,10 @@ where
         let (module, mut syntax_budget, mut next_quote_ordinal) = input
             .current_with_syntax_budget()
             .ok_or_else(internal_file_failure)?;
+        #[cfg(test)]
+        if let Some(observe) = LOADED_QUOTE_OBSERVER.get() {
+            observe(module);
+        }
         check_loaded_module(|| -> Result<(), FileFailure> {
             let contexts =
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
@@ -2694,6 +2698,7 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
+    static LOADED_QUOTE_OBSERVER: std::cell::Cell<Option<fn(&crate::module::LoadedModule)>> = const { std::cell::Cell::new(None) };
     static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
     static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
 }
@@ -5893,6 +5898,16 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ConstructedQuoteObservation {
+        no_lexical_quote: bool,
+        compiler_edges: Vec<bool>,
+        has_quote_owner: bool,
+        distinct_callees: bool,
+        site_count: usize,
+        definitions: Vec<(String, bool, bool, Vec<(usize, usize, bool, String)>)>,
+    }
+
     std::thread_local! {
         static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
         static DERIVE_INPUTS: RefCell<Vec<Vec<crate::surface::SurfaceSyntaxCapture>>> = const { RefCell::new(Vec::new()) };
@@ -5921,6 +5936,7 @@ mod tests {
         static ADVANCE_TRACE: RefCell<Vec<(&'static str, usize, usize, usize)>> = const { RefCell::new(Vec::new()) };
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
         static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
+        static CONSTRUCTED_QUOTE_OBSERVATIONS: RefCell<Vec<ConstructedQuoteObservation>> = const { RefCell::new(Vec::new()) };
     }
 
     fn observe_h4_public_names(source: &SourceFile, module: &crate::surface::SurfaceModule) {
@@ -7066,6 +7082,148 @@ main () = one(()) + two(())
         assert_generator_cleanup(0);
         assert_eq!(execute(&program).unwrap().value_display(), "20");
         assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    fn observe_constructed_quote_module(module: &crate::module::LoadedModule) {
+        use crate::surface::{SurfaceDefinitionKind, SurfaceExprKind, SurfaceReference};
+
+        let path = module.canonical_path();
+        if !path.ends_with("quote-constructed/implicit.ash")
+            && !path.ends_with("quote-constructed/explicit.ash")
+        {
+            return;
+        }
+        let sites = module.quote_sites();
+        let definitions = module
+            .surface()
+            .definitions
+            .iter()
+            .filter_map(|definition| {
+                let SurfaceDefinitionKind::Equational(global) = &definition.kind else {
+                    return None;
+                };
+                if !["first", "second"].contains(&global.interface.name.text.as_str()) {
+                    return None;
+                }
+                let call = match global.equations.as_slice() {
+                    [equation] => match &equation.body.kind {
+                        SurfaceExprKind::Apply(call) => Some(call),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let owner_matches = call.is_some_and(|call| {
+                    matches!(
+                        &call.function.kind,
+                        SurfaceExprKind::Name(SurfaceReference::Unqualified(name))
+                            if name.text == "HiddenExpressionFragment"
+                                && Some(name.introduction) == module.quote_introduction()
+                                && !name.written
+                    )
+                });
+                let matches = call
+                    .map(|call| {
+                        let callee = std::ptr::from_ref(call.function.as_ref()) as usize;
+                        sites
+                            .iter()
+                            .filter(|site| site.callee == callee)
+                            .map(|site| {
+                                let span = site.template.origin;
+                                let range = span.range();
+                                let text = module
+                                    .source()
+                                    .text()
+                                    .get(range.start() as usize..range.end() as usize)
+                                    .unwrap_or("")
+                                    .to_owned();
+                                (
+                                    site.template.ordinal,
+                                    site.template.holes,
+                                    span.source() == module.source().id(),
+                                    text,
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((
+                    global.interface.name.text.clone(),
+                    definition.public,
+                    owner_matches,
+                    matches,
+                ))
+            })
+            .collect();
+        let observation = ConstructedQuoteObservation {
+            no_lexical_quote: crate::lexer::lex(module.source())
+                .is_ok_and(|tokens| !tokens.needs_quote_dependency()),
+            compiler_edges: module
+                .dependencies()
+                .iter()
+                .filter(|edge| edge.target().is_builtin_compiler_syntax())
+                .map(|edge| edge.is_compiler_private())
+                .collect(),
+            has_quote_owner: module.quote_introduction().is_some(),
+            distinct_callees: matches!(sites, [first, second] if first.callee != second.callee),
+            site_count: sites.len(),
+            definitions,
+        };
+        CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| slot.borrow_mut().push(observation));
+    }
+
+    #[test]
+    fn constructed_quotes_keep_distinct_target_module_sites() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/quote-constructed");
+        for (entry, private) in [
+            ("implicit_referenced.ash", true),
+            ("explicit_referenced.ash", false),
+        ] {
+            hooks::reset();
+            CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+            LOADED_QUOTE_OBSERVER.set(Some(observe_constructed_quote_module));
+            let result = compile_path(RunConfiguration {
+                entry: directory.join(entry),
+                roots: ModuleRoots::empty(),
+            });
+            LOADED_QUOTE_OBSERVER.set(None);
+            let program = result.unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+            let observations =
+                CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+            let [observation] = observations.as_slice() else {
+                panic!("{entry}: expected one target module: {observations:?}")
+            };
+            assert!(observation.no_lexical_quote, "{entry}: {observation:?}");
+            assert_eq!(observation.compiler_edges, [private], "{entry}");
+            assert!(observation.has_quote_owner, "{entry}: {observation:?}");
+            assert!(observation.distinct_callees, "{entry}: {observation:?}");
+            assert_eq!(observation.site_count, 2, "{entry}: {observation:?}");
+            assert_eq!(observation.definitions.len(), 2, "{entry}: {observation:?}");
+            let mut ordinals = Vec::new();
+            for ((name, public, owner_matches, sites), expected) in
+                observation.definitions.iter().zip(["first", "second"])
+            {
+                assert_eq!(name, expected, "{entry}");
+                assert!(*public && *owner_matches, "{entry}: {observation:?}");
+                let [(ordinal, holes, same_source, text)] = sites.as_slice() else {
+                    panic!("{entry}: expected one matching quote site: {observation:?}")
+                };
+                assert_eq!(*holes, 1, "{entry}");
+                assert!(*same_source, "{entry}");
+                assert_eq!(text, &format!("make_quote {expected}"), "{entry}");
+                ordinals.push(*ordinal);
+            }
+            assert_ne!(ordinals[0], ordinals[1], "{entry}");
+            assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+            assert!(hooks::ROOT_CLOSES.get() >= 2, "{entry}");
+            assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0, "{entry}");
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 0, "{entry}");
+            assert_eq!(execute(&program).unwrap().value_display(), "42", "{entry}");
+            drop(program);
+        }
         hooks::reset();
     }
 
