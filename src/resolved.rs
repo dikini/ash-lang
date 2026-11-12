@@ -1017,6 +1017,7 @@ pub struct ResolvedModule {
 
     span: Span,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
+    effect_coordinates: Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
     imported_lowerings: Vec<crate::elaborate::SharedModuleLowering>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
 }
@@ -1131,6 +1132,7 @@ impl ResolvedModule {
             export_candidate: std::mem::take(&mut parts.export_candidate),
             span: parts.span,
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             imported_lowerings: Vec::new(),
             quote_sites,
         }
@@ -1177,6 +1179,27 @@ impl ResolvedModule {
 
     pub(crate) fn imported_lowerings(&self) -> &[crate::elaborate::SharedModuleLowering] {
         &self.imported_lowerings
+    }
+
+    pub(crate) fn retain_effect_coordinates(
+        &mut self,
+        coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let (module, source) = self
+            .defining_sources
+            .first()
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        if *module != self.module || !coordinates.matches_source(*module, source) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        if self.effect_coordinates.is_some() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        self.effect_coordinates = Some(coordinates);
+        Ok(())
     }
 
     pub(crate) fn retain_defining_sources<'a>(
@@ -5726,8 +5749,8 @@ impl ImportedTypeAccess {
 type OriginalEffectMemo<'a> = HashMap<
     ModuleId,
     (
-        &'a crate::source::SourceFile,
-        crate::core::validate::DeclarationCoordinates,
+        &'a Arc<crate::source::SourceFile>,
+        Option<crate::core::validate::DeclarationCoordinates>,
     ),
 >;
 
@@ -5939,6 +5962,7 @@ pub struct ExportSummary {
     withheld: HashMap<String, WithheldExports>,
     withheld_order: Vec<WithheldOrderEntry>,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
+    effect_coordinates: Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
     lowerings: Vec<crate::elaborate::SharedModuleLowering>,
 }
 
@@ -9979,6 +10003,7 @@ impl ExportSummary {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         };
         type_work
@@ -10004,6 +10029,12 @@ impl ExportSummary {
                 .iter()
                 .map(|(module, source)| (*module, Arc::clone(source))),
         );
+        if let Some(coordinates) = &resolved.effect_coordinates {
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            summary.effect_coordinates = Some(Arc::clone(coordinates));
+        }
         // A private declaration still prevents later resource association.
         // Carry only its interface identity, never selection authorization.
         let implementation_count = checked_implementations
@@ -11814,6 +11845,7 @@ impl ExportSummary {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         }
     }
@@ -12003,20 +12035,34 @@ impl ExportSummary {
                 if sources.next().is_some() {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                let coordinates =
-                    crate::core::validate::DeclarationCoordinates::from_source(source, work)
-                        .map_err(original_effect_failure)?;
                 original_effects
                     .try_reserve(1)
                     .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                original_effects.insert(effect.module(), (source, coordinates));
+                original_effects.insert(effect.module(), (source, None));
             }
             let (source, coordinates) = original_effects
-                .get(&effect.module())
+                .get_mut(&effect.module())
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            coordinates
-                .authenticate_effect(effect.module(), source, fact, work)
-                .map_err(original_effect_failure)?;
+            let source = *source;
+            if fact.native_contract.is_none()
+                && let Some(admitted) = &self.effect_coordinates
+            {
+                admitted
+                    .authenticate_effect(effect.module(), source, fact, work)
+                    .map_err(original_effect_failure)?;
+            } else {
+                if coordinates.is_none() {
+                    *coordinates = Some(
+                        crate::core::validate::DeclarationCoordinates::from_source(source, work)
+                            .map_err(original_effect_failure)?,
+                    );
+                }
+                coordinates
+                    .as_ref()
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
+                    .authenticate_effect(effect.module(), source, fact, work)
+                    .map_err(original_effect_failure)?;
+            }
         }
         Ok(())
     }
@@ -12659,6 +12705,7 @@ impl ExportSummary {
             withheld,
             withheld_order,
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         }
     }
@@ -30798,6 +30845,7 @@ mod tests {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         };
         let checked = CheckedModule::new(

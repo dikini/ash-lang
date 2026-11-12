@@ -61,6 +61,174 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn generated_global_captures_an_authored_local_effect() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub syntax declaration: (emit) $name:ident for $E:ident => {\n\
+             pub $name : Unit -> Int ! {$E}\n\
+             $name () = perform $E.read ()\n\
+         }\n",
+    );
+    let suffix = "effect Read {\n    read : Unit -> Int\n}\n";
+    let main = "main : Unit -> Int\n\
+                main () = handle (read_number ()) with Read {\n\
+                    read ignored => resume 42\n\
+                }\n";
+    fixture.write(
+        "entry.ash",
+        &format!("import forms (syntax emit)\n{suffix}emit read_number for Read\n{main}"),
+    );
+    let generated = compile_path(fixture.configuration()).expect("generated effect capture");
+    assert_eq!(execute(&generated).unwrap().value_display(), "42");
+
+    fixture.write(
+        "entry.ash",
+        &format!(
+            "{suffix}pub read_number : Unit -> Int ! {{Read}}\n\
+             read_number () = perform Read.read ()\n{main}"
+        ),
+    );
+    let handwritten = compile_path(fixture.configuration()).expect("handwritten effect capture");
+    assert_eq!(execute(&handwritten).unwrap().value_display(), "42");
+}
+
+#[test]
+fn introduced_implementation_heads_reach_method_only_and_nested_derive() {
+    for (directory, names) in [
+        (
+            "tests/fixtures/surface-macros/method-only-v2",
+            ["generated.ash", "handwritten.ash"],
+        ),
+        (
+            "docs/design/macros/fixtures/derives",
+            ["nested.ash", "control.ash"],
+        ),
+    ] {
+        for name in names {
+            let configuration = RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(directory)
+                    .join(name),
+                roots: ModuleRoots::empty(),
+            };
+            let program = compile_path(configuration)
+                .unwrap_or_else(|error| panic!("{directory}/{name} should compile: {error:?}"));
+            assert_eq!(
+                execute(&program).unwrap().value_display(),
+                "42",
+                "{directory}/{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn introduced_implementation_heads_respect_bound_terms_and_source_heads() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "api.ash",
+        "pub interface Marker<A> {\n    mark : A -> Bool\n}\n",
+    );
+    fixture.write(
+        "other.ash",
+        "pub interface Other<A> {\n    other : A -> Bool\n}\n",
+    );
+    fixture.write("constructors.ash", "pub type Shape = Token\n");
+    let template = "pub syntax declaration: (make) $target:ident => {\n\
+                        impl Marker<$target> {\n    mark _ = true\n}\n\
+                    }\n";
+    let entry = "import forms (syntax make)\ntype Local = Local\nmake Local\n\
+                 main : Unit -> Int\nmain () = 42\n";
+    for (label, prefix) in [
+        (
+            "global",
+            "import api (Marker)\nmark : Unit -> Bool\nmark () = true\n",
+        ),
+        (
+            "wrong-interface",
+            "import api (Marker)\nimport other (other as mark)\n",
+        ),
+        (
+            "wrong-owner-interface",
+            "import api (Marker)\npub interface Other<A> {\n    mark : A -> Bool\n}\n",
+        ),
+        (
+            "constructor",
+            "import api (Marker)\nimport constructors (Token as mark)\n",
+        ),
+    ] {
+        fixture.write("forms.ash", &format!("{prefix}{template}"));
+        fixture.write("entry.ash", entry);
+        let failure = compile_path(fixture.configuration()).unwrap_err();
+        assert_eq!(
+            failure.reason_code(),
+            "impl.extra-method",
+            "{label}: {failure:?}"
+        );
+    }
+
+    fixture.write(
+        "inner_forms.ash",
+        "import api (Marker)\n\
+         pub interface Other<A> {\n    mark : A -> Bool\n}\n\
+         pub syntax declaration: (inner) $target:ident => {\n\
+             impl Marker<$target> {\n    mark _ = true\n}\n\
+         }\n",
+    );
+    fixture.write(
+        "outer_forms.ash",
+        "import inner_forms (syntax inner)\n\
+         pub syntax declaration: (outer) $target:ident => {\n\
+             inner $target\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import outer_forms (syntax outer)\ntype Local = Local\nouter Local\n\
+         main : Unit -> Int\nmain () = 42\n",
+    );
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert_eq!(
+        failure.reason_code(),
+        "impl.extra-method",
+        "transitive owner wrong-interface: {failure:?}"
+    );
+
+    fixture.write(
+        "forms.ash",
+        &format!("import api (Marker, mark)\n{template}"),
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax make)\nmark : Unit -> Bool\nmark () = false\n\
+         type Local = Local\nmake Local\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let program = compile_path(fixture.configuration()).expect("caller shadow keeps owner binding");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    fixture.write(
+        "entry.ash",
+        "import api (Marker)\ntype Local = Local\nimpl Marker<Local> {\n    mark _ = true\n}\n\
+         main : Unit -> Int\nmain () = 42\n",
+    );
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert_eq!(failure.reason_code(), "impl.extra-method");
+
+    fixture.write(
+        "forms.ash",
+        "interface Marker<A> {\n    mark : A -> Bool\n}\n\
+         pub syntax declaration: (make) $target:ident => {\n\
+             impl Marker<$target> {\n    mark _ = true\n}\n\
+         }\n",
+    );
+    fixture.write("entry.ash", entry);
+    let program =
+        compile_path(fixture.configuration()).expect("owner-private method remains available");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn introduced_explicit_global_parameter_reaches_the_ordinary_driver() {
     let fixture = Fixture::new();
     fixture.write(

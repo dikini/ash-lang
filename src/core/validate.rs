@@ -10,7 +10,7 @@ mod source_declarations;
 
 static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
 
-pub(crate) use source_declarations::DeclarationCoordinates;
+pub(crate) use source_declarations::{AdmittedEffectCoordinates, DeclarationCoordinates};
 
 use std::{
     cell::Cell,

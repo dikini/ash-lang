@@ -330,6 +330,12 @@ ordinary imports and the `using` transformer target are still checked as
 definition dependencies. Ordinary Ash checking and error propagation handle
 generated-program meaning.
 
+An introduced implementation method head first uses the binding in its
+authenticated syntax context. If that complete context has no term binding for
+the head, the head selects the same-named method of the implemented interface.
+Ordinary source heads, collisions, access and interface membership retain their
+existing rules.
+
 A declaration-macro capture binding may use a reserved word as its metaname
 after `$`; its declaration template may read that capture using the same
 spelling, including in repetitions. This does not change keyword lexing,

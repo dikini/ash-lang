@@ -77,7 +77,7 @@ use crate::{
 };
 
 mod foreign;
-use foreign::EffectSource;
+pub(crate) use foreign::EffectSource;
 
 struct ResolvedTypeBuffer(Vec<(crate::types::KindedArgument, usize)>);
 
@@ -1677,6 +1677,14 @@ struct SyntaxInputs<'a> {
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyntaxTermOutcome {
+    BoundMethod(MethodId),
+    BoundNonMethod,
+    GenuineUnbound,
+    Unavailable,
+}
+
 #[derive(Clone, Copy)]
 struct SyntaxOwnerLookup<'a> {
     owner: &'a crate::resolved::CheckedModule,
@@ -1801,6 +1809,19 @@ fn finish_module_resolution(
             ))
         })?;
     resolved
+        .retain_effect_coordinates(admission.effect_coordinates, type_work)
+        .map_err(|failure| {
+            ResolveModuleError::Resolution(error(
+                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
+                    ResolveReason::TypeResourceExhausted
+                } else {
+                    ResolveReason::InternalState
+                },
+                loaded.surface().span,
+                "effect syntax provenance could not be retained",
+            ))
+        })?;
+    resolved
         .retain_dependency_lowerings(
             dependencies.iter().map(|dependency| dependency.summary),
             type_work,
@@ -1824,6 +1845,7 @@ struct ResolvedModuleAdmission {
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    effect_coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
 }
 
 /// Admission-only origins for malformed written rows. These scalar diagnostics
@@ -2038,7 +2060,8 @@ fn resolve_module_names_with_budget<'a>(
                 .iter()
                 .map(|library| Arc::clone(&library.prepared)),
         );
-        let mut declarations = resolver.resolve_declarations(surface)?;
+        let (mut declarations, effect_coordinates) =
+            resolver.resolve_loaded_declarations(loaded)?;
         resolver.bind_source_foreign(
             surface,
             &prepared_foreign,
@@ -2112,6 +2135,7 @@ fn resolve_module_names_with_budget<'a>(
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
             quote_sites: std::mem::take(&mut resolver.quote_sites),
+            effect_coordinates,
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2812,6 +2836,16 @@ struct PendingInterfaceTypeParameters {
 struct PendingImplementationMethodGroup {
     equations: Range<usize>,
     binder: Option<Binder>,
+}
+
+enum DeclarationEffectOwner<'a> {
+    Admitted {
+        loaded: &'a LoadedModule,
+        retained: &'a mut Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
+    },
+    // Existing malformed resolver fixtures do not have an admitted owner.
+    #[cfg(test)]
+    Synthetic,
 }
 
 /// Completed declaration preparation retained while resolving bodies. Keeping
@@ -6312,6 +6346,7 @@ impl Resolver<'_, '_> {
                             dependency.exports(),
                             owner.module(),
                             usage.import_span,
+                            None,
                         )?;
                         self.syntax_qualified_terms.insert(
                             key,
@@ -6353,156 +6388,424 @@ impl Resolver<'_, '_> {
                 }
                 continue;
             }
-            let key = (usage.name.text.clone(), usage.name.introduction);
-            let lookup = SyntaxOwnerLookup {
+            self.retain_unqualified_syntax_term(
+                &usage.name,
                 owner,
-                graph: syntax.owners,
-            };
-            if let Some(exported) = terms.get(&usage.name.text) {
-                if exported.binder.module() != Some(owner.module()) {
-                    return Err(invalid());
+                terms,
+                syntax.owners,
+                usage.import_span,
+                &mut capture_graph_visits,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn charge_method_head(
+        &mut self,
+        name: &SurfaceName,
+        amount: usize,
+    ) -> Result<(), ResolveError> {
+        self.type_work.charge(amount).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "contextual method-head lookup exceeded its type-work budget",
+            )
+        })
+    }
+
+    fn prepare_method_head_insertion<T>(
+        map: &mut HashMap<(String, usize), T>,
+        work: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "contextual method-head retention exceeded its type-work budget",
+            )
+        };
+        if map.len() == map.capacity() {
+            work.charge(map.capacity().saturating_mul(2).saturating_add(1))
+                .map_err(|()| exhausted())?;
+            let rehash = map.keys().fold(
+                map.len().saturating_add(1).saturating_mul(4),
+                |sum, (key, _)| sum.saturating_add(key.len()),
+            );
+            work.charge(rehash).map_err(|()| exhausted())?;
+        } else {
+            work.charge(1).map_err(|()| exhausted())?;
+        }
+        map.try_reserve(1).map_err(|_| exhausted())
+    }
+
+    // Both the ordinary syntax installer and implementation heads use this
+    // exact term lookup. Pay for work newly reached by either caller.
+    #[allow(clippy::too_many_arguments)]
+    fn retain_unqualified_syntax_term<'a>(
+        &mut self,
+        name: &SurfaceName,
+        owner: &'a crate::resolved::CheckedModule,
+        terms: &'a crate::syntax::SyntaxOwnerBindings,
+        owners: &'a [Arc<crate::resolved::CheckedModule>],
+        import_span: Span,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
+        charge_head: bool,
+    ) -> Result<SyntaxTermOutcome, ResolveError> {
+        let invalid = || {
+            error(
+                ResolveReason::InternalState,
+                name.span,
+                "the syntax name lost its checked defining owner",
+            )
+        };
+        if charge_head {
+            // Pay the owned key, initial owner lookup and cache probes.
+            self.charge_method_head(name, name.text.len().saturating_mul(10).saturating_add(10))?;
+        }
+        let key = (name.text.clone(), name.introduction);
+        let lookup = SyntaxOwnerLookup {
+            owner,
+            graph: owners,
+        };
+        if let Some(exported) = terms.get(&name.text) {
+            if exported.binder.module() != Some(owner.module()) {
+                return Err(invalid());
+            }
+            if !self.syntax_terms.contains_key(&key) {
+                self.retain_imported_global_from_owner(
+                    exported,
+                    owner.exports(),
+                    import_span,
+                    capture_graph_visits,
+                    Some(lookup),
+                )?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_terms,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
                 }
+                self.syntax_terms.insert(
+                    key,
+                    ResolvedTermBinding::imported(
+                        ResolvedTermName::Global(exported.binder),
+                        import_span,
+                    ),
+                );
+            }
+            return Ok(SyntaxTermOutcome::BoundNonMethod);
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(2))?;
+        }
+        if let Some(method) = owner
+            .exports()
+            .method(&name.text)
+            .filter(|method| method.interface().module() == owner.module())
+        {
+            if charge_head && !self.syntax_terms.contains_key(&key) {
+                Self::prepare_method_head_insertion(
+                    &mut self.syntax_terms,
+                    &mut self.type_work,
+                    name.span,
+                )?;
+            }
+            if self.imported.interface(method.interface()).is_none() {
+                self.retain_syntax_exported_method(
+                    method,
+                    owner.exports(),
+                    owner.module(),
+                    import_span,
+                    Some(name),
+                )?;
+            }
+            self.syntax_terms.entry(key).or_insert_with(|| {
+                ResolvedTermBinding::imported(ResolvedTermName::Method(method), import_span)
+            });
+            return Ok(SyntaxTermOutcome::BoundMethod(method));
+        }
+
+        let mut local_method = None;
+        for fact in owner.interface_facts() {
+            if charge_head {
+                self.charge_method_head(name, 1)?;
+            }
+            if fact.id.module() != owner.module() {
+                continue;
+            }
+            for method in fact.methods.iter() {
+                if charge_head {
+                    self.charge_method_head(
+                        name,
+                        name.text.len().min(method.spelling.len()).saturating_add(1),
+                    )?;
+                }
+                if method.spelling == name.text {
+                    local_method = Some((fact, method.id));
+                    break;
+                }
+            }
+            if local_method.is_some() {
+                break;
+            }
+        }
+        if let Some((interface, method)) = local_method {
+            if !self.syntax_terms.contains_key(&key) {
+                self.retain_imported_interface_fact_from_owner(
+                    interface.as_ref(),
+                    owner.exports(),
+                    ImportedInterfaceAccess::HiddenSummaryClosure,
+                    owner.module(),
+                    import_span,
+                    Some((interface, lookup)),
+                )?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_terms,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
+                }
+                self.syntax_terms.insert(
+                    key,
+                    ResolvedTermBinding::imported(ResolvedTermName::Method(method), import_span),
+                );
+            }
+            return Ok(SyntaxTermOutcome::BoundMethod(method));
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(1))?;
+        }
+        if let Some(constructor) = terms.constructor(&name.text) {
+            if constructor.id.owner().module() != owner.module() {
+                return Err(invalid());
+            }
+            if !self.syntax_constructors.contains_key(&key) {
+                let nominal = owner
+                    .syntax_nominal_fact(constructor.id.owner())
+                    .ok_or_else(invalid)?;
+                self.retain_scheme_nominal_fact(nominal, import_span)?;
+                let mut syntax_facts = self.imported.take_syntax_facts();
+                std::mem::swap(&mut self.imported, &mut syntax_facts);
+                let retained = self.retain_imported_constructor_family_from_syntax(
+                    nominal,
+                    owner.exports(),
+                    import_span,
+                    Some((terms, lookup)),
+                );
+                std::mem::swap(&mut self.imported, &mut syntax_facts);
+                self.imported.set_syntax_facts(syntax_facts);
+                retained?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_constructors,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
+                }
+                self.syntax_constructors.insert(key, constructor.id);
+            }
+            return Ok(SyntaxTermOutcome::BoundNonMethod);
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(1))?;
+        }
+        if let Some((route, original, selector_span)) = terms.targeted(&name.text) {
+            if charge_head {
+                self.charge_method_head(
+                    name,
+                    owner
+                        .direct_dependencies()
+                        .len()
+                        .saturating_add(owners.len())
+                        .saturating_add(original.len().saturating_mul(6))
+                        .saturating_add(2),
+                )?;
+            }
+            if !owner.direct_dependencies().contains(&route) {
+                return Err(invalid());
+            }
+            let dependency = owners
+                .iter()
+                .find(|candidate| candidate.module() == route.target())
+                .ok_or_else(invalid)?;
+            if let Some(exported) = dependency.exports().term(original) {
                 if !self.syntax_terms.contains_key(&key) {
                     self.retain_imported_global_from_owner(
                         exported,
-                        owner.exports(),
-                        usage.import_span,
-                        &mut capture_graph_visits,
-                        Some(lookup),
+                        dependency.exports(),
+                        import_span,
+                        capture_graph_visits,
+                        Some(SyntaxOwnerLookup {
+                            owner: dependency,
+                            graph: owners,
+                        }),
                     )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_terms,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_terms.insert(
                         key,
                         ResolvedTermBinding::imported(
                             ResolvedTermName::Global(exported.binder),
-                            usage.import_span,
+                            selector_span,
                         ),
                     );
                 }
-            } else if let Some(method) = owner
-                .exports()
-                .method(&usage.name.text)
-                .filter(|method| method.interface().module() == owner.module())
-            {
-                if self.imported.interface(method.interface()).is_none() {
-                    return Err(invalid());
-                }
-                self.syntax_terms.entry(key).or_insert_with(|| {
-                    ResolvedTermBinding::imported(
-                        ResolvedTermName::Method(method),
-                        usage.import_span,
-                    )
-                });
-            } else if let Some((interface, method)) =
-                owner.interface_facts().iter().find_map(|fact| {
-                    if fact.id.module() != owner.module() {
-                        return None;
-                    }
-                    fact.methods
-                        .iter()
-                        .find(|method| method.spelling == usage.name.text)
-                        .map(|method| (fact, method.id))
-                })
-            {
+                return Ok(SyntaxTermOutcome::BoundNonMethod);
+            }
+            if let Some(method) = dependency.exports().method(original) {
                 if !self.syntax_terms.contains_key(&key) {
-                    self.retain_imported_interface_fact_from_owner(
-                        interface.as_ref(),
-                        owner.exports(),
-                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                    self.retain_syntax_exported_method(
+                        method,
+                        dependency.exports(),
                         owner.module(),
-                        usage.import_span,
-                        Some((interface, lookup)),
+                        import_span,
+                        charge_head.then_some(name),
                     )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_terms,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_terms.insert(
                         key,
                         ResolvedTermBinding::imported(
                             ResolvedTermName::Method(method),
-                            usage.import_span,
+                            selector_span,
                         ),
                     );
                 }
-            } else if let Some(constructor) = terms.constructor(&usage.name.text) {
-                if constructor.id.owner().module() != owner.module() {
-                    return Err(invalid());
-                }
+                return Ok(SyntaxTermOutcome::BoundMethod(method));
+            }
+            if let Some(constructor) = dependency.exports().constructor(original) {
                 if !self.syntax_constructors.contains_key(&key) {
-                    let nominal = owner
-                        .syntax_nominal_fact(constructor.id.owner())
-                        .ok_or_else(invalid)?;
-                    self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
-                    let mut syntax_facts = self.imported.take_syntax_facts();
-                    std::mem::swap(&mut self.imported, &mut syntax_facts);
-                    let retained = self.retain_imported_constructor_family_from_syntax(
-                        nominal,
-                        owner.exports(),
-                        usage.import_span,
-                        Some((terms, lookup)),
-                    );
-                    std::mem::swap(&mut self.imported, &mut syntax_facts);
-                    self.imported.set_syntax_facts(syntax_facts);
-                    retained?;
+                    self.retain_syntax_exported_constructor(
+                        constructor,
+                        dependency.exports(),
+                        import_span,
+                    )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_constructors,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_constructors.insert(key, constructor.id);
                 }
-            } else if let Some((route, original, selector_span)) = terms.targeted(&usage.name.text)
-            {
-                if !owner.direct_dependencies().contains(&route) {
-                    return Err(invalid());
-                }
-                let dependency = syntax
-                    .owners
-                    .iter()
-                    .find(|candidate| candidate.module() == route.target())
-                    .ok_or_else(invalid)?;
-                if let Some(exported) = dependency.exports().term(original) {
-                    if !self.syntax_terms.contains_key(&key) {
-                        self.retain_imported_global_from_owner(
-                            exported,
-                            dependency.exports(),
-                            usage.import_span,
-                            &mut capture_graph_visits,
-                            Some(SyntaxOwnerLookup {
-                                owner: dependency,
-                                graph: syntax.owners,
-                            }),
-                        )?;
-                        self.syntax_terms.insert(
-                            key,
-                            ResolvedTermBinding::imported(
-                                ResolvedTermName::Global(exported.binder),
-                                selector_span,
-                            ),
-                        );
-                    }
-                } else if let Some(method) = dependency.exports().method(original) {
-                    if !self.syntax_terms.contains_key(&key) {
-                        self.retain_syntax_exported_method(
-                            method,
-                            dependency.exports(),
-                            owner.module(),
-                            usage.import_span,
-                        )?;
-                        self.syntax_terms.insert(
-                            key,
-                            ResolvedTermBinding::imported(
-                                ResolvedTermName::Method(method),
-                                selector_span,
-                            ),
-                        );
-                    }
-                } else if let Some(constructor) = dependency.exports().constructor(original) {
-                    if !self.syntax_constructors.contains_key(&key) {
-                        self.retain_syntax_exported_constructor(
-                            constructor,
-                            dependency.exports(),
-                            usage.import_span,
-                        )?;
-                        self.syntax_constructors.insert(key, constructor.id);
-                    }
-                } else {
-                    return Err(invalid());
-                }
+                return Ok(SyntaxTermOutcome::BoundNonMethod);
             }
+            return Err(invalid());
         }
-        Ok(())
+        Ok(SyntaxTermOutcome::GenuineUnbound)
+    }
+
+    fn contextual_implementation_head(
+        &mut self,
+        name: &SurfaceName,
+    ) -> Result<SyntaxTermOutcome, ResolveError> {
+        self.charge_method_head(name, 3)?;
+        if name.introduction == 0 {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        }
+        let Some(inputs) = self.syntax_inputs else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let Some(context) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let Some(index) = context.owner else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let declaration = context.declaration;
+        let import_span = context.import_span;
+        let (Some(owner), Some(terms)) = (inputs.owners.get(index), inputs.terms.get(index)) else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        if terms.module != owner.module()
+            || declaration.source() != owner.span().source()
+            || terms.complete_source() != Some(owner.span().source())
+        {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        }
+        self.retain_unqualified_syntax_term(
+            name,
+            owner,
+            terms,
+            inputs.owners,
+            import_span,
+            &mut CaptureGraphVisits::default(),
+            true,
+        )
+    }
+
+    fn unbound_implementation_member(
+        &mut self,
+        interface: InterfaceId,
+        name: &SurfaceName,
+    ) -> Result<Option<MethodId>, ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "contextual method-head lookup exceeded its type-work budget",
+            )
+        };
+        if interface.module() == self.module {
+            self.charge_method_head(name, self.resolved_interfaces.0.len())?;
+            let Some(fact) = self
+                .resolved_interfaces
+                .0
+                .iter()
+                .find(|fact| fact.id == interface)
+            else {
+                return Ok(None);
+            };
+            self.type_work
+                .charge(
+                    fact.methods
+                        .len()
+                        .saturating_mul(name.text.len().saturating_add(1)),
+                )
+                .map_err(|()| exhausted())?;
+            Ok(fact
+                .methods
+                .iter()
+                .find(|method| method.spelling == name.text)
+                .map(|method| method.id))
+        } else {
+            self.charge_method_head(name, 1)?;
+            let Some(fact) = self.imported.interface(interface) else {
+                return Ok(None);
+            };
+            self.type_work
+                .charge(
+                    fact.methods
+                        .len()
+                        .saturating_mul(name.text.len().saturating_add(1)),
+                )
+                .map_err(|()| exhausted())?;
+            Ok(fact
+                .methods
+                .iter()
+                .find(|method| method.spelling == name.text)
+                .map(|method| method.id))
+        }
     }
 
     fn retain_syntax_exported_constructor(
@@ -6534,20 +6837,31 @@ impl Resolver<'_, '_> {
         summary: &ExportSummary,
         owner: ModuleId,
         span: Span,
+        charge_search: Option<&SurfaceName>,
     ) -> Result<(), ResolveError> {
-        let interface = summary
-            .interfaces()
-            .chain(summary.hidden_interfaces())
-            .find(|interface| {
-                interface.id == method.interface() && interface.method(method).is_some()
-            })
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "the syntax method lost its checked interface",
-                )
-            })?;
+        let mut found = None;
+        for interface in summary.interfaces().chain(summary.hidden_interfaces()) {
+            if let Some(name) = charge_search {
+                self.charge_method_head(name, 1)?;
+            }
+            if interface.id != method.interface() {
+                continue;
+            }
+            if let Some(name) = charge_search {
+                self.charge_method_head(name, interface.methods.len())?;
+            }
+            if interface.method(method).is_some() {
+                found = Some(interface);
+                break;
+            }
+        }
+        let interface = found.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "the syntax method lost its checked interface",
+            )
+        })?;
         self.retain_imported_interface_fact(
             interface,
             summary,
@@ -9125,6 +9439,7 @@ impl Resolver<'_, '_> {
     fn prepare_declaration_setup(
         &mut self,
         surface: &SurfaceModule,
+        loaded: DeclarationEffectOwner<'_>,
     ) -> Result<PreparedDeclarationSetup, ResolveError> {
         let nominal_identities = self.install_nominal_identities(&surface.type_declarations)?;
         self.type_work
@@ -9227,6 +9542,37 @@ impl Resolver<'_, '_> {
         }
         let interface_identities = self.install_interface_identities(&surface.interfaces)?;
         let effect_sources = self.effect_sources(surface)?;
+        match loaded {
+            DeclarationEffectOwner::Admitted { loaded, retained } => {
+                if loaded.id() != self.module || !std::ptr::eq(loaded.surface(), surface) {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "effect syntax source does not match the admitted module",
+                    ));
+                }
+                *retained = Some(
+                    crate::core::validate::AdmittedEffectCoordinates::from_admitted(
+                        loaded,
+                        &effect_sources,
+                        &mut self.type_work,
+                    )
+                    .map_err(|failure| {
+                        error(
+                            if failure.reason() == crate::core::ValidationReason::Resource {
+                                ResolveReason::TypeResourceExhausted
+                            } else {
+                                ResolveReason::InternalState
+                            },
+                            surface.span,
+                            "effect syntax provenance could not be prepared",
+                        )
+                    })?,
+                );
+            }
+            #[cfg(test)]
+            DeclarationEffectOwner::Synthetic => {}
+        }
         let effect_identities = self.install_effect_identities(&effect_sources)?;
 
         let mut nominal_type_parameters = Vec::new();
@@ -9754,9 +10100,48 @@ impl Resolver<'_, '_> {
         })
     }
 
+    fn resolve_loaded_declarations(
+        &mut self,
+        loaded: &LoadedModule,
+    ) -> Result<
+        (
+            ResolvedDeclarations,
+            Arc<crate::core::validate::AdmittedEffectCoordinates>,
+        ),
+        ResolveError,
+    > {
+        let mut retained = None;
+        let declarations = self.resolve_declarations_inner(
+            loaded.surface(),
+            DeclarationEffectOwner::Admitted {
+                loaded,
+                retained: &mut retained,
+            },
+        )?;
+        let retained = retained.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                loaded.surface().span,
+                "effect syntax provenance was not prepared",
+            )
+        })?;
+        Ok((declarations, retained))
+    }
+
+    // Existing resolver unit fixtures construct synthetic surfaces, including
+    // malformed ones. They do not produce a loaded module or a summary.
+    #[cfg(test)]
     fn resolve_declarations(
         &mut self,
         surface: &SurfaceModule,
+    ) -> Result<ResolvedDeclarations, ResolveError> {
+        self.resolve_declarations_inner(surface, DeclarationEffectOwner::Synthetic)
+    }
+
+    fn resolve_declarations_inner(
+        &mut self,
+        surface: &SurfaceModule,
+        loaded: DeclarationEffectOwner<'_>,
     ) -> Result<ResolvedDeclarations, ResolveError> {
         let PreparedDeclarationSetup {
             registry,
@@ -9765,7 +10150,7 @@ impl Resolver<'_, '_> {
             mut global_type_parameters,
             mut global_binders,
             pending_implementations,
-        } = self.prepare_declaration_setup(surface)?;
+        } = self.prepare_declaration_setup(surface, loaded)?;
         let surface_definitions = &surface.definitions;
 
         let resources = self.resolve_resource_definitions(&surface.resources)?;
@@ -10218,12 +10603,24 @@ impl Resolver<'_, '_> {
                             problem: "missing",
                         })
                     })?;
-                    let method = self.method_names.get(&first.name.text).and_then(|binding| {
-                        match binding.term {
-                            ResolvedTermName::Method(method) => Some(method),
-                            ResolvedTermName::Global(_) => None,
+                    let method = if first.name.introduction == 0 {
+                        self.method_names.get(&first.name.text).and_then(|binding| {
+                            match binding.term {
+                                ResolvedTermName::Method(method) => Some(method),
+                                ResolvedTermName::Global(_) => None,
+                            }
+                        })
+                    } else {
+                        match self.contextual_implementation_head(&first.name)? {
+                            SyntaxTermOutcome::BoundMethod(method) => Some(method),
+                            SyntaxTermOutcome::GenuineUnbound => {
+                                self.unbound_implementation_member(head.interface.id, &first.name)?
+                            }
+                            SyntaxTermOutcome::BoundNonMethod | SyntaxTermOutcome::Unavailable => {
+                                None
+                            }
                         }
-                    });
+                    };
                     let identity = method.map(|method| ImplMethodId::new(pending.id, method));
                     let mut resolved_equations =
                         ResolvedEquationBuffer(Vec::with_capacity(equations.len()));
@@ -19926,6 +20323,173 @@ mod tests {
         }
     }
 
+    #[test]
+    fn admitted_effect_coordinates_keep_slots_anchors_and_current_fact_checks() {
+        let fixture = ImportBudgetFixture::create(
+            "effect First {\n    first : Unit -> Unit\n}\neffect Second {\n    second : Unit -> Unit\n}\n",
+            "",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let loaded = graph.module(graph.entry()).unwrap();
+        let mut resolver = Resolver::with_type_work(loaded.id(), TypeWorkBudget::default());
+        let sources = resolver.effect_sources(loaded.surface()).unwrap();
+        let source = loaded.retained_source();
+        let strong = Arc::strong_count(source);
+        let build = |work: &mut TypeWorkBudget| {
+            crate::core::validate::AdmittedEffectCoordinates::from_admitted(loaded, &sources, work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        let coordinates = build(&mut measured).unwrap();
+        let total = measured.used();
+        assert_eq!(Arc::strong_count(source), strong);
+
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                build(&mut short).unwrap_err().reason(),
+                crate::core::ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                exact.charge(prefix).unwrap();
+                let retry = build(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + total);
+                drop(retry);
+            }
+        }
+        assert_eq!(Arc::strong_count(source), strong);
+
+        let resolved = resolve_module(loaded, &[]).unwrap();
+        let [first, second] = resolved.effects() else {
+            panic!("two effects")
+        };
+        for effect in [first, second] {
+            coordinates
+                .authenticate_effect(loaded.id(), source, effect, &mut TypeWorkBudget::default())
+                .unwrap();
+        }
+        for (effect, replacement) in [(first, second), (second, first)] {
+            let mut permuted = effect.clone();
+            permuted.id = replacement.id;
+            permuted.operations[0].id = crate::types::OperationId::new(replacement.id, 0);
+            assert_eq!(
+                coordinates
+                    .authenticate_effect(
+                        loaded.id(),
+                        source,
+                        &permuted,
+                        &mut TypeWorkBudget::default()
+                    )
+                    .unwrap_err()
+                    .reason(),
+                crate::core::ValidationReason::Registry,
+            );
+        }
+        for mutation in 0..3 {
+            let mut current = first.clone();
+            match mutation {
+                0 => current.spelling = second.spelling.clone(),
+                1 => current.span = second.span,
+                _ => current.origin = second.origin.clone(),
+            }
+            assert_eq!(
+                coordinates
+                    .authenticate_effect(
+                        loaded.id(),
+                        source,
+                        &current,
+                        &mut TypeWorkBudget::default()
+                    )
+                    .unwrap_err()
+                    .reason(),
+                crate::core::ValidationReason::Registry,
+            );
+        }
+        let copied_source = Arc::new(loaded.source().clone());
+        assert_eq!(copied_source.id(), source.id());
+        assert_eq!(
+            coordinates
+                .authenticate_effect(
+                    loaded.id(),
+                    &copied_source,
+                    first,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+        assert_eq!(
+            coordinates
+                .authenticate_effect(
+                    ModuleId::new(u32::MAX - 1),
+                    source,
+                    first,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+    }
+
+    #[test]
+    fn admitted_effect_coordinates_preserve_interleaved_native_slots() {
+        let fixture = ImportBudgetFixture::create(
+            "effect Before {\n    request : Unit -> Unit\n}\n\
+             foreign library First {\n    profile \"x86_64-unknown-linux-gnu\"\n\
+             symbol Stop : Unit -> Unit { name \"stop\" }\n}\n\
+             effect After {\n    request : Unit -> Unit\n}\n",
+            "",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let loaded = graph.module(graph.entry()).unwrap();
+        let mut resolver = Resolver::with_type_work(loaded.id(), TypeWorkBudget::default());
+        let sources = resolver.effect_sources(loaded.surface()).unwrap();
+        assert!(matches!(
+            sources.as_slice(),
+            [
+                EffectSource::Ordinary(_),
+                EffectSource::Foreign { .. },
+                EffectSource::Ordinary(_),
+            ]
+        ));
+        let record = crate::core::validate::AdmittedEffectCoordinates::from_admitted(
+            loaded,
+            &sources,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let resolved = resolve_module(loaded, &[]).unwrap();
+        let [before, native, after] = resolved.effects() else {
+            panic!("three effects")
+        };
+        assert_eq!(after.id, EffectId::new(loaded.id(), 2));
+        for effect in [before, after] {
+            record
+                .authenticate_effect(
+                    loaded.id(),
+                    loaded.retained_source(),
+                    effect,
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            record
+                .authenticate_effect(
+                    loaded.id(),
+                    loaded.retained_source(),
+                    native,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+    }
+
     fn resolve_import_fixture_with_limit(
         entry: &str,
         limit: usize,
@@ -24753,6 +25317,149 @@ mod tests {
         let (fallback, used, retained) = attempt(fallback_work, false, false);
         assert!(fallback.is_ok());
         assert_eq!((used, retained), (fallback_work, 1));
+    }
+
+    #[test]
+    fn implementation_head_requires_the_complete_owner_source_and_paid_lookup() {
+        fn unused_transformer(
+            _: &crate::syntax::SelectedSyntax,
+            _: &[crate::surface::SurfaceSyntaxCapture],
+            _: crate::source::Span,
+            _: &SurfaceName,
+            _: usize,
+            _: &[Option<usize>],
+            _: &Arc<crate::syntax::ExpansionFrame>,
+            _: &mut InterfaceConstraintBudget,
+            _: Option<crate::syntax::QuoteExpansionLoan<'_>>,
+        ) -> Result<(crate::syntax::ExpandedExpression, usize), crate::source::Span> {
+            unreachable!("method lookup does not invoke a transformer")
+        }
+
+        let fixture = ImportBudgetFixture::create(
+            "import dependency (bound)\nmain : Unit -> Int\nmain () = 42\n",
+            "pub bound : Unit -> Int\nbound () = 1\n",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| {
+                owner
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "bound")
+            })
+            .unwrap();
+        let owner = &checked[owner_index];
+        let loaded_owner = graph.module(owner.module()).unwrap();
+        assert_ne!(entry.source().id(), loaded_owner.source().id());
+
+        // mode 0 is the real complete census; 1 is empty; 2 pairs the same
+        // ModuleId with a different source; 3 has no issuing owner; 4 has an
+        // out-of-range owner; 5 asks for an unissued introduction.
+        let attempt = |limit: usize, prefix: usize, spelling: &str, mode: usize, repeat: bool| {
+            let mut views = checked
+                .iter()
+                .map(|checked_owner| {
+                    if checked_owner.module() == owner.module() && mode != 1 {
+                        crate::syntax::SyntaxOwnerBindings::new(
+                            checked_owner,
+                            loaded_owner,
+                            &checked,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap()
+                    } else {
+                        crate::syntax::SyntaxOwnerBindings::empty(checked_owner.module())
+                    }
+                })
+                .collect::<Vec<_>>();
+            if mode == 2 {
+                views[owner_index].replace_complete_source_for_test(entry.source().id());
+            }
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    owner: if mode == 3 {
+                        None
+                    } else if mode == 4 {
+                        Some(checked.len())
+                    } else {
+                        Some(owner_index)
+                    },
+                    declaration: owner.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver =
+                Resolver::with_type_work(entry.id(), TypeWorkBudget::with_limit(limit));
+            resolver.type_work.charge(prefix).unwrap();
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &views,
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let name = SurfaceName {
+                text: spelling.to_owned(),
+                span: owner.span(),
+                introduction: if mode == 5 { 2 } else { 1 },
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            };
+            let first = resolver.contextual_implementation_head(&name);
+            if repeat && first.is_ok() {
+                resolver.syntax_terms.clear();
+                let again = resolver.contextual_implementation_head(&name).unwrap();
+                assert_eq!(again, SyntaxTermOutcome::BoundNonMethod);
+            }
+            (
+                first,
+                resolver.type_work.used(),
+                resolver.syntax_terms.len(),
+            )
+        };
+        assert_eq!(
+            attempt(usize::MAX, 0, "absent", 0, false).0.unwrap(),
+            SyntaxTermOutcome::GenuineUnbound
+        );
+        for mode in 1..=5 {
+            assert_eq!(
+                attempt(usize::MAX, 0, "absent", mode, false).0.unwrap(),
+                SyntaxTermOutcome::Unavailable
+            );
+        }
+        let (result, total, _) = attempt(usize::MAX, 0, "bound", 0, false);
+        assert_eq!(result.unwrap(), SyntaxTermOutcome::BoundNonMethod);
+        assert_eq!(
+            attempt(usize::MAX, 0, "bound", 0, true).0.unwrap(),
+            SyntaxTermOutcome::BoundNonMethod,
+        );
+        for prefix in [0, 17] {
+            let (short, _, installed) = attempt(prefix + total - 1, prefix, "bound", 0, false);
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(installed, 0);
+            for _ in 0..2 {
+                let (exact, used, installed) = attempt(prefix + total, prefix, "bound", 0, false);
+                assert_eq!(exact.unwrap(), SyntaxTermOutcome::BoundNonMethod);
+                assert_eq!(used, prefix + total);
+                assert_eq!(installed, 1);
+            }
+        }
     }
 
     #[test]

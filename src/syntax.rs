@@ -8,7 +8,7 @@ use crate::{
         CheckedGlobalScheme, CheckedModule, DirectDependencyRoute, ExportedConstructor,
         ExportedGlobal,
     },
-    source::Span,
+    source::{SourceId, Span},
     surface::{
         SurfaceDeclarationCapture, SurfaceEffectRow, SurfaceExpr, SurfaceExprKind,
         SurfaceExpressionCapture, SurfaceIdentifierCapture, SurfaceImportItem,
@@ -4352,6 +4352,7 @@ impl<'a> SyntaxExpansion<'a> {
 /// Local checked term facts available only to an owner's selected syntax.
 pub(crate) struct SyntaxOwnerBindings {
     pub(crate) module: ModuleId,
+    complete_source: Option<SourceId>,
     terms: HashMap<String, ExportedGlobal>,
     constructors: HashMap<String, ExportedConstructor>,
     qualified: HashMap<String, DirectDependencyRoute>,
@@ -4481,6 +4482,7 @@ impl SyntaxOwnerBindings {
         }
         Ok(Self {
             module: owner.module(),
+            complete_source: Some(loaded.source().id()),
             terms,
             constructors,
             qualified,
@@ -4494,6 +4496,7 @@ impl SyntaxOwnerBindings {
     pub(crate) fn empty(module: ModuleId) -> Self {
         Self {
             module,
+            complete_source: None,
             terms: HashMap::new(),
             constructors: HashMap::new(),
             qualified: HashMap::new(),
@@ -4502,6 +4505,15 @@ impl SyntaxOwnerBindings {
             targeted_interfaces: HashMap::new(),
             targeted_effects: HashMap::new(),
         }
+    }
+
+    pub(crate) fn complete_source(&self) -> Option<SourceId> {
+        self.complete_source
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_complete_source_for_test(&mut self, source: SourceId) {
+        self.complete_source = Some(source);
     }
 
     pub(crate) fn get(&self, spelling: &str) -> Option<&ExportedGlobal> {
