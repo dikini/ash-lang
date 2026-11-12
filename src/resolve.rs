@@ -23673,6 +23673,21 @@ mod tests {
                     failure.lookup_scope_name(),
                     Some(if constructor { "constructor" } else { "type" })
                 );
+                let mut stripped = reference.clone();
+                match &mut stripped {
+                    SurfaceReference::Unqualified(name) => name.diagnostic = None,
+                    SurfaceReference::Qualified(name) => name.member.diagnostic = None,
+                }
+                let mut ordinary = Resolver::new(ModuleId::new(7_104));
+                let unchanged = if constructor {
+                    ordinary.constructor_reference(&stripped).unwrap_err()
+                } else {
+                    ordinary.nominal_reference(&stripped).unwrap_err()
+                };
+                assert_eq!(unchanged.reason, failure.reason);
+                assert_eq!(unchanged.found, failure.found);
+                assert_eq!(unchanged.lookup_scope_name(), failure.lookup_scope_name());
+                assert_eq!(unchanged.primary.span(), failure.primary.span());
                 assert!(work >= member.text.len());
                 for prefix in [0, 7] {
                     let (short, _) = run(prefix + work - 1, prefix);
@@ -23690,7 +23705,7 @@ mod tests {
 
     #[test]
     fn generated_diagnostic_labels_preserve_sources_and_retry_paid_failures() {
-        use crate::presentation::{PresentationError, compile_resolve_diagnostic};
+        use crate::presentation::{PresentationError, compile_resolve_diagnostic, write_json};
 
         let fixtures = [
             (
@@ -23749,17 +23764,21 @@ mod tests {
             assert!(failure.primary.diagnostic_location().is_some());
             assert!(Arc::strong_count(&frame) > base_count);
             let view = compile_resolve_diagnostic(&failure, &[&forms, &caller]).unwrap();
+            let mut encoded = Vec::new();
+            write_json(&mut encoded, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            let labels = json["labels"].as_array().unwrap();
             assert_eq!(
-                view.related
+                labels
                     .iter()
-                    .filter(|label| label.relationship == "syntax_invocation")
+                    .filter(|label| label["relationship"] == "syntax_invocation")
                     .count(),
                 1
             );
             assert_eq!(
-                view.related
+                labels
                     .iter()
-                    .filter(|label| label.relationship == "syntax_definition")
+                    .filter(|label| label["relationship"] == "syntax_definition")
                     .count(),
                 1
             );
@@ -23768,6 +23787,51 @@ mod tests {
                 Err(PresentationError::MissingSource)
             ));
             drop(view);
+            let mut stripped = surface.clone();
+            match index {
+                0 => stripped.effects[0].operations[1].name.diagnostic = None,
+                1 => {
+                    stripped.type_declarations[0].constructors[0]
+                        .name
+                        .diagnostic = None
+                }
+                _ => stripped.foreign_libraries[0].name.diagnostic = None,
+            }
+            let mut ordinary = Resolver::new(ModuleId::new(7_105));
+            let unchanged = match index {
+                0 => ordinary.validate_local_namespaces(&stripped).unwrap_err(),
+                1 => {
+                    validate_newtype_shape(&stripped.type_declarations[0], &mut ordinary.type_work)
+                        .unwrap_err()
+                }
+                _ => match ordinary.prepare_source_foreign(&stripped) {
+                    Ok(_) => panic!("the missing profile must fail"),
+                    Err(failure) => failure,
+                },
+            };
+            assert_eq!(unchanged.reason, failure.reason);
+            assert_eq!(unchanged.primary.span(), failure.primary.span());
+            assert_eq!(unchanged.expected, failure.expected);
+            assert_eq!(unchanged.found, failure.found);
+            assert_eq!(
+                unchanged.foreign_contract_cause(),
+                failure.foreign_contract_cause()
+            );
+            assert_eq!(
+                unchanged
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>(),
+                failure
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>()
+            );
+            assert!(unchanged.primary.diagnostic_location().is_none());
+            drop(unchanged);
+            drop(stripped);
             drop(failure);
             assert_eq!(Arc::strong_count(&frame), base_count);
             for prefix in [0, 11] {
