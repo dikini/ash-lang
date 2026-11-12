@@ -1027,6 +1027,8 @@ impl<'inv> SyntaxHost<'inv> {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 let index = read_integer(index, heap, work)?.to_usize();
+                #[cfg(test)]
+                let capture_slot = index;
                 let capture = index.and_then(|index| self.captures.get(index));
                 if matches!(capture, Some(SurfaceSyntaxCapture::Repeated(_))) {
                     return Err(RuntimeFailure::InvalidControlState);
@@ -1156,6 +1158,17 @@ impl<'inv> SyntaxHost<'inv> {
                         )?;
                         self.identifiers.push(capture.name);
                         let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
+                        #[cfg(test)]
+                        let identifier = {
+                            let mut identifier = identifier;
+                            if let (Some(slot), Some(observe)) = (
+                                capture_slot,
+                                super::machine_test_hooks::IDENTIFIER_CAPTURE_OBSERVER.get(),
+                            ) {
+                                observe(slot, &mut identifier);
+                            }
+                            identifier
+                        };
                         let fields = vec![identifier, origin].into_boxed_slice();
                         let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
                         let capture = self.construct(heap, "IdentifierCapture", Some(fields))?;
@@ -2411,6 +2424,194 @@ fn pair<'a>(
 #[cfg(test)]
 mod tests {
     use super::{token_from_spelling, token_kind_name};
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum I16CapturePhase {
+        Idle,
+        SameHost,
+        Donor,
+        Recipient,
+        Injected,
+        Finished,
+    }
+
+    std::thread_local! {
+        static I16_CAPTURE_PHASE: std::cell::Cell<I16CapturePhase> = const { std::cell::Cell::new(I16CapturePhase::Idle) };
+        static I16_CAPTURE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static I16_DONOR_IDENTIFIER: std::cell::RefCell<Option<crate::eval::Value>> = const { std::cell::RefCell::new(None) };
+    }
+
+    struct I16CaptureHook(Option<fn(usize, &mut crate::eval::Value)>);
+
+    impl Drop for I16CaptureHook {
+        fn drop(&mut self) {
+            super::super::machine_test_hooks::IDENTIFIER_CAPTURE_OBSERVER.set(self.0);
+            I16_DONOR_IDENTIFIER.with(|slot| drop(slot.borrow_mut().take()));
+            I16_CAPTURE_PHASE.set(I16CapturePhase::Idle);
+        }
+    }
+
+    fn i16_integrated_configuration() -> crate::driver::RunConfiguration {
+        crate::driver::RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/indexed/integrated.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        }
+    }
+
+    fn i16_counters() -> [usize; 5] {
+        use super::super::machine_test_hooks as hooks;
+        [
+            hooks::TRANSFER_ATTEMPTS.get(),
+            hooks::TRANSFER_FAILURES.get(),
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+        ]
+    }
+
+    fn i16_identifier(value: &crate::eval::Value) -> &crate::eval::CompilerSyntaxHandle {
+        let crate::eval::Value::CompilerSyntaxHandle(handle) = value else {
+            panic!("slot 1 must issue a real identifier handle")
+        };
+        assert!(matches!(
+            handle.kind,
+            crate::eval::value::CompilerSyntaxHandleKind::Identifier(_)
+        ));
+        handle
+    }
+
+    fn i16_capture_identifier(slot: usize, identifier: &mut crate::eval::Value) {
+        use crate::driver::{PipelineFailure, compile_path};
+        use std::sync::Arc;
+
+        assert_eq!(slot, 1, "the indexed target is the real second capture");
+        I16_CAPTURE_VISITS.set(I16_CAPTURE_VISITS.get() + 1);
+        match I16_CAPTURE_PHASE.get() {
+            I16CapturePhase::SameHost => {
+                let _ = i16_identifier(identifier);
+            }
+            I16CapturePhase::Donor => {
+                let donor_invocation = Arc::clone(&i16_identifier(identifier).invocation);
+                I16_DONOR_IDENTIFIER.with(|slot| {
+                    assert!(slot.borrow().is_none());
+                    *slot.borrow_mut() = Some(identifier.clone());
+                });
+                let before = i16_counters();
+                assert_eq!(before, [0, 0, 0, 0, 0], "donor host remains live");
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Recipient);
+                // No hook-state borrow is held across this independent compilation.
+                let recipient = compile_path(i16_integrated_configuration());
+                assert_eq!(I16_CAPTURE_PHASE.get(), I16CapturePhase::Injected);
+                let failure =
+                    recipient.expect_err("the foreign identifier must not publish a module");
+                assert_eq!(failure.reason_code(), "syntax.transformer-failed");
+                let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure()
+                else {
+                    panic!("the real recipient must retain its transformer failure: {failure:?}");
+                };
+                assert!(matches!(
+                    runtime.cause(),
+                    crate::eval::RuntimeFailure::InvalidControlState
+                ));
+                let invocation = failure
+                    .sources()
+                    .iter()
+                    .find(|source| source.id() == runtime.invocation.source())
+                    .expect("the recipient invocation source is retained");
+                let definition = failure
+                    .sources()
+                    .iter()
+                    .find(|source| source.id() == runtime.definition.source())
+                    .expect("the recipient definition source is retained");
+                assert!(invocation.display_path().ends_with("exported.ash"));
+                assert!(definition.display_path().ends_with("derives.ash"));
+                let after = i16_counters();
+                assert_eq!(after, [1, 1, 1, 1, 0]);
+                assert!(Arc::ptr_eq(
+                    &donor_invocation,
+                    &i16_identifier(identifier).invocation
+                ));
+                I16_DONOR_IDENTIFIER.with(|slot| drop(slot.borrow_mut().take()));
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Finished);
+                eprintln!(
+                    "I16 recipient: slot 1 foreign invocation refused during transfer; \
+                     invocation={}, definition={}, counters={after:?}; donor callback remains live",
+                    invocation.display_path(),
+                    definition.display_path()
+                );
+            }
+            I16CapturePhase::Recipient => {
+                let donor = I16_DONOR_IDENTIFIER.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .expect("the live donor supplied its issued handle")
+                        .clone()
+                });
+                assert!(!Arc::ptr_eq(
+                    &i16_identifier(identifier).invocation,
+                    &i16_identifier(&donor).invocation
+                ));
+                *identifier = donor;
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Injected);
+            }
+            phase => panic!("unexpected I16 capture phase {phase:?}"),
+        }
+    }
+
+    #[test]
+    fn i16_integrated_same_host_identifier_transfers_and_executes() {
+        use super::super::machine_test_hooks as hooks;
+
+        hooks::reset();
+        let original = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the unmodified integrated graph compiles");
+        assert_eq!(i16_counters(), [1, 0, 1, 1, 0]);
+        assert_eq!(
+            crate::driver::execute(&original).unwrap().value_display(),
+            "42"
+        );
+
+        hooks::reset();
+        I16_CAPTURE_VISITS.set(0);
+        I16_CAPTURE_PHASE.set(I16CapturePhase::SameHost);
+        let restore = I16CaptureHook(
+            hooks::IDENTIFIER_CAPTURE_OBSERVER.replace(Some(i16_capture_identifier)),
+        );
+        let same = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the unchanged same-host identifier transfers");
+        assert_eq!(I16_CAPTURE_VISITS.get(), 1);
+        assert_eq!(i16_counters(), [1, 0, 1, 1, 0]);
+        assert_eq!(hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(), 1);
+        drop(restore);
+        assert_eq!(crate::driver::execute(&same).unwrap().value_display(), "42");
+        hooks::reset();
+    }
+
+    #[test]
+    fn i16_integrated_foreign_identifier_is_refused_before_publication() {
+        use super::super::machine_test_hooks as hooks;
+
+        hooks::reset();
+        I16_CAPTURE_VISITS.set(0);
+        I16_CAPTURE_PHASE.set(I16CapturePhase::Donor);
+        let restore = I16CaptureHook(
+            hooks::IDENTIFIER_CAPTURE_OBSERVER.replace(Some(i16_capture_identifier)),
+        );
+        let donor = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the live donor completes after the recipient refuses");
+        assert_eq!(I16_CAPTURE_PHASE.get(), I16CapturePhase::Finished);
+        assert_eq!(I16_CAPTURE_VISITS.get(), 2);
+        assert_eq!(i16_counters(), [2, 1, 2, 2, 0]);
+        assert_eq!(hooks::DECLARATION_CAPTURES.get(), 2);
+        assert_eq!(hooks::DECLARATION_UNWRAPS.get(), 2);
+        drop(restore);
+        assert_eq!(
+            crate::driver::execute(&donor).unwrap().value_display(),
+            "42"
+        );
+        hooks::reset();
+    }
 
     struct DeclarationHostFixture {
         entry: crate::core::validate::ValidatedMacroEntry,

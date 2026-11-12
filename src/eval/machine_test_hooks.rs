@@ -3,9 +3,11 @@ use std::cell::Cell;
 
 type TransformerEvaluationObserver =
     fn(&crate::core::validate::ValidatedMacroEntry, &super::Evaluation);
+type IdentifierCaptureObserver = fn(usize, &mut super::Value);
 
 std::thread_local! {
     pub(crate) static TRANSFORMER_EVALUATION_OBSERVER: Cell<Option<TransformerEvaluationObserver>> = const { Cell::new(None) };
+    pub(crate) static IDENTIFIER_CAPTURE_OBSERVER: Cell<Option<IdentifierCaptureObserver>> = const { Cell::new(None) };
     pub(crate) static FAIL_DISPOSAL_GROWTH: Cell<bool> = const { Cell::new(false) };
     pub(crate) static FAIL_CONTROL_RESERVATION: Cell<Option<crate::eval::ResourceFailureCause>> = const { Cell::new(None) };
     pub(crate) static ROOT_CLOSES: Cell<usize> = const { Cell::new(0) };
@@ -29,6 +31,7 @@ std::thread_local! {
 
 pub(crate) fn reset() {
     TRANSFORMER_EVALUATION_OBSERVER.set(None);
+    IDENTIFIER_CAPTURE_OBSERVER.set(None);
     FAIL_DISPOSAL_GROWTH.set(false);
     FAIL_CONTROL_RESERVATION.set(None);
     ROOT_CLOSES.set(0);

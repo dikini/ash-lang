@@ -7384,6 +7384,7 @@ main () = one(()) + two(())
         for (entry, expected) in [
             ("one.ash", vec!["Red"]),
             ("main.ash", vec!["Red", "Blue"]),
+            ("integrated.ash", vec!["Red", "Blue"]),
             ("three.ash", vec!["Red", "Blue", "Green"]),
         ] {
             hooks::reset();
