@@ -2288,11 +2288,21 @@ fn project_template_generators(
             )?)?)
         };
         let seed = only_child_of_kind(binding, NodeKind::TemplateGeneratorSeed)?;
-        let seed = project_expression(source, expression_child(seed)?, tokens)?;
+        let seed_node = expression_child(seed)?;
+        let seed = project_expression(source, seed_node, tokens)?;
+        let empty_originals = std::collections::HashMap::new();
+        let originals = tokens.originals.unwrap_or(&empty_originals);
+        let (seed_contents, _) = capture_contents_and_type(source, seed_node, tokens, originals)?;
+        // The retained Arc owns its own slice in addition to the builder Vec.
+        charge_expression_allocation(
+            seed_contents.len().saturating_add(1),
+            tokens.expression_budget,
+        )?;
         reserve_expression_scratch(&mut generators, 1, tokens.expression_budget)?;
         generators.push(crate::surface::SurfaceTemplateGenerator {
             name: surface_name(name)?,
             seed,
+            seed_contents: seed_contents.into(),
             step,
             span: node_span(source, binding, tokens)?,
         });

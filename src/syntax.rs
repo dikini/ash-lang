@@ -2620,6 +2620,8 @@ pub(crate) fn generator_adapter_definition(
     escape_categories: &[Option<EscapeResultCategory>],
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    contexts: &SyntaxContexts,
     definition_introduction: usize,
     builtin_introduction: usize,
     owners: &[SyntaxOwner],
@@ -2776,14 +2778,48 @@ pub(crate) fn generator_adapter_definition(
         frame: &Arc<ExpansionFrame>,
         budget: &mut SyntaxBudget,
     ) -> Result<Option<Box<DiagnosticLocation>>, MacroParseFailure> {
+        let resource = |error| MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        };
+        let member = generator.step.member();
+        let cause = member.diagnostic.as_deref();
+        let extra_member =
+            cause.is_none_or(|cause| cause.primary != MacroOrigin::Source(member.span));
+        let related = cause
+            .map_or(0, |cause| cause.related.len().saturating_add(1))
+            .saturating_add(usize::from(extra_member));
+        let frames = cause.map_or(0, |cause| cause.frames.len());
+        if let Some(cause) = cause {
+            charge_diagnostic_location_copy(cause, budget).map_err(resource)?;
+        }
+        // Pay the new packet, vector storage, and add_frame deduplication
+        // scans before copying any of the written reference's causes.
         budget
-            .charge_units(6)
-            .map_err(|error| MacroParseFailure::Syntax {
-                diagnostics: Vec::new(),
-                resource: Some(error),
-            })?;
+            .charge_units(
+                6usize
+                    .saturating_add(related)
+                    .saturating_add(frames)
+                    .saturating_add(frames.saturating_mul(frames.saturating_add(1)) / 2),
+            )
+            .map_err(resource)?;
         let mut location = DiagnosticLocation::new(frame.invocation.into());
-        location.related.push(generator.step.member().span.into());
+        location
+            .related
+            .try_reserve_exact(related)
+            .map_err(|_| MacroParseFailure::Invalid)?;
+        location
+            .frames
+            .try_reserve_exact(frames.saturating_add(1))
+            .map_err(|_| MacroParseFailure::Invalid)?;
+        if let Some(cause) = cause {
+            location.add_cause(cause);
+            location.token_cause = cause.token_cause;
+            location.captured_expression = cause.captured_expression;
+        }
+        if extra_member {
+            location.related.push(member.span.into());
+        }
         location.add_frame(frame);
         Ok(Some(Box::new(location)))
     }
@@ -2967,6 +3003,150 @@ pub(crate) fn generator_adapter_definition(
             span,
         ))
     }
+    // Reconstruct definition-written seeds through the existing substitution
+    // and expression parser. Captured quote sites still require the separate
+    // caller-owner handoff, so inspect selected leaves before any clone.
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_seed(
+        generator: &SurfaceTemplateGenerator,
+        matcher: &[SurfaceSyntaxMatcherPart],
+        captures: &[SurfaceSyntaxCapture],
+        indices: &[usize],
+        shape_only: bool,
+        source: &crate::source::SourceFile,
+        contexts: &SyntaxContexts,
+        introduction: usize,
+        frame: &Arc<ExpansionFrame>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<Option<SurfaceExpr>, MacroParseFailure> {
+        let resource = |error| MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        };
+        let deferred = || {
+            if shape_only {
+                Ok(None)
+            } else {
+                Err(MacroParseFailure::Invalid)
+            }
+        };
+        let packet = generator.seed_contents.as_ref();
+        budget.charge_units(packet.len()).map_err(resource)?;
+        let mut pending = packet
+            .iter()
+            .rev()
+            .map(|node| (node, 0usize))
+            .collect::<Vec<_>>();
+        let mut available = true;
+        while let Some((node, depth)) = pending.pop() {
+            budget.charge().map_err(resource)?;
+            match node {
+                MacroOutputNode::Splice(name) => {
+                    charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
+                    budget
+                        .charge_units(indices.len().saturating_mul(3))
+                        .map_err(resource)?;
+                    let (capture, repetitions) =
+                        match capture_by_name_with_depth(name, matcher, captures, indices) {
+                            Ok(capture) => capture,
+                            Err(CaptureLookupFailure::Unknown(name)) => {
+                                return Err(unknown_capture_failure(name, Some(budget)));
+                            }
+                            Err(CaptureLookupFailure::Invalid(_)) => {
+                                return Err(MacroParseFailure::Invalid);
+                            }
+                        };
+                    if repetitions > indices.len() {
+                        if !shape_only {
+                            return deferred();
+                        }
+                        available = false;
+                        continue;
+                    }
+                    if let SurfaceSyntaxCapture::Expression(capture) = capture
+                        && !matches!(capture.quote_sites, CapturedQuoteSites::Empty)
+                    {
+                        if !shape_only {
+                            return deferred();
+                        }
+                        available = false;
+                    }
+                }
+                MacroOutputNode::Group(_, children, _) => {
+                    let child_depth = type_depth(depth, 1).map_err(resource)?;
+                    let requested = pending.len().saturating_add(children.len());
+                    if requested > pending.capacity() {
+                        budget
+                            .charge_units(requested.saturating_add(pending.len()))
+                            .map_err(resource)?;
+                        pending
+                            .try_reserve_exact(children.len())
+                            .map_err(|_| MacroParseFailure::Invalid)?;
+                    }
+                    budget.charge_units(children.len()).map_err(resource)?;
+                    pending.extend(children.iter().rev().map(|child| (child, child_depth)));
+                }
+                MacroOutputNode::Token(crate::lexer::TokenKind::SyntaxKeyword, _, _) => {
+                    if !shape_only {
+                        return deferred();
+                    }
+                    available = false;
+                }
+                MacroOutputNode::Identifier(..) | MacroOutputNode::Token(..) => {}
+                _ => {
+                    if !shape_only {
+                        return deferred();
+                    }
+                    available = false;
+                }
+            }
+        }
+        if !available {
+            return Ok(None);
+        }
+        if charge_template_inner(
+            packet,
+            matcher,
+            captures,
+            true,
+            Some(frame.invocation),
+            &[],
+            None,
+            indices,
+            budget,
+        )? {
+            return deferred();
+        }
+        budget.charge_units(indices.len()).map_err(resource)?;
+        let mut selected = indices.to_vec();
+        let mut contents = packet.to_vec();
+        let mut loan = Some(&mut *budget);
+        substitute_contents_at(
+            &mut contents,
+            matcher,
+            captures,
+            introduction,
+            frame.invocation,
+            &mut selected,
+            &mut loan,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
+        let expression = crate::parser::parse_macro_expression_budgeted(
+            source,
+            frame.invocation,
+            Some((generator.seed.span, introduction)),
+            contents,
+            contexts,
+            Some(frame),
+            budget,
+        )?;
+        Ok(Some(expression))
+    }
     let mut declarations = Vec::with_capacity(
         plan.actions
             .len()
@@ -3002,17 +3182,32 @@ pub(crate) fn generator_adapter_definition(
                 .map_err(resource)?
                 .is_some()
             {
-                // The block, match, arms and their boxed children are new.
-                budget.charge_units(12).map_err(resource)?;
                 let mut seed = candidate.clone();
                 inherit_frame(&mut seed.diagnostic, seed.span, frame, budget)?;
                 Some(seed)
             } else {
                 None
             }
+        } else if !matches!(generator.seed.kind, SurfaceExprKind::TemplateSplice(_)) {
+            materialize_seed(
+                generator,
+                matcher,
+                captures,
+                &[],
+                true,
+                source,
+                contexts,
+                definition_introduction,
+                frame,
+                budget,
+            )?
         } else {
             None
         };
+        if seed.is_some() {
+            // The block, match, arms and their boxed children are new.
+            budget.charge_units(12).map_err(resource)?;
+        }
         let witness = step_shape(
             generator,
             definition_introduction,
@@ -3075,7 +3270,19 @@ pub(crate) fn generator_adapter_definition(
                         }
                         generator.seed.clone()
                     }
-                    _ => return Err(MacroParseFailure::Invalid),
+                    _ => materialize_seed(
+                        generator,
+                        matcher,
+                        captures,
+                        indices,
+                        false,
+                        source,
+                        contexts,
+                        definition_introduction,
+                        frame,
+                        budget,
+                    )?
+                    .ok_or(MacroParseFailure::Invalid)?,
                 };
                 inherit_frame(&mut seed.diagnostic, seed.span, frame, budget)?;
                 // The shell is created at the invocation; the seed itself
@@ -3964,6 +4171,7 @@ impl<'a> SyntaxExpansion<'a> {
                 None,
                 &[],
                 None,
+                &[],
                 budget,
             )? {
                 return Err(MacroParseFailure::Invalid);
@@ -4842,6 +5050,7 @@ fn validate_template_syntax_inner(
             None,
             &[],
             declaration.template_escapes.as_deref(),
+            &[],
             budget,
         )?;
     }
@@ -6037,7 +6246,17 @@ fn charge_declaration_template(
     captures: &[SurfaceSyntaxCapture],
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
-    charge_template_inner(template, matcher, captures, false, None, &[], None, budget)
+    charge_template_inner(
+        template,
+        matcher,
+        captures,
+        false,
+        None,
+        &[],
+        None,
+        &[],
+        budget,
+    )
 }
 
 fn charge_template_inner(
@@ -6048,6 +6267,7 @@ fn charge_template_inner(
     invocation: Option<Span>,
     generators: &[&SurfaceName],
     escapes: Option<&[crate::surface::SurfaceTemplateEscape]>,
+    initial_indices: &[usize],
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
     use crate::parser::{MacroParseFailure, STRUCTURAL_DEPTH_LIMIT};
@@ -6065,6 +6285,9 @@ fn charge_template_inner(
     let mut repeat_visits = 0usize;
     budget.charge_units(template.len()).map_err(resource)?;
     budget.charge_units(template.len()).map_err(resource)?;
+    budget
+        .charge_units(template.len().saturating_mul(initial_indices.len()))
+        .map_err(resource)?;
     if new_expression && !template.is_empty() {
         // The borrowed preflight and the eventual root clone own separate buffers.
         budget.charge_units(template.len()).map_err(resource)?;
@@ -6072,7 +6295,7 @@ fn charge_template_inner(
     }
     let mut pending = template
         .iter()
-        .map(|node| (node, 0usize, Vec::<usize>::new()))
+        .map(|node| (node, 0usize, initial_indices.to_vec()))
         .collect::<Vec<_>>();
     while let Some((node, depth, indices)) = pending.pop() {
         expanded_nodes = expanded_nodes.saturating_add(1);
@@ -6330,6 +6553,7 @@ pub(crate) fn prepare_declaration_template(
         Some(invocation),
         &[],
         selection.declaration.template_escapes.as_deref(),
+        &[],
         budget,
     )? {
         return Err(MacroParseFailure::Invalid);
@@ -6443,6 +6667,7 @@ pub(crate) fn prepare_generator_template(
         Some(invocation),
         &names,
         selection.declaration.template_escapes.as_deref(),
+        &[],
         budget,
     )? {
         return Err(MacroParseFailure::Invalid);
@@ -7662,6 +7887,7 @@ mod tests {
         let location = |at: Span, already_current: bool| {
             let mut location = DiagnosticLocation::new(at.into());
             location.related.push(span(36, 40).into());
+            location.token_cause = true;
             location.captured_expression = true;
             location.add_frame(&prior);
             if already_current {
@@ -7686,6 +7912,7 @@ mod tests {
                 span: seed_span,
                 diagnostic: location(seed_span, false),
             },
+            seed_contents: Arc::from([]),
             step: SurfaceReference::Qualified(SurfaceQualifiedName {
                 qualifier: name("Tools", span(50, 55), false),
                 member: name("step", member_span, true),
@@ -7714,12 +7941,15 @@ mod tests {
             captures: Vec::new(),
         };
         let baseline = (Arc::strong_count(&prior), Arc::strong_count(&current));
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
         let run = |budget: &mut SyntaxBudget| {
             generator_adapter_definition(
                 &plan,
                 &[None, None],
                 &[],
                 &[],
+                &source,
+                &contexts,
                 1,
                 2,
                 &[],
@@ -7744,6 +7974,7 @@ mod tests {
             use crate::surface::{SurfaceExprKind, SurfaceLocalDeclaration, SurfaceReference};
             let check = |location: &DiagnosticLocation| {
                 assert_eq!(location.related.len(), 1);
+                assert!(location.token_cause);
                 assert!(location.captured_expression);
                 assert_eq!(
                     location
@@ -7839,9 +8070,17 @@ mod tests {
                     if let SurfaceLocalDeclaration::Binding(binding) = declaration {
                         if let Some(location) = &binding.pattern.diagnostic {
                             assert_eq!(location.primary.primary(), current.invocation);
-                            assert_eq!(location.related, [MacroOrigin::Source(member_span)]);
-                            assert_eq!(location.frames.len(), 1);
-                            assert!(Arc::ptr_eq(&location.frames[0], current));
+                            assert_eq!(location.related.len(), 2);
+                            assert_eq!(location.related[0], MacroOrigin::Source(member_span));
+                            assert_eq!(
+                                location.related[1].primary().range(),
+                                ByteRange::new(36, 40).unwrap()
+                            );
+                            assert!(location.token_cause);
+                            assert!(location.captured_expression);
+                            assert_eq!(location.frames.len(), 2);
+                            assert!(Arc::ptr_eq(&location.frames[0], prior));
+                            assert!(Arc::ptr_eq(&location.frames[1], current));
                             seen[2] += 1;
                         }
                         visit(

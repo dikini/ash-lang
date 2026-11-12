@@ -2824,11 +2824,16 @@ fn evaluate_generator_transformer(
         };
         escape_categories.push(category);
     }
+    let contexts =
+        crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
+            .map_err(quote_resource_failure)?;
     let (definition, uses) = crate::syntax::generator_adapter_definition(
         plan,
         &escape_categories,
         &selection.declaration.matcher,
         captures,
+        source,
+        &contexts,
         introduction,
         builtin_introduction,
         owners,
@@ -2951,9 +2956,6 @@ fn evaluate_generator_transformer(
         constraint_work,
         Some(&mut *budget),
     )?;
-    let contexts =
-        crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
-            .map_err(quote_resource_failure)?;
     budget.charge().map_err(quote_resource_failure)?;
     #[cfg(test)]
     let lifecycle_before = generator_lifecycle_counters();

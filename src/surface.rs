@@ -76,6 +76,8 @@ pub(crate) struct SurfaceTemplateEscape {
 pub(crate) struct SurfaceTemplateGenerator {
     pub(crate) name: SurfaceName,
     pub(crate) seed: SurfaceExpr,
+    /// The defining source packet for ordinary seed instantiation.
+    pub(crate) seed_contents: Arc<[crate::syntax::MacroOutputNode]>,
     pub(crate) step: SurfaceReference,
     pub(crate) span: Span,
 }
