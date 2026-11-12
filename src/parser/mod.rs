@@ -725,6 +725,36 @@ pub(crate) fn unknown_template_capture(name: &crate::surface::SurfaceName) -> Ma
     }
 }
 
+/// Report a known template capture whose category cannot be a seed splice.
+pub(crate) fn expected_seed_expression_capture(
+    name: &crate::surface::SurfaceName,
+) -> MacroParseFailure {
+    let reason = ParseReason::ExpectedForm;
+    let primary = SourceLabel::new(name.span, primary_message(reason))
+        .with_location_preserving_span(name.diagnostic.as_deref());
+    let mut diagnostic = Diagnostic::new(reason, primary);
+    diagnostic.expected = Some(expected_name(ExpectedForm::Expression).to_owned());
+    diagnostic.found = Some(format!("${}", name.text));
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(
+            diagnostic,
+            Some(ExpectedForm::Expression),
+            Some(FoundToken::Identifier),
+            None,
+        )],
+        resource: None,
+    }
+}
+
+pub(crate) fn expected_seed_expression_capture_work(name: &crate::surface::SurfaceName) -> usize {
+    name.text
+        .len()
+        .saturating_add(1)
+        .saturating_add(primary_message(ParseReason::ExpectedForm).len())
+        .saturating_add(expected_name(ExpectedForm::Expression).len())
+        .saturating_add(1)
+}
+
 pub(crate) fn duplicate_template_binding(name: &crate::surface::SurfaceName) -> MacroParseFailure {
     let reason = ParseReason::ExpectedForm;
     let primary = SourceLabel::new(name.span, primary_message(reason))

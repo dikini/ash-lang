@@ -4589,10 +4589,57 @@ fn generator_admission_matcher(
         Ok(())
     }
 
+    fn seed_reads(
+        nodes: &[MacroOutputNode],
+        matcher: &[SurfaceSyntaxMatcherPart],
+        repetitions: usize,
+        depth: usize,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        for node in nodes {
+            budget.charge().map_err(resource)?;
+            match node {
+                MacroOutputNode::Splice(name) => {
+                    charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
+                    let Some(schema) = matcher_capture_schema(matcher, name) else {
+                        return Err(unknown_capture_failure(name, Some(budget)));
+                    };
+                    if schema.repetitions > repetitions {
+                        return Err(unknown_capture_failure(name, Some(budget)));
+                    }
+                    if schema.kind != SurfaceSyntaxCaptureKind::Expression {
+                        budget
+                            .charge_units(crate::parser::expected_seed_expression_capture_work(
+                                name,
+                            ))
+                            .map_err(resource)?;
+                        if let Some(location) = name.diagnostic.as_deref() {
+                            charge_diagnostic_location_copy(location, budget).map_err(resource)?;
+                            budget
+                                .charge_units(location.frames.len())
+                                .map_err(resource)?;
+                        }
+                        return Err(crate::parser::expected_seed_expression_capture(name));
+                    }
+                }
+                MacroOutputNode::Group(_, children, _) => seed_reads(
+                    children,
+                    matcher,
+                    repetitions,
+                    type_depth(depth, 1).map_err(resource)?,
+                    budget,
+                )?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn append<'a>(
         bindings: &'a [SurfaceTemplateGenerator],
         matcher: &[SurfaceSyntaxMatcherPart],
         all: &mut Vec<&'a SurfaceTemplateGenerator>,
+        repetitions: usize,
         budget: &mut SyntaxBudget,
     ) -> Result<(), MacroParseFailure> {
         for binding in bindings {
@@ -4620,6 +4667,7 @@ fn generator_admission_matcher(
                     return Err(crate::parser::duplicate_template_binding(&binding.name));
                 }
             }
+            seed_reads(&binding.seed_contents, matcher, repetitions, 0, budget)?;
             if all.len() == all.capacity() {
                 budget
                     .charge_units(all.len().saturating_mul(2).saturating_add(1))
@@ -4638,6 +4686,7 @@ fn generator_admission_matcher(
         matcher: &[SurfaceSyntaxMatcherPart],
         all: &mut Vec<&'a SurfaceTemplateGenerator>,
         depth: usize,
+        repetitions: usize,
         budget: &mut SyntaxBudget,
     ) -> Result<(), MacroParseFailure> {
         for node in nodes {
@@ -4649,18 +4698,26 @@ fn generator_admission_matcher(
                         matcher,
                         all,
                         type_depth(depth, 1).map_err(resource)?,
+                        repetitions,
                         budget,
                     )?;
                 }
                 MacroOutputNode::TemplateRepeat(repeat) => {
                     if let Some(bindings) = &repeat.generators {
-                        append(bindings, matcher, all, budget)?;
+                        append(
+                            bindings,
+                            matcher,
+                            all,
+                            repetitions.saturating_add(1),
+                            budget,
+                        )?;
                     }
                     collect(
                         &repeat.body,
                         matcher,
                         all,
                         type_depth(depth, 1).map_err(resource)?,
+                        repetitions.saturating_add(1),
                         budget,
                     )?;
                 }
@@ -4756,9 +4813,9 @@ fn generator_admission_matcher(
 
     let mut all = Vec::new();
     if let Some(bindings) = &declaration.generators {
-        append(bindings, &declaration.matcher, &mut all, budget)?;
+        append(bindings, &declaration.matcher, &mut all, 0, budget)?;
     }
-    collect(template, &declaration.matcher, &mut all, 0, budget)?;
+    collect(template, &declaration.matcher, &mut all, 0, 0, budget)?;
     let initial = declaration.generators.as_deref().unwrap_or(&[]);
     budget
         .charge_units(initial.len().saturating_mul(2))
@@ -8517,6 +8574,91 @@ mod tests {
         let mut exact = SyntaxBudget::with_limit(used);
         validate_quote_template_syntax(declaration, &source, &contexts, &mut exact).unwrap();
         assert_eq!(exact.consumed(), used);
+    }
+
+    #[test]
+    fn generator_seed_category_diagnostic_preserves_location_and_budget() {
+        use crate::parser::{ExpectedForm, MacroParseFailure, ParseReason};
+
+        let text = "pub syntax declaration: (make) $item:ident => {\nvalue : Unit -> Int\nvalue () = $number\n} with { $number from $item step next }\n";
+        let source = SourceFile::new("seed-category.ash", text).unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        assert!(tree.parse_diagnostics().is_empty());
+        let mut module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .unwrap();
+        let declaration = &mut module.syntax_declarations[0];
+        let generators = Arc::get_mut(declaration.generators.as_mut().unwrap()).unwrap();
+        let packet = Arc::get_mut(&mut generators[0].seed_contents).unwrap();
+        let [MacroOutputNode::Splice(name)] = packet else {
+            panic!("the seed retains its original splice")
+        };
+        let span = name.span;
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: declaration.span,
+        });
+        let mut location = DiagnosticLocation::new(span.into());
+        location.related.push(declaration.span.into());
+        location.captured_expression = true;
+        location.add_frame(&frame);
+        name.diagnostic = Some(Box::new(location));
+        let retained = Arc::strong_count(&frame);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let run = |budget: &mut SyntaxBudget| {
+            validate_quote_template_syntax(declaration, &source, &contexts, budget)
+        };
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let Err(MacroParseFailure::Syntax {
+            diagnostics,
+            resource: None,
+        }) = run(&mut measured)
+        else {
+            panic!("a known identifier capture is not an expression capture")
+        };
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
+        assert_eq!(diagnostic.expected_form(), Some(ExpectedForm::Expression));
+        assert_eq!(diagnostic.found.as_deref(), Some("$item"));
+        assert_eq!(diagnostic.primary.span(), span);
+        let copied = diagnostic.primary.diagnostic_location().unwrap();
+        assert!(copied.captured_expression);
+        assert_eq!(copied.related, [MacroOrigin::Source(declaration.span)]);
+        assert!(Arc::ptr_eq(&copied.frames[0], &frame));
+        let used = measured.consumed();
+        drop(diagnostics);
+        assert_eq!(Arc::strong_count(&frame), retained);
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(run(&mut short), Err(MacroParseFailure::Syntax {
+            diagnostics, resource: Some(ResourceFailure::SyntaxWork { .. }),
+        }) if diagnostics.is_empty()));
+        assert_eq!(Arc::strong_count(&frame), retained);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(used);
+            exact.charge_units(17).unwrap();
+            let Err(MacroParseFailure::Syntax {
+                diagnostics,
+                resource: None,
+            }) = run(&mut exact)
+            else {
+                panic!("the exact retry preserves the grammar diagnostic")
+            };
+            assert_eq!(diagnostics[0].reason, ParseReason::ExpectedForm);
+            assert_eq!(diagnostics[0].primary.span(), span);
+            assert_eq!(exact.consumed(), used);
+            drop(diagnostics);
+            assert_eq!(Arc::strong_count(&frame), retained);
+        }
     }
 
     #[test]
