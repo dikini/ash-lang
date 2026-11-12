@@ -34720,6 +34720,10 @@ mod tests {
                         error.cause_name()
                     ),
                 }
+                assert!(
+                    result.is_err(),
+                    "the independent linked Core validator must reject the changed binder"
+                );
                 result
             },
         );
