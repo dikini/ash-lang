@@ -19,7 +19,7 @@ pub(super) struct PreparedLibrarySource {
     effects: Range<usize>,
 }
 #[derive(Clone, Copy)]
-pub(super) enum EffectSource<'a> {
+pub(crate) enum EffectSource<'a> {
     Ordinary(&'a SurfaceEffectDeclaration),
     Foreign {
         public: bool,

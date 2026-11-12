@@ -7,7 +7,10 @@ mod coordinate_loan;
 
 pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Weak},
+};
 
 use super::{ValidationError, ValidationReason};
 use crate::{
@@ -49,14 +52,14 @@ struct ConstructorCoordinate {
     origin: Span,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SymbolCoordinate {
     library: LibraryCoordinate,
     member: usize,
     symbol: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EffectCoordinate {
     origin: Span,
     span: Span,
@@ -75,6 +78,104 @@ pub(crate) struct DeclarationCoordinates {
     effects: Vec<EffectCoordinate>,
     effect_origins: HashMap<Span, usize>,
     resource_binders: ResourceBinderCoordinates,
+}
+
+/// Syntax coordinates from the exact effect-source sequence used by resolution.
+/// Only ordinary effects are supplied here; native effects retain their original
+/// source parser and native authentication path. Empty slots preserve their IDs.
+#[derive(Debug)]
+pub(crate) struct AdmittedEffectCoordinates {
+    module: ModuleId,
+    source: Weak<SourceFile>,
+    effects: Vec<Option<EffectCoordinate>>,
+    origins: HashMap<Span, usize>,
+}
+
+impl PartialEq for AdmittedEffectCoordinates {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module
+            && Weak::ptr_eq(&self.source, &other.source)
+            && self.effects == other.effects
+            && self.origins == other.origins
+    }
+}
+
+impl Eq for AdmittedEffectCoordinates {}
+
+impl AdmittedEffectCoordinates {
+    /// The caller supplies the view obtained from this module immediately
+    /// before its effect identities are allocated.
+    pub(crate) fn from_admitted(
+        loaded: &crate::module::LoadedModule,
+        sources: &[crate::resolve::EffectSource<'_>],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<Self>, ValidationError> {
+        charge(work, sources.len())?;
+        let mut effects = Vec::new();
+        effects
+            .try_reserve_exact(sources.len())
+            .map_err(|_| resource())?;
+        let mut origins = HashMap::new();
+        for source in sources {
+            match source {
+                crate::resolve::EffectSource::Ordinary(declaration) => {
+                    let coordinate = EffectCoordinate {
+                        origin: declaration.name.span,
+                        span: declaration.span,
+                        name: declaration.name.span,
+                        foreign: None,
+                    };
+                    charge(work, 1)?;
+                    origins.try_reserve(1).map_err(|_| resource())?;
+                    let slot = effects.len();
+                    match origins.entry(coordinate.origin) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            // A repeated origin cannot authenticate either slot.
+                            entry.insert(usize::MAX);
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(slot);
+                        }
+                    }
+                    effects.push(Some(coordinate));
+                }
+                crate::resolve::EffectSource::Foreign { .. } => effects.push(None),
+            }
+        }
+        // Pay the weak source anchor and the shared record before retaining them.
+        charge(work, 2)?;
+        Ok(Arc::new(Self {
+            module: loaded.id(),
+            source: Arc::downgrade(loaded.retained_source()),
+            effects,
+            origins,
+        }))
+    }
+
+    pub(crate) fn matches_source(&self, module: ModuleId, source: &Arc<SourceFile>) -> bool {
+        module == self.module && Weak::ptr_eq(&self.source, &Arc::downgrade(source))
+    }
+
+    pub(crate) fn authenticate_effect(
+        &self,
+        module: ModuleId,
+        source: &Arc<SourceFile>,
+        effect: &crate::resolved::ResolvedEffectDeclaration,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        charge(work, 2)?;
+        if !self.matches_source(module, source) {
+            return Err(registry_error());
+        }
+        let origin = original_span(&effect.origin, work)?;
+        let expected = *self.origins.get(&origin).ok_or_else(registry_error)?;
+        let coordinate = self
+            .effects
+            .get(expected)
+            .and_then(Option::as_ref)
+            .ok_or_else(registry_error)?;
+        authenticate_effect_coordinate(module, source, effect, expected, coordinate, work)
+    }
 }
 
 fn registry() -> ValidationError {
@@ -677,38 +778,7 @@ impl DeclarationCoordinates {
             .get(&origin)
             .ok_or_else(registry_error)?;
         let coordinate = &self.effects[expected];
-        if effect.id != EffectId::new(module, ordinal(expected)?)
-            || effect.span != coordinate.span
-            || effect.native_contract.is_some() != coordinate.foreign.is_some()
-            || !same_name(source, coordinate.name, &effect.spelling, work)?
-        {
-            return Err(registry_error());
-        }
-        if let Some(written) = coordinate.foreign {
-            let symbol = effect.native_contract.as_ref().ok_or_else(registry_error)?;
-            let prepared = symbol.prepared();
-            charge(work, 1)?;
-            let declaration = prepared
-                .symbols()
-                .get(written.symbol)
-                .ok_or_else(registry_error)?;
-            if prepared.module() != module
-                || symbol.symbol_index() != written.symbol
-                || symbol.library()
-                    != crate::foreign::checked_source::NativeLibraryId::new(
-                        module,
-                        written.library.ordinal,
-                    )
-                || original_span(prepared.origin(), work)? != written.library.span
-                || declaration.member_index() != written.member
-                || original_span(declaration.origin(), work)? != coordinate.origin
-                || !same_name(source, written.library.name, prepared.name(), work)?
-                || !same_name(source, coordinate.name, declaration.name(), work)?
-            {
-                return Err(registry_error());
-            }
-        }
-        Ok(())
+        authenticate_effect_coordinate(module, source, effect, expected, coordinate, work)
     }
 
     fn nominal(
@@ -720,6 +790,48 @@ impl DeclarationCoordinates {
         let index = *self.nominal_origins.get(&origin).ok_or_else(registry)?;
         Ok((ordinal(index)?, &self.nominals[index]))
     }
+}
+
+fn authenticate_effect_coordinate(
+    module: ModuleId,
+    source: &SourceFile,
+    effect: &crate::resolved::ResolvedEffectDeclaration,
+    expected: usize,
+    coordinate: &EffectCoordinate,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if effect.id != EffectId::new(module, ordinal(expected)?)
+        || effect.span != coordinate.span
+        || effect.native_contract.is_some() != coordinate.foreign.is_some()
+        || !same_name(source, coordinate.name, &effect.spelling, work)?
+    {
+        return Err(registry_error());
+    }
+    if let Some(written) = coordinate.foreign {
+        let symbol = effect.native_contract.as_ref().ok_or_else(registry_error)?;
+        let prepared = symbol.prepared();
+        charge(work, 1)?;
+        let declaration = prepared
+            .symbols()
+            .get(written.symbol)
+            .ok_or_else(registry_error)?;
+        if prepared.module() != module
+            || symbol.symbol_index() != written.symbol
+            || symbol.library()
+                != crate::foreign::checked_source::NativeLibraryId::new(
+                    module,
+                    written.library.ordinal,
+                )
+            || original_span(prepared.origin(), work)? != written.library.span
+            || declaration.member_index() != written.member
+            || original_span(declaration.origin(), work)? != coordinate.origin
+            || !same_name(source, written.library.name, prepared.name(), work)?
+            || !same_name(source, coordinate.name, declaration.name(), work)?
+        {
+            return Err(registry_error());
+        }
+    }
+    Ok(())
 }
 
 /// Successful defining-source correspondence for this one immutable registry.

@@ -48,6 +48,7 @@ std::thread_local! {
 
 // The parser and projector share token indices. Structured output attaches
 // original names and fragments to those indices without changing lexer tokens.
+#[derive(Clone, Copy)]
 struct ProjectionTokens<'a> {
     tokens: &'a [Token],
     originals: Option<&'a std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
@@ -478,6 +479,7 @@ pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::SyntaxQuote
         | NodeKind::SyntaxMatcherGroup
         | NodeKind::SyntaxMatcherRepeat
+        | NodeKind::TemplateGeneratorClause
         | NodeKind::SyntaxMatchedGroup
         | NodeKind::SyntaxMatchedRepeat
         | NodeKind::ParenthesizedExpression
@@ -561,7 +563,7 @@ fn validate_node_shape_with_admission(
     while let Some((node, declaration_metanames)) = pending.pop() {
         let declaration_metanames = match node.kind {
             NodeKind::SyntaxDeclaration => is_declaration_syntax(node, tokens),
-            NodeKind::SyntaxEscape => false,
+            NodeKind::SyntaxEscape | NodeKind::TemplateGeneratorSeed => false,
             _ => declaration_metanames,
         };
         validate_shallow_shape(node, tokens, admission, declaration_metanames)?;
@@ -674,10 +676,20 @@ fn validate_shallow_shape(
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             } else {
                 shape.node(NodeKind::TemplateBody)?;
+                if declaration || derive {
+                    if shape.peek_node_is(NodeKind::TemplateGeneratorClause) {
+                        shape.node(NodeKind::TemplateGeneratorClause)?;
+                    }
+                }
             }
         }
         NodeKind::TemplateBody => {
             let mut closing = Vec::new();
+            let mut previous_dollar = false;
+            // A clause may follow only the operator of an actual $(...) repeat.
+            // 1 is after its closing parenthesis, 2 after its optional separator,
+            // and 3 after its repetition operator.
+            let mut repeat_tail = 0;
             for element in &node.children {
                 let index = match element {
                     ConcreteElement::Token(index) => index,
@@ -690,6 +702,17 @@ fn validate_shallow_shape(
                     {
                         // Each nested node owns its own delimiters and is
                         // validated by the normal recursive shape walk.
+                        previous_dollar = false;
+                        repeat_tail = 0;
+                        continue;
+                    }
+                    ConcreteElement::Node(child)
+                        if !closing.is_empty()
+                            && child.kind == NodeKind::TemplateGeneratorClause
+                            && repeat_tail == 3 =>
+                    {
+                        previous_dollar = false;
+                        repeat_tail = 0;
                         continue;
                     }
                     _ => return malformed(InternalReason::UnexpectedShape),
@@ -700,17 +723,32 @@ fn validate_shallow_shape(
                         InternalReason::TokenOutOfRange,
                     ))?
                     .kind;
+                repeat_tail = match repeat_tail {
+                    1 if matches!(kind, TokenKind::Star | TokenKind::Plus) => 3,
+                    1 if matcher_separator(kind) => 2,
+                    2 if matches!(kind, TokenKind::Star | TokenKind::Plus) => 3,
+                    _ => 0,
+                };
                 match kind {
-                    TokenKind::LeftBrace => closing.push(TokenKind::RightBrace),
-                    TokenKind::LeftParen => closing.push(TokenKind::RightParen),
+                    TokenKind::LeftBrace => closing.push((TokenKind::RightBrace, false)),
+                    TokenKind::LeftParen => {
+                        closing.push((TokenKind::RightParen, previous_dollar));
+                    }
                     TokenKind::RightBrace | TokenKind::RightParen => {
-                        if closing.pop().as_ref() != Some(kind) {
+                        let Some((expected, repetition)) = closing.pop() else {
                             return malformed(InternalReason::UnexpectedShape);
+                        };
+                        if &expected != kind {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        if repetition {
+                            repeat_tail = 1;
                         }
                     }
                     TokenKind::EndOfFile => return malformed(InternalReason::UnexpectedShape),
                     _ => {}
                 }
+                previous_dollar = *kind == TokenKind::Dollar;
                 if closing.is_empty()
                     && index
                         != match node.children.last() {
@@ -728,6 +766,42 @@ fn validate_shallow_shape(
             }
             return Ok(());
         }
+        NodeKind::TemplateGeneratorClause => {
+            shape.token(&TokenKind::With)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.optional_token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::TemplateGenerator)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                if shape.peek_token_is(&TokenKind::RightBrace) {
+                    break;
+                }
+                shape.node(NodeKind::TemplateGenerator)?;
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::TemplateGenerator => {
+            shape.token(&TokenKind::Dollar)?;
+            shape.token_matching(|kind| {
+                matches!(
+                    kind,
+                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                )
+            })?;
+            shape.token_matching(
+                |kind| matches!(kind, TokenKind::Identifier(name) if name == "from"),
+            )?;
+            shape.node(NodeKind::TemplateGeneratorSeed)?;
+            shape.token_matching(
+                |kind| matches!(kind, TokenKind::Identifier(name) if name == "step"),
+            )?;
+            if shape.peek_node_is(NodeKind::QualifiedName) {
+                shape.node(NodeKind::QualifiedName)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(name) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)))?;
+            }
+        }
+        NodeKind::TemplateGeneratorSeed => shape.expression()?,
         NodeKind::SyntaxCapture => {
             shape.token(&TokenKind::Dollar)?;
             shape.token_matching(|kind| {
@@ -2169,6 +2243,75 @@ impl ModuleProjection {
     }
 }
 
+fn project_template_generators(
+    source: &SourceFile,
+    clause: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>, ProjectionError> {
+    let mut generators = Vec::new();
+    for binding in child_nodes(clause).filter(|node| node.kind == NodeKind::TemplateGenerator) {
+        charge_expression_allocation(binding.children.len(), tokens.expression_budget)?;
+        let mut parts = direct_tokens(binding, tokens);
+        let _dollar = parts.next();
+        let name = parts.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        let _from = parts.next();
+        let _step = parts.next();
+        let step_name = parts.next();
+        if parts.next().is_some() {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        for token in std::iter::once(name).chain(step_name) {
+            if let TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) = &token.kind {
+                charge_expression_allocation(
+                    text.len().saturating_add(1),
+                    tokens.expression_budget,
+                )?;
+            }
+        }
+        let step = if let Some(qualified) =
+            optional_child_of_kind(binding, NodeKind::QualifiedName)?
+        {
+            for token in direct_tokens(qualified, tokens) {
+                if let TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) = &token.kind
+                {
+                    charge_expression_allocation(
+                        text.len().saturating_add(1),
+                        tokens.expression_budget,
+                    )?;
+                }
+            }
+            SurfaceReference::Qualified(project_qualified_name(source, qualified, tokens)?)
+        } else {
+            SurfaceReference::Unqualified(surface_name(step_name.ok_or(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+            )?)?)
+        };
+        let seed = only_child_of_kind(binding, NodeKind::TemplateGeneratorSeed)?;
+        let seed_node = expression_child(seed)?;
+        let seed = project_expression(source, seed_node, tokens)?;
+        let empty_originals = std::collections::HashMap::new();
+        let originals = tokens.originals.unwrap_or(&empty_originals);
+        let (seed_contents, _) = capture_contents_and_type(source, seed_node, tokens, originals)?;
+        // The retained Arc owns its own slice in addition to the builder Vec.
+        charge_expression_allocation(
+            seed_contents.len().saturating_add(1),
+            tokens.expression_budget,
+        )?;
+        reserve_expression_scratch(&mut generators, 1, tokens.expression_budget)?;
+        generators.push(crate::surface::SurfaceTemplateGenerator {
+            name: surface_name(name)?,
+            seed,
+            seed_contents: seed_contents.into(),
+            step,
+            span: node_span(source, binding, tokens)?,
+        });
+    }
+    charge_expression_allocation(generators.len().saturating_add(1), tokens.expression_budget)?;
+    Ok(generators.into())
+}
+
 fn project_syntax_declaration(
     source: &SourceFile,
     child: &ConcreteNode,
@@ -2244,56 +2387,77 @@ fn project_syntax_declaration(
             _ => return malformed(InternalReason::UnexpectedShape),
         }
     }
-    let (implementation, template_contents, contains_quote_or_escape) =
-        if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
-            let (mut contents, contains_quote_or_escape) =
-                capture_template_contents(source, block, tokens, declaration_output, adapters)?;
-            if declaration_output {
-                contents = match contents.pop() {
-                    Some(crate::syntax::MacroOutputNode::Group(
-                        crate::syntax::MacroDelimiter::Braces,
-                        mut children,
-                        _,
-                    )) if contents.is_empty() => {
-                        if matches!(
-                            children.first(),
-                            Some(crate::syntax::MacroOutputNode::Token(
-                                TokenKind::LineEnd,
-                                _,
-                                _
-                            ))
-                        ) {
-                            children.remove(0);
-                        }
-                        children
+    let (
+        implementation,
+        template_contents,
+        template_escapes,
+        contains_quote_or_escape,
+        nested_generators,
+    ) = if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
+        let (mut contents, escapes, contains_quote_or_escape, nested_generators) =
+            capture_template_contents(source, block, tokens, declaration_output, adapters)?;
+        if declaration_output {
+            contents = match contents.pop() {
+                Some(crate::syntax::MacroOutputNode::Group(
+                    crate::syntax::MacroDelimiter::Braces,
+                    mut children,
+                    _,
+                )) if contents.is_empty() => {
+                    if matches!(
+                        children.first(),
+                        Some(crate::syntax::MacroOutputNode::Token(
+                            TokenKind::LineEnd,
+                            _,
+                            _
+                        ))
+                    ) {
+                        children.remove(0);
                     }
-                    _ => return malformed(InternalReason::UnexpectedShape),
-                };
-            }
-            (
-                SurfaceSyntaxImplementation::Template,
-                Some(contents.into()),
-                contains_quote_or_escape,
-            )
-        } else {
-            let mut after_arrow = direct_tokens(child, tokens)
-                .skip_while(|token| token.kind != TokenKind::FatArrow)
-                .skip(1);
-            if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
-                return malformed(InternalReason::UnexpectedShape);
-            }
-            let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
-                InternalReason::UnexpectedShape,
-            ))?;
-            if after_arrow.next().is_some() {
-                return malformed(InternalReason::UnexpectedShape);
-            }
-            (
-                SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
-                None,
-                false,
-            )
-        };
+                    children
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            };
+        }
+        (
+            SurfaceSyntaxImplementation::Template,
+            Some(contents.into()),
+            if escapes.is_empty() {
+                None
+            } else {
+                charge_expression_allocation(
+                    escapes.len().saturating_add(1),
+                    tokens.expression_budget,
+                )?;
+                Some(escapes.into())
+            },
+            contains_quote_or_escape,
+            nested_generators,
+        )
+    } else {
+        let mut after_arrow = direct_tokens(child, tokens)
+            .skip_while(|token| token.kind != TokenKind::FatArrow)
+            .skip(1);
+        if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        if after_arrow.next().is_some() {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        (
+            SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
+            None,
+            None,
+            false,
+            false,
+        )
+    };
+    let generators = optional_child_of_kind(child, NodeKind::TemplateGeneratorClause)?
+        .map(|clause| project_template_generators(source, clause, tokens))
+        .transpose()?;
+    let contains_generators = generators.is_some() || nested_generators;
     Ok(SurfaceSyntaxDeclaration {
         category: if derive {
             SurfaceSyntaxCategory::Derive
@@ -2306,7 +2470,10 @@ fn project_syntax_declaration(
         matcher,
         implementation,
         template_contents,
+        template_escapes,
+        generators,
         contains_quote_or_escape,
+        contains_generators,
         span: node_span(source, child, tokens)?,
     })
 }
@@ -2571,6 +2738,55 @@ fn project_staged_source_child_with_quotes(
 ) -> Result<(), DeclarationExpansionFailure> {
     let mut tokens = ProjectionTokens::source(source_tokens);
     let Some(sequence) = extended_matcher(child) else {
+        let mut generators = false;
+        if child.kind == NodeKind::SyntaxDeclaration {
+            // A flat header can still own a whole-template or nested clause.
+            // Pay the reached scans before selecting its projection loan.
+            budget.charge_units(child.children.len())?;
+            for node in child_nodes(child) {
+                if node.kind == NodeKind::TemplateGeneratorClause {
+                    generators = true;
+                } else if node.kind == NodeKind::TemplateBody {
+                    budget.charge_units(node.children.len())?;
+                    generators |= child_nodes(node)
+                        .any(|child| child.kind == NodeKind::TemplateGeneratorClause);
+                }
+            }
+        }
+        if generators {
+            let expression_budget = std::cell::RefCell::new(&mut *budget);
+            tokens.expression_budget = Some(&expression_budget);
+            tokens.quote_sites = quote_sites;
+            let mut adapters = Vec::new();
+            let declaration = project_syntax_declaration(source, child, &tokens, &mut adapters)
+                .map_err(staged_failure)?;
+            reserve_expression_scratch(
+                &mut module.syntax_declarations,
+                1,
+                Some(&expression_budget),
+            )
+            .map_err(staged_failure)?;
+            reserve_expression_scratch(
+                &mut module.declaration_order,
+                adapters.len(),
+                Some(&expression_budget),
+            )
+            .map_err(staged_failure)?;
+            reserve_expression_scratch(
+                &mut module.definitions,
+                adapters.len(),
+                Some(&expression_budget),
+            )
+            .map_err(staged_failure)?;
+            module.syntax_declarations.push(declaration);
+            for adapter in adapters {
+                module
+                    .declaration_order
+                    .push(SurfaceDeclarationIndex::Global(module.definitions.len()));
+                module.definitions.push(adapter);
+            }
+            return Ok(());
+        }
         if let Some(quote_sites) = quote_sites {
             let expression_budget = std::cell::RefCell::new(&mut *budget);
             tokens.expression_budget = Some(&expression_budget);
@@ -2996,58 +3212,121 @@ fn prepare_staged_output(
     let mut actual_expression = false;
     let output = match &invocation.selection.declaration.implementation {
         SurfaceSyntaxImplementation::Template => {
-            let mut output = match crate::syntax::prepare_declaration_template(
-                &invocation.selection,
-                template_captures,
-                anchor,
-                budget,
-            ) {
-                Ok(output) => output,
-                Err(error) => {
+            if invocation.selection.declaration.contains_generators
+                || invocation.selection.declaration.template_escapes.is_some()
+            {
+                let (mut output, plan) = match crate::syntax::prepare_generator_template(
+                    &invocation.selection,
+                    template_captures,
+                    introduction,
+                    anchor,
+                    budget,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        return Err(staged_template_failure(
+                            error,
+                            staging_frames,
+                            &frame,
+                            budget,
+                        )?);
+                    }
+                };
+                let callback = transformer
+                    .as_deref_mut()
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                    selected,
+                    owner_imports,
+                    staged_owners,
+                    budget,
+                )?;
+                budget.charge_units(2)?;
+                let (results, fresh_count) = callback(
+                    &invocation.selection,
+                    crate::syntax::DeclarationAdapter::Generators(&plan),
+                    template_captures,
+                    source,
+                    &invocation.name,
+                    introduction,
+                    std::sync::Arc::new(contexts),
+                    std::sync::Arc::clone(&frame),
+                    staged_owners,
+                    budget,
+                )
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                budget.charge_units(fresh_count)?;
+                staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    owner: None,
+                    declaration: invocation.selection.declaration.span,
+                    import_span: invocation.selection.import_span,
+                }));
+                if results.len() != plan.results {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                apply_generator_results(&mut output, &results, budget, 0)?;
+                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                (actual_pattern, actual_expression) =
+                    charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                output
+            } else {
+                let mut output = match crate::syntax::prepare_declaration_template(
+                    &invocation.selection,
+                    template_captures,
+                    anchor,
+                    budget,
+                ) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        return Err(staged_template_failure(
+                            error,
+                            staging_frames,
+                            &frame,
+                            budget,
+                        )?);
+                    }
+                };
+                let escaped = materialize_template_escapes(
+                    &mut output,
+                    &invocation.selection,
+                    template_captures,
+                    source,
+                    &invocation.name,
+                    introduction,
+                    selected,
+                    owner_imports,
+                    staged_owners,
+                    &frame,
+                    transformer,
+                    budget,
+                    0,
+                )?;
+                if let Err(error) = crate::syntax::substitute_contents(
+                    &mut output,
+                    &invocation.selection.declaration.matcher,
+                    template_captures,
+                    introduction,
+                    anchor,
+                    Some(&mut *budget),
+                ) {
                     return Err(staged_template_failure(
-                        error,
+                        error.into_macro_failure(),
                         staging_frames,
                         &frame,
                         budget,
                     )?);
                 }
-            };
-            let escaped = materialize_template_escapes(
-                &mut output,
-                &invocation.selection,
-                template_captures,
-                source,
-                &invocation.name,
-                introduction,
-                selected,
-                owner_imports,
-                staged_owners,
-                &frame,
-                transformer,
-                budget,
-                0,
-            )?;
-            if let Err(error) = crate::syntax::substitute_contents(
-                &mut output,
-                &invocation.selection.declaration.matcher,
-                template_captures,
-                introduction,
-                anchor,
-                Some(&mut *budget),
-            ) {
-                return Err(staged_template_failure(
-                    error.into_macro_failure(),
-                    staging_frames,
-                    &frame,
-                    budget,
-                )?);
+                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                if escaped {
+                    (actual_pattern, actual_expression) =
+                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                }
+                output
             }
-            crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
-            if escaped {
-                (actual_pattern, actual_expression) =
-                    charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-            }
-            output
         }
         SurfaceSyntaxImplementation::Transformer(_) => {
             let transformer = transformer
@@ -3065,7 +3344,7 @@ fn prepare_staged_output(
             budget.charge_units(2)?;
             let (output, fresh_count) = transformer(
                 &invocation.selection,
-                None,
+                crate::syntax::DeclarationAdapter::Transformer,
                 &invocation.captures,
                 source,
                 &invocation.name,
@@ -3115,6 +3394,105 @@ fn prepare_staged_output(
         actual_expression,
         transformer_output,
     })
+}
+
+fn apply_generator_results(
+    output: &mut [crate::syntax::MacroOutputNode],
+    results: &[crate::syntax::MacroOutputNode],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    depth: usize,
+) -> Result<(), DeclarationExpansionFailure> {
+    use crate::syntax::MacroOutputNode;
+    for node in output {
+        budget.charge()?;
+        match node {
+            MacroOutputNode::Group(_, children, _) => apply_generator_results(
+                children,
+                results,
+                budget,
+                crate::syntax::type_depth(depth, 1)?,
+            )?,
+            MacroOutputNode::Identifier(name, _)
+                if name.introduction == usize::MAX
+                    && name.text.starts_with("\0ash_generator_result_") =>
+            {
+                budget.charge_units(name.text.len())?;
+                let index = name.text["\0ash_generator_result_".len()..]
+                    .parse::<usize>()
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                let selected = results.get(index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                match selected {
+                    MacroOutputNode::Expression(capture, origin) => {
+                        if !matches!(
+                            capture.quote_sites,
+                            crate::surface::CapturedQuoteSites::Empty
+                        ) || crate::syntax::charge_new_expression_copy(
+                            &capture.expression,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )? != Some(false)
+                            || crate::syntax::charge_new_expression_retention(
+                                capture, depth, budget,
+                            )? != Some(false)
+                        {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::Identifier(name, origin) => {
+                        crate::syntax::charge_type_name_copy(name, depth, budget)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedType(capture, origin) => {
+                        crate::syntax::charge_new_type_copy(
+                            &capture.ty,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )?;
+                        crate::syntax::charge_new_type_retention(capture, depth, budget)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedPattern(capture, origin) => {
+                        if crate::syntax::charge_new_pattern_copy(
+                            &capture.pattern,
+                            crate::syntax::type_depth(depth, 1)?,
+                            false,
+                            budget,
+                        )? != Some(false)
+                            || crate::syntax::charge_new_pattern_retention(capture, depth, budget)?
+                                != Some(false)
+                        {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    MacroOutputNode::ForwardedDeclaration(_, origin) => {
+                        budget.charge()?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                    _ => {
+                        return Err(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                        );
+                    }
+                }
+                budget.charge()?;
+                *node = selected.clone();
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn admit_staged_output<'a>(
@@ -3337,7 +3715,12 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         let ConcreteElement::Node(child) = element else {
             continue;
         };
-        let tokens = current.tokens(&staging_frames);
+        let mut tokens = current.tokens(&staging_frames);
+        if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
+            // Caller-authored capture quotes share this module's actual quote
+            // introduction and ordinal, while their sites remain capture-owned.
+            tokens.quote_sites = quote_sites;
+        }
         let deriving = if matches!(
             child.kind,
             NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
@@ -3624,7 +4007,7 @@ fn materialize_template_escapes(
                 budget.charge_units(2)?;
                 let (mut output, fresh_count) = callback(
                     selection,
-                    Some(adapter),
+                    crate::syntax::DeclarationAdapter::Escape(adapter),
                     captures,
                     source,
                     caller,
@@ -4401,6 +4784,11 @@ fn charge_declaration_invocation(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let generator_capture = executing
+        && template
+        && selection.declaration.contains_generators
+        && source_projection_tokens(tokens)
+        && tokens.quote_sites.is_some();
     if has_structured {
         if !template {
             return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
@@ -4479,8 +4867,8 @@ fn charge_declaration_invocation(
                     ))?
             };
             let new_pattern = declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Pattern;
-            let new_expression =
-                declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Expression;
+            let new_expression = (declaration_transformer || generator_capture)
+                && *kind == SurfaceSyntaxCaptureKind::Expression;
             let mut bridge = if new_expression {
                 charge_projection_preflight_with_expression(
                     value,
@@ -7142,17 +7530,36 @@ fn capture_template_contents(
     tokens: &ProjectionTokens<'_>,
     declaration: bool,
     adapters: &mut Vec<SurfaceDefinition>,
-) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
+) -> Result<
+    (
+        Vec<crate::syntax::MacroOutputNode>,
+        Vec<crate::surface::SurfaceTemplateEscape>,
+        bool,
+        bool,
+    ),
+    ProjectionError,
+> {
     let mut escapes = Vec::new();
+    let mut escape_descriptors = Vec::new();
+    let mut generators = Vec::new();
     let mut contains_quote_or_escape = false;
     let mut pending = Vec::new();
     reserve_expression_scratch(&mut pending, 1, tokens.expression_budget)?;
-    pending.push(node);
-    while let Some(current) = pending.pop() {
+    pending.push((node, false));
+    while let Some((current, in_generator)) = pending.pop() {
         charge_expression_allocation(1, tokens.expression_budget)?;
         contains_quote_or_escape |=
             matches!(current.kind, NodeKind::SyntaxQuote | NodeKind::SyntaxEscape);
-        if current.kind == NodeKind::SyntaxEscape {
+        let in_generator = in_generator || current.kind == NodeKind::TemplateGeneratorClause;
+        if current.kind == NodeKind::TemplateGeneratorClause {
+            let Some(ConcreteElement::Token(index)) = current.children.first() else {
+                return malformed(InternalReason::UnexpectedShape);
+            };
+            let bindings = project_template_generators(source, current, tokens)?;
+            reserve_expression_scratch(&mut generators, 1, tokens.expression_budget)?;
+            generators.push((*index, bindings));
+        }
+        if current.kind == NodeKind::SyntaxEscape && !in_generator {
             if !declaration {
                 return malformed(InternalReason::UnexpectedShape);
             }
@@ -7185,7 +7592,16 @@ fn capture_template_contents(
                 written: false,
                 diagnostic: None,
             };
-            let body = project_expression(source, expression_child(current)?, tokens)?;
+            let mut reads = Vec::new();
+            let empty = std::collections::HashMap::new();
+            let body = project_expression_with_escape_reads(
+                source,
+                expression_child(current)?,
+                tokens,
+                tokens.originals.unwrap_or(&empty),
+                Some(&mut reads),
+                None,
+            )?;
             reserve_expression_scratch(adapters, 1, tokens.expression_budget)?;
             adapters.push(make_template_escape_adapter(
                 &name,
@@ -7193,6 +7609,18 @@ fn capture_template_contents(
                 body,
                 tokens,
             )?);
+            charge_expression_allocation(
+                name.text
+                    .len()
+                    .saturating_add(reads.len())
+                    .saturating_add(2),
+                tokens.expression_budget,
+            )?;
+            reserve_expression_scratch(&mut escape_descriptors, 1, tokens.expression_budget)?;
+            escape_descriptors.push(crate::surface::SurfaceTemplateEscape {
+                adapter: name.clone(),
+                reads: reads.into(),
+            });
             reserve_expression_scratch(&mut escapes, 1, tokens.expression_budget)?;
             escapes.push((*index, name));
             continue;
@@ -7204,19 +7632,28 @@ fn capture_template_contents(
         )?;
         for child in current.children.iter().rev() {
             if let ConcreteElement::Node(child) = child {
-                pending.push(child);
+                pending.push((child, in_generator));
             }
         }
     }
+    let nested_generators = !generators.is_empty();
     capture_contents_with_escapes(
         source,
         node,
         tokens,
         &Default::default(),
         Some(&escapes),
+        Some(&generators),
         declaration,
     )
-    .map(|(contents, _)| (contents, contains_quote_or_escape))
+    .map(|(contents, _)| {
+        (
+            contents,
+            escape_descriptors,
+            contains_quote_or_escape,
+            nested_generators,
+        )
+    })
 }
 
 fn make_template_escape_adapter(
@@ -7239,18 +7676,16 @@ fn make_template_escape_adapter(
         span,
         diagnostic: None,
     };
-    // Reserve the generated names before constructing or cloning them.
+    // The first normal check records the ordinary local result type. The
+    // helper's input pattern is filled from the completed matcher afterwards.
+    // The original body is moved once into this binding so its quote-site
+    // callee allocations remain owned by the defining module.
     charge_expression_allocation(
-        "Input".len()
-            + "MacroResult".len()
-            + "Ops".len()
-            + 2 * "\0ash_escape_input".len()
-            + 2 * name.text.len()
-            + 11,
+        "MacroResult".len() + "Ops".len() + 3 * name.text.len() + "\0result".len() + 16,
         tokens.expression_budget,
     )?;
-    let input_name = SurfaceName {
-        text: "\0ash_escape_input".into(),
+    let result_name = SurfaceName {
+        text: format!("{}\0result", name.text),
         span,
         introduction: 0,
         introduced_at: None,
@@ -7259,7 +7694,11 @@ fn make_template_escape_adapter(
     };
     let annotation = SurfaceType {
         kind: SurfaceTypeKind::Function(FunctionType {
-            domain: Box::new(named_type("Input")),
+            domain: Box::new(SurfaceType {
+                kind: SurfaceTypeKind::Unit,
+                span,
+                diagnostic: None,
+            }),
             codomain: Box::new(named_type("MacroResult")),
             effects: Some(SurfaceEffectRow {
                 effects: vec![SurfaceEffectInstance {
@@ -7274,18 +7713,30 @@ fn make_template_escape_adapter(
         span,
         diagnostic: None,
     };
-    let input = SurfaceExpr {
-        kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(input_name.clone())),
+    let tail = quote_constructor_name("NoNodes", introduction, span, tokens)?;
+    let syntax = quote_unary_call("Syntax", introduction, span, tail, tokens)?;
+    let result = quote_unary_call("Expanded", introduction, span, syntax, tokens)?;
+    let block = SurfaceExpr {
+        kind: SurfaceExprKind::Block(SurfaceBlock {
+            declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Binder(SurfaceBinder {
+                        name: result_name,
+                        span,
+                    }),
+                    span,
+                    diagnostic: None,
+                },
+                annotation: None,
+                initializer: body,
+                span,
+            }))],
+            result: Box::new(result),
+            span,
+        }),
         span,
         diagnostic: None,
     };
-    let origin = quote_unary_call("invocation_origin", introduction, span, input, tokens)?;
-    let expression =
-        quote_constructor_call("ExpressionNode", introduction, span, body, origin, tokens)?;
-    let tail = quote_constructor_name("NoNodes", introduction, span, tokens)?;
-    let nodes = quote_constructor_call("MoreNodes", introduction, span, expression, tail, tokens)?;
-    let syntax = quote_unary_call("Syntax", introduction, span, nodes, tokens)?;
-    let result = quote_unary_call("Expanded", introduction, span, syntax, tokens)?;
     Ok(SurfaceDefinition {
         public: false,
         kind: SurfaceDefinitionKind::Equational(EquationalGlobal {
@@ -7299,14 +7750,11 @@ fn make_template_escape_adapter(
             equations: vec![SurfaceEquation {
                 name: name.clone(),
                 patterns: vec![SurfacePattern {
-                    kind: SurfacePatternKind::Binder(SurfaceBinder {
-                        name: input_name,
-                        span,
-                    }),
+                    kind: SurfacePatternKind::Unit,
                     span,
                     diagnostic: None,
                 }],
-                body: result,
+                body: block,
                 span,
             }],
         }),
@@ -7429,7 +7877,7 @@ fn capture_contents_and_type(
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
-    capture_contents_with_escapes(source, node, tokens, originals, None, false)
+    capture_contents_with_escapes(source, node, tokens, originals, None, None, false)
 }
 
 fn capture_contents_with_escapes(
@@ -7438,6 +7886,12 @@ fn capture_contents_with_escapes(
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     escapes: Option<&[(usize, SurfaceName)]>,
+    generators: Option<
+        &[(
+            usize,
+            std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
+        )],
+    >,
     allow_repetition: bool,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
@@ -7478,7 +7932,6 @@ fn capture_contents_with_escapes(
         position: &mut usize,
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
-        escapes: Option<&[(usize, SurfaceName)]>,
         index: usize,
         quoted_dollar: bool,
         declaration_metanames: bool,
@@ -7486,21 +7939,7 @@ fn capture_contents_with_escapes(
         output: &mut Vec<MacroOutputNode>,
         contains_protected_type: &mut bool,
     ) -> Result<(), ProjectionError> {
-        let mut adapter = None;
-        for (position, name) in escapes.into_iter().flatten() {
-            charge_expression_allocation(1, tokens.expression_budget)?;
-            if *position == index {
-                adapter = Some(name);
-                break;
-            }
-        }
-        if let Some(adapter) = adapter {
-            if let Some(budget) = tokens.expression_budget {
-                crate::syntax::charge_type_name_copy(adapter, 0, &mut budget.borrow_mut())
-                    .map_err(ProjectionError::ResourceLimit)?;
-            }
-            output.push(MacroOutputNode::TemplateEscape(adapter.clone()));
-        } else if matches!(token.kind, TokenKind::Dollar) && !quoted_dollar {
+        if matches!(token.kind, TokenKind::Dollar) && !quoted_dollar {
             let next = indices
                 .get(*position)
                 .and_then(|(index, _)| tokens.projection_token(*index))
@@ -7589,6 +8028,12 @@ fn capture_contents_with_escapes(
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         escapes: Option<&[(usize, SurfaceName)]>,
+        generators: Option<
+            &[(
+                usize,
+                std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
+            )],
+        >,
         closing: Option<TokenKind>,
         allow_repetition: bool,
     ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {
@@ -7607,7 +8052,26 @@ fn capture_contents_with_escapes(
             }
             reserve_expression_scratch(&mut output, 1, tokens.expression_budget)?;
             *position += 1;
-            if allow_repetition
+            // An escape occupies a single recorded token in `indices`. Its
+            // following token belongs to the surrounding template and may be
+            // `(`, so recognize the escape before looking for `$(` repetition.
+            let mut adapter = None;
+            if token.kind == TokenKind::Dollar {
+                for (start, name) in escapes.into_iter().flatten() {
+                    charge_expression_allocation(1, tokens.expression_budget)?;
+                    if *start == index {
+                        adapter = Some(name);
+                        break;
+                    }
+                }
+            }
+            if let Some(adapter) = adapter {
+                if let Some(budget) = tokens.expression_budget {
+                    crate::syntax::charge_type_name_copy(adapter, 0, &mut budget.borrow_mut())
+                        .map_err(ProjectionError::ResourceLimit)?;
+                }
+                output.push(MacroOutputNode::TemplateEscape(adapter.clone()));
+            } else if allow_repetition
                 && token.kind == TokenKind::Dollar
                 && !quoted_dollar
                 && indices
@@ -7623,6 +8087,7 @@ fn capture_contents_with_escapes(
                     tokens,
                     originals,
                     escapes,
+                    generators,
                     Some(TokenKind::RightParen),
                     allow_repetition,
                 )?;
@@ -7665,10 +8130,23 @@ fn capture_contents_with_escapes(
                     return malformed(InternalReason::UnexpectedShape);
                 }
                 *position += 1;
+                let mut bindings = None;
+                if let Some((index, _)) = indices.get(*position) {
+                    for (start, clause) in generators.into_iter().flatten() {
+                        charge_expression_allocation(1, tokens.expression_budget)?;
+                        if start == index {
+                            charge_expression_allocation(1, tokens.expression_budget)?;
+                            bindings = Some(std::sync::Arc::clone(clause));
+                            *position += 1;
+                            break;
+                        }
+                    }
+                }
                 charge_expression_allocation(1, tokens.expression_budget)?;
                 output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
                     crate::syntax::TemplateRepeat {
                         body,
+                        generators: bindings,
                         separator,
                         one_or_more: operator.kind == TokenKind::Plus,
                         origin: join_spans(source, token.span, operator.span)?.into(),
@@ -7687,6 +8165,7 @@ fn capture_contents_with_escapes(
                     tokens,
                     originals,
                     escapes,
+                    generators,
                     Some(end),
                     allow_repetition,
                 )?;
@@ -7710,7 +8189,6 @@ fn capture_contents_with_escapes(
                     position,
                     tokens,
                     originals,
-                    escapes,
                     index,
                     quoted_dollar,
                     allow_repetition,
@@ -7758,6 +8236,15 @@ fn capture_contents_with_escapes(
                 reserve_expression_scratch(&mut indices, 1, tokens.expression_budget)?;
                 indices.push((*index, false));
             }
+            ConcreteElement::Node(child)
+                if child.kind == NodeKind::TemplateGeneratorClause && generators.is_some() =>
+            {
+                let Some(ConcreteElement::Token(index)) = child.children.first() else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                reserve_expression_scratch(&mut indices, 1, tokens.expression_budget)?;
+                indices.push((*index, false));
+            }
             ConcreteElement::Node(child) => {
                 reserve_expression_scratch(
                     &mut pending,
@@ -7790,6 +8277,7 @@ fn capture_contents_with_escapes(
         tokens,
         originals,
         escapes,
+        generators,
         None,
         allow_repetition,
     )
@@ -8308,12 +8796,35 @@ fn project_selected_declaration_invocation_node_inner(
     allow_declaration: bool,
     mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let quote_projection = tokens.quote_sites;
+    // Only the capture-owned generator branch receives the staged quote loan.
+    let ordinary_tokens = ProjectionTokens {
+        quote_sites: None,
+        ..*tokens
+    };
+    let tokens = &ordinary_tokens;
     let source_transformer = allow_declaration
         && source_projection_tokens(tokens)
         && matches!(
             selected.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let source_generator_candidate = allow_declaration
+        && source_projection_tokens(tokens)
+        && selected.declaration.contains_generators
+        && quote_projection.is_some();
+    if source_generator_candidate && let Some(budget) = budget.as_deref_mut() {
+        budget
+            .charge_units(selected.declaration.matcher.len())
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    let source_generator = source_generator_candidate
+        && !selected.declaration.matcher.iter().any(|part| {
+            matches!(
+                part,
+                SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+            )
+        });
     let selection = selected.clone();
     let mut children = node.children.iter();
     let _ = children.next();
@@ -8378,8 +8889,8 @@ fn project_selected_declaration_invocation_node_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                    let (expression, contents, contains_protected_type) =
-                        if source_transformer && budget.is_some() {
+                    let (expression, contents, contains_protected_type, quote_sites) =
+                        if (source_transformer || source_generator) && budget.is_some() {
                             let expression_budget = std::cell::RefCell::new(
                                 budget
                                     .as_deref_mut()
@@ -8397,7 +8908,11 @@ fn project_selected_declaration_invocation_node_inner(
                                 staging_frames: tokens.staging_frames,
                                 preserve_name_diagnostic: tokens.preserve_name_diagnostic,
                                 expression_budget: Some(&expression_budget),
-                                quote_sites: None,
+                                quote_sites: if source_generator {
+                                    quote_projection
+                                } else {
+                                    None
+                                },
                             };
                             let (contents, contains_type) = capture_contents_and_type(
                                 source,
@@ -8405,31 +8920,48 @@ fn project_selected_declaration_invocation_node_inner(
                                 &selected_tokens,
                                 originals,
                             )?;
-                            let expression = project_expression_with_fragments(
-                                source,
-                                expression,
-                                &selected_tokens,
-                                originals,
-                            )?;
+                            let (expression, quote_sites) = if source_generator {
+                                project_captured_expression_with_fragments(
+                                    source,
+                                    expression,
+                                    &selected_tokens,
+                                    originals,
+                                )?
+                            } else {
+                                (
+                                    project_expression_with_fragments(
+                                        source,
+                                        expression,
+                                        &selected_tokens,
+                                        originals,
+                                    )?,
+                                    crate::surface::CapturedQuoteSites::Empty,
+                                )
+                            };
                             expression_budget
                                 .borrow_mut()
                                 .charge_units(contents.len().saturating_mul(2).saturating_add(1))
                                 .map_err(ProjectionError::ResourceLimit)?;
-                            (expression, contents, contains_type)
+                            (expression, contents, contains_type, quote_sites)
                         } else {
                             let (contents, contains_type) =
                                 capture_contents_and_type(source, expression, tokens, originals)?;
                             let expression = project_expression_with_fragments(
                                 source, expression, tokens, originals,
                             )?;
-                            (expression, contents, contains_type)
+                            (
+                                expression,
+                                contents,
+                                contains_type,
+                                crate::surface::CapturedQuoteSites::Empty,
+                            )
                         };
                     captures.push(SurfaceSyntaxCapture::Expression(
                         project_syntax_expression_capture(
                             expression,
                             contents,
                             contains_protected_type,
-                            crate::surface::CapturedQuoteSites::Empty,
+                            quote_sites,
                         )?,
                     ));
                 }
@@ -9141,18 +9673,53 @@ fn project_expression_with_fragments(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<SurfaceExpr, ProjectionError> {
+    project_expression_with_escape_reads(source, node, tokens, original_nodes, None, None)
+}
+
+fn project_captured_expression_with_fragments(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<(SurfaceExpr, crate::surface::CapturedQuoteSites), ProjectionError> {
+    let mut sites = crate::surface::CapturedQuoteSites::Empty;
+    let expression = project_expression_with_escape_reads(
+        source,
+        node,
+        tokens,
+        original_nodes,
+        None,
+        Some(&mut sites),
+    )?;
+    Ok((expression, sites))
+}
+
+fn project_expression_with_escape_reads(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+    mut escape_reads: Option<&mut Vec<SurfaceName>>,
+    capture_output: Option<&mut crate::surface::CapturedQuoteSites>,
+) -> Result<SurfaceExpr, ProjectionError> {
     struct CaptureQuotes {
         sites: Vec<crate::syntax::SurfaceQuoteSite>,
         descendants: bool,
     }
-    let mut tasks = if tokens.expression_budget.is_some() {
-        let mut tasks = Vec::new();
-        reserve_expression_scratch(&mut tasks, 1, tokens.expression_budget)?;
-        tasks.push(ExpressionTask::Visit(node));
-        tasks
-    } else {
-        vec![ExpressionTask::Visit(node)]
-    };
+    let mut tasks = Vec::new();
+    let capture_root = capture_output.is_some();
+    reserve_expression_scratch(
+        &mut tasks,
+        if capture_root { 3 } else { 1 },
+        tokens.expression_budget,
+    )?;
+    if capture_root {
+        tasks.push(ExpressionTask::EndCapture);
+    }
+    tasks.push(ExpressionTask::Visit(node));
+    if capture_root {
+        tasks.push(ExpressionTask::StartCapture);
+    }
     let mut projected = Vec::new();
     let mut type_facts = Vec::<bool>::new();
     let mut capture_depth = 0_usize;
@@ -9664,6 +10231,104 @@ fn project_expression_with_fragments(
                             return malformed(InternalReason::UnexpectedShape);
                         }
                         push_result!(capture.expression.clone());
+                    } else if let Some(read) =
+                        optional_child_of_kind(node, NodeKind::EscapeCaptureRead)?
+                    {
+                        let reads =
+                            escape_reads
+                                .as_deref_mut()
+                                .ok_or(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                ))?;
+                        let token = direct_tokens(read, tokens).nth(1).ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                        if let Some(budget) = tokens.expression_budget {
+                            let mut budget = budget.borrow_mut();
+                            match token.original {
+                                Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+                                    crate::syntax::charge_type_name_copy(name, 0, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    charge_staged_name_frames(token, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    budget.charge().map_err(ProjectionError::ResourceLimit)?;
+                                }
+                                _ => {
+                                    let bytes = match &token.kind {
+                                        TokenKind::Identifier(text)
+                                        | TokenKind::UpperIdentifier(text) => text.len(),
+                                        _ => return malformed(InternalReason::UnexpectedShape),
+                                    };
+                                    budget
+                                        .charge_units(bytes.saturating_add(1))
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                }
+                            }
+                        }
+                        let name = surface_name(token)?;
+                        let mut selected = None;
+                        for (index, candidate) in reads.iter().enumerate() {
+                            charge_expression_allocation(
+                                name.text.len().min(candidate.text.len()).saturating_add(1),
+                                tokens.expression_budget,
+                            )?;
+                            if candidate.text == name.text {
+                                selected = Some(index);
+                                break;
+                            }
+                        }
+                        let span = name.span;
+                        let index = if let Some(index) = selected {
+                            index
+                        } else {
+                            reserve_expression_scratch(reads, 1, tokens.expression_budget)?;
+                            let index = reads.len();
+                            reads.push(name);
+                            index
+                        };
+                        let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+                        charge_expression_allocation(
+                            "\0ash_escape_operand_"
+                                .len()
+                                .saturating_add(digits)
+                                .saturating_add(1),
+                            tokens.expression_budget,
+                        )?;
+                        let local = SurfaceName {
+                            text: format!("\0ash_escape_operand_{index}"),
+                            span,
+                            introduction: 0,
+                            introduced_at: None,
+                            written: false,
+                            diagnostic: None,
+                        };
+                        push_result!(SurfaceExpr {
+                            span,
+                            diagnostic: None,
+                            kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(local)),
+                        });
+                    } else if let Some(splice) =
+                        optional_child_of_kind(node, NodeKind::TemplateSplice)?
+                    {
+                        let name = direct_tokens(splice, tokens).nth(1).ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                        if let TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) =
+                            &name.kind
+                        {
+                            charge_expression_allocation(
+                                text.len().saturating_add(1),
+                                tokens.expression_budget,
+                            )?;
+                        }
+                        let name = surface_name(name)?;
+                        push_result!(SurfaceExpr {
+                            span: name.span,
+                            diagnostic: None,
+                            kind: SurfaceExprKind::TemplateSplice(name),
+                        });
                     } else if let Some(quote) = optional_child_of_kind(node, NodeKind::SyntaxQuote)?
                     {
                         if tokens.quote_sites.is_none() {
@@ -10367,9 +11032,16 @@ fn project_expression_with_fragments(
     if projected.len() != 1
         || capture_depth != 0
         || !capture_quotes.is_empty()
-        || !completed_quotes.is_empty()
+        || completed_quotes.len() != usize::from(capture_root)
     {
         return malformed(InternalReason::UnexpectedShape);
+    }
+    if let Some(output) = capture_output {
+        *output = completed_quotes
+            .pop()
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
     }
     projected.pop().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
@@ -12236,6 +12908,199 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn generator_clauses_retain_seed_step_and_repetition_owner() {
+        let source = SourceFile::new(
+            "generator-forms.ash",
+            "pub syntax declaration: (make) $start:expr names $( $name:ident ),+ => {\n    $( pub $name : Unit -> Int )+ with { $inner from 0 step next_number }\n} with { $outer from $start step next_number }\n",
+        )
+        .unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let (root, tokens) = validated_root(&source, &tree).unwrap();
+        let child = child_nodes(root)
+            .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+            .unwrap();
+        let mut module = ModuleProjection::default();
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        project_staged_source_child(&mut module, &source, child, tokens, &mut budget).unwrap();
+        let declaration = module.syntax_declarations.pop().unwrap();
+        let [outer] = declaration.generators.as_deref().unwrap() else {
+            panic!("expected the whole-template generator");
+        };
+        assert_eq!(outer.name.text, "outer");
+        assert_eq!(outer.step.member().text, "next_number");
+        assert!(
+            matches!(&outer.seed.kind, SurfaceExprKind::TemplateSplice(name) if name.text == "start")
+        );
+        let repeat = declaration
+            .template_contents
+            .as_deref()
+            .unwrap()
+            .iter()
+            .find_map(|node| {
+                if let crate::syntax::MacroOutputNode::TemplateRepeat(repeat) = node {
+                    Some(repeat)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let [inner] = repeat.generators.as_deref().unwrap() else {
+            panic!("expected the repetition-owned generator");
+        };
+        assert_eq!(inner.name.text, "inner");
+        assert_eq!(inner.step.member().text, "next_number");
+        assert!(matches!(&inner.seed.kind, SurfaceExprKind::Integer(_)));
+        assert_eq!(outer.span.source(), source.id());
+        assert_eq!(inner.span.source(), source.id());
+    }
+
+    #[test]
+    fn declaration_capture_quotes_stay_owned_by_supported_generator_capture() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+        use std::cell::RefCell;
+
+        for (header, generator, invocation, supported) in [
+            ("$start:expr", "", "sink syntax { 42 }\n", false),
+            (
+                "$( $start:expr ),+",
+                " with { $number from 0 step next }",
+                "sink syntax { 42 }\n",
+                false,
+            ),
+            (
+                "$start:expr names $( $name:ident ),*",
+                " with { $number from $start step next }",
+                "sink syntax { 42 } names\n",
+                false,
+            ),
+            (
+                "$start:expr",
+                " with { $number from $start step next }",
+                "sink syntax { 42 }\n",
+                true,
+            ),
+        ] {
+            let definition = SourceFile::new(
+                "quote-capture-forms.ash",
+                format!("pub syntax declaration: (sink) {header} => {{}}{generator}\n"),
+            )
+            .unwrap();
+            let tree = h1_tree(&definition, &[]);
+            let (root, raw) = validated_root(&definition, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                raw,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let caller = SourceFile::new("quote-capture-caller.ash", invocation).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, raw) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let quotes = RefCell::new(QuoteProjection {
+                introduction: 1,
+                next_ordinal: 0,
+                sites: Vec::new(),
+            });
+            let mut tokens = ProjectionTokens::source(raw);
+            tokens.quote_sites = Some(&quotes);
+            let mut budget = SyntaxBudget::default();
+            let result = project_declaration_invocation_node_inner(
+                &caller,
+                node,
+                &tokens,
+                &contexts,
+                true,
+                Some(&mut budget),
+            );
+            assert!(quotes.borrow().sites.is_empty());
+            if supported {
+                let invocation = result.expect("the flat generator capture owns its quote site");
+                let [SurfaceSyntaxCapture::Expression(capture)] = invocation.captures.as_slice()
+                else {
+                    panic!("the original expression capture is retained")
+                };
+                let crate::surface::CapturedQuoteSites::Owned(sites) = &capture.quote_sites else {
+                    panic!("the quote metadata stays with the capture")
+                };
+                let [site] = sites.as_slice() else {
+                    panic!("one actual quote site")
+                };
+                let SurfaceExprKind::Apply(application) = &capture.expression.kind else {
+                    panic!("the quote call stays in the capture")
+                };
+                assert_eq!(
+                    site.callee,
+                    std::ptr::from_ref(application.function.as_ref()) as usize
+                );
+                assert_eq!(site.template.origin, capture.expression.span);
+                assert_eq!(quotes.borrow().next_ordinal, 1);
+            } else {
+                assert!(matches!(result, Err(ProjectionError::MalformedTree(_))));
+                assert_eq!(quotes.borrow().next_ordinal, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn flat_generator_projection_prepays_and_retries() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let source = SourceFile::new(
+            "flat-generator.ash",
+            "pub syntax declaration: (make) => {} with { $number from 0 step next_number }\n",
+        )
+        .unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let (root, tokens) = validated_root(&source, &tree).unwrap();
+        let child = child_nodes(root)
+            .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+            .unwrap();
+        let mut measured = SyntaxBudget::default();
+        let mut expected = ModuleProjection::default();
+        project_staged_source_child(&mut expected, &source, child, tokens, &mut measured).unwrap();
+        let used = measured.consumed();
+        assert!(used > child.children.len());
+        for limit in [0, used - 1] {
+            let mut short = SyntaxBudget::with_limit(limit);
+            let mut untouched = ModuleProjection::default();
+            assert!(matches!(
+                project_staged_source_child(&mut untouched, &source, child, tokens, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit: found }),
+                    ..
+                }) if found == limit
+            ));
+            assert!(untouched.syntax_declarations.is_empty());
+        }
+        let mut exact = SyntaxBudget::with_limit(used);
+        let mut retried = ModuleProjection::default();
+        project_staged_source_child(&mut retried, &source, child, tokens, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
+        assert_eq!(retried.syntax_declarations, expected.syntax_declarations);
+    }
 
     #[test]
     fn g1_literal_only_rows_pay_all_reached_child_visits() {
@@ -24374,6 +25239,7 @@ usage arena => resume arena
             &ProjectionTokens::source(&raw),
             &Default::default(),
             Some(&[]),
+            None,
             false,
         )
         .unwrap();

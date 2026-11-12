@@ -81,6 +81,12 @@ pub enum NodeKind {
     SyntaxMatchedIteration,
     /// The balanced token contents of an expression syntax template.
     TemplateBody,
+    /// A template or repetition's source-ordered generator bindings.
+    TemplateGeneratorClause,
+    /// One named state seed and ordinary step reference.
+    TemplateGenerator,
+    /// The ordinary seed expression with its outer capture splices.
+    TemplateGeneratorSeed,
     /// One imported expression syntax invocation.
     SyntaxInvocation,
     /// One imported declaration syntax invocation, awaiting expansion.
@@ -717,6 +723,65 @@ pub(crate) fn unknown_template_capture(name: &crate::surface::SurfaceName) -> Ma
         diagnostics: vec![ParseDiagnostic::new(diagnostic, None, None, None)],
         resource: None,
     }
+}
+
+/// Report a known template capture whose category cannot be a seed splice.
+pub(crate) fn expected_seed_expression_capture(
+    name: &crate::surface::SurfaceName,
+) -> MacroParseFailure {
+    let reason = ParseReason::ExpectedForm;
+    let primary = SourceLabel::new(name.span, primary_message(reason))
+        .with_location_preserving_span(name.diagnostic.as_deref());
+    let mut diagnostic = Diagnostic::new(reason, primary);
+    diagnostic.expected = Some(expected_name(ExpectedForm::Expression).to_owned());
+    diagnostic.found = Some(format!("${}", name.text));
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(
+            diagnostic,
+            Some(ExpectedForm::Expression),
+            Some(FoundToken::Identifier),
+            None,
+        )],
+        resource: None,
+    }
+}
+
+pub(crate) fn expected_seed_expression_capture_work(name: &crate::surface::SurfaceName) -> usize {
+    name.text
+        .len()
+        .saturating_add(1)
+        .saturating_add(primary_message(ParseReason::ExpectedForm).len())
+        .saturating_add(expected_name(ExpectedForm::Expression).len())
+        .saturating_add(1)
+}
+
+pub(crate) fn duplicate_template_binding(name: &crate::surface::SurfaceName) -> MacroParseFailure {
+    let reason = ParseReason::ExpectedForm;
+    let primary = SourceLabel::new(name.span, primary_message(reason))
+        .with_location_preserving_span(name.diagnostic.as_deref());
+    let mut diagnostic = Diagnostic::new(reason, primary);
+    diagnostic.expected = Some(expected_name(ExpectedForm::Identifier).to_owned());
+    diagnostic.found = Some(name.text.clone());
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(
+            diagnostic,
+            Some(ExpectedForm::Identifier),
+            Some(FoundToken::Identifier),
+            None,
+        )],
+        resource: None,
+    }
+}
+
+// Work retained by `duplicate_template_binding`: the primary and expected
+// strings, the found spelling and the single diagnostic vector entry. The
+// optional diagnostic location is charged separately by its caller.
+pub(crate) fn duplicate_template_binding_work(name: &crate::surface::SurfaceName) -> usize {
+    name.text
+        .len()
+        .saturating_add(primary_message(ParseReason::ExpectedForm).len())
+        .saturating_add(expected_name(ExpectedForm::Identifier).len())
+        .saturating_add(1)
 }
 
 // The expansion path will connect this syntax-only handoff separately.
@@ -2100,6 +2165,7 @@ enum QuoteMode {
     Ordinary,
     Template,
     DeclarationTemplate,
+    GeneratorSeed,
     Escape,
     Quote,
 }
@@ -2245,7 +2311,8 @@ impl Parser<'_> {
                 .is_some_and(|found| found.as_ref() == spelling);
         }
         let Some(source) = self.syntax_source else {
-            return false;
+            return self.quote_mode == QuoteMode::GeneratorSeed
+                && matches!(kind, TokenKind::Identifier(name) if name == spelling);
         };
         let range = token.span.range();
         source

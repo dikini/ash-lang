@@ -50,7 +50,8 @@ syntax_declaration ::=
       "=>" ( template_block | "using" identifier )
   | "pub" "syntax" "declaration" ":" "(" identifier ")"
       { declaration_matcher_item }
-      "=>" ( declaration_template_block | "using" identifier )
+      "=>" ( declaration_template_block [ generator_clause ]
+           | "using" identifier )
   | "pub" "syntax" "derive" ":" "(" identifier ")"
       [ "$" identifier ":" "ident" ]
       "=>" ( declaration_template_block | "using" identifier ) ;
@@ -75,12 +76,20 @@ declaration_template_element ::=
     template_token
   | "$" declaration_capture_name
   | "$" "(" { declaration_template_element | line_end } ")"
-      [ repetition_separator ] ( "*" | "+" )
+      [ repetition_separator ] ( "*" | "+" ) [ generator_clause ]
   | "$" "{" expression "}"
   | "$" block
   | "(" { declaration_template_element } ")"
   | "{" { declaration_template_element | line_end } "}"
   | line_end ;
+generator_clause ::=
+  "with" "{" [ line_end ] generator_binding
+    { line_end generator_binding } [ line_end ] "}" ;
+generator_binding ::=
+  "$" generator_name "from" generator_seed "step" step_reference ;
+generator_name ::= identifier | upper_identifier ;
+generator_seed ::= /expression-with-in-scope-expression-capture-splices/ ;
+step_reference ::= identifier | qualified_term_reference ;
 syntax_invocation ::= identifier syntax_matcher_input ;
 matcher_literal ::= /one permitted literal token/ ;
 repetition_separator ::= /one permitted non-delimiter token/ ;
@@ -316,9 +325,12 @@ import restrictions are specified in
 
 A declaration matcher can use the five capture kinds, balanced groups and
 repetitions described in [declaration syntax](syntax-expansion.md#imported-declaration-syntax).
-Its expanded output is a sequence of ordinary module declarations. Repetition
-and escape combinations that require generator or per-iteration escape support
-remain under development.
+Its expanded output is a sequence of ordinary module declarations. A
+generator seed is an Ash expression with available expression-capture splices.
+Generator clauses apply to declaration templates and their repetitions;
+clauses on derive templates remain under development. The
+[declaration syntax specification](syntax-expansion.md#imported-declaration-syntax)
+describes generator scope and the current quotation boundary.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

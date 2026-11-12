@@ -1279,7 +1279,7 @@ where
 enum CompilationInput<'a> {
     #[cfg(test)]
     Parsed {
-        graph: &'a ModuleGraph,
+        graph: &'a mut ModuleGraph,
         next: usize,
     },
     Staged(&'a mut HeaderGraph),
@@ -1345,7 +1345,7 @@ impl CompilationInput<'_> {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
-        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        transformer: Option<&mut crate::module::StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
     ) -> Result<bool, FileFailure> {
         match self {
@@ -1382,7 +1382,7 @@ impl CompilationInput<'_> {
     fn current_with_syntax_budget(
         &mut self,
     ) -> Option<(
-        &LoadedModule,
+        &mut LoadedModule,
         Option<&mut crate::syntax_resource::SyntaxBudget>,
         Option<&mut usize>,
     )> {
@@ -1390,7 +1390,7 @@ impl CompilationInput<'_> {
             #[cfg(test)]
             Self::Parsed { graph, next } => next
                 .checked_sub(1)
-                .and_then(|i| graph.modules().get(i))
+                .and_then(|i| graph.module_at_mut(i))
                 .map(|module| (module, None, None)),
             Self::Staged(graph) => graph
                 .current_module_with_syntax_budget()
@@ -1434,7 +1434,7 @@ impl CompilationInput<'_> {
 
 #[cfg(test)]
 fn compile_graph_with_consumers<I, V>(
-    graph: &ModuleGraph,
+    graph: &mut ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
     interface_validator: I,
     validator: V,
@@ -1665,9 +1665,10 @@ where
         let advanced = {
             let mut transformer =
                 |selection: &crate::syntax::SelectedSyntax,
-                 adapter: Option<&crate::surface::SurfaceName>,
+                 adapter: crate::syntax::DeclarationAdapter<'_>,
                  captures: &[crate::surface::SurfaceSyntaxCapture],
                  source: &SourceFile,
+                 staged: &crate::module::StagedModuleLoan<'_>,
                  caller: &crate::surface::SurfaceName,
                  introduction: usize,
                  contexts: Arc<crate::syntax::SyntaxContexts>,
@@ -1675,21 +1676,52 @@ where
                  owners: &mut Vec<crate::syntax::SyntaxOwner>,
                  budget: &mut crate::syntax_resource::SyntaxBudget| {
                     let span = frame.invocation;
-                    let result = evaluate_selected_transformer(
-                        selection,
-                        adapter,
-                        captures,
-                        source,
-                        caller,
-                        introduction,
-                        TransformerContexts::Shared(contexts),
-                        frame,
-                        &checked,
-                        &mut transformer_entries,
-                        constraint_work,
-                        Some(&mut *budget),
-                        Some(owners),
-                    )
+                    let result = match adapter {
+                        crate::syntax::DeclarationAdapter::Generators(plan) => {
+                            evaluate_generator_transformer(
+                                plan,
+                                selection,
+                                captures,
+                                source,
+                                staged,
+                                caller,
+                                introduction,
+                                frame,
+                                &selected,
+                                &checked_syntax_imports,
+                                &checked,
+                                &checked_by_module,
+                                &checked_syntax_terms,
+                                owners,
+                                budget,
+                                &mut resolution_type_work,
+                                &mut checking_type_work,
+                                &mut coverage_work,
+                                constraint_work,
+                                source_bytes,
+                                rewrite_limit,
+                            )
+                        }
+                        other => evaluate_selected_transformer(
+                            selection,
+                            match other {
+                                crate::syntax::DeclarationAdapter::Transformer => None,
+                                crate::syntax::DeclarationAdapter::Escape(name) => Some(name),
+                                crate::syntax::DeclarationAdapter::Generators(_) => unreachable!(),
+                            },
+                            captures,
+                            source,
+                            caller,
+                            introduction,
+                            TransformerContexts::Shared(contexts),
+                            frame,
+                            &checked,
+                            &mut transformer_entries,
+                            constraint_work,
+                            Some(&mut *budget),
+                            Some(owners),
+                        ),
+                    }
                     .and_then(|(output, fresh_count)| match output {
                         crate::syntax::TransformerOutput::Expanded(nodes) => {
                             #[cfg(test)]
@@ -1742,16 +1774,18 @@ where
             crate::calibration_features::observe_input(graph);
             metrics.finish(None, 0, 0);
         }
-        let (module, mut syntax_budget, next_quote_ordinal) = input
+        let (module, mut syntax_budget, mut next_quote_ordinal) = input
             .current_with_syntax_budget()
             .ok_or_else(internal_file_failure)?;
         check_loaded_module(|| -> Result<(), FileFailure> {
             let contexts =
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
+            let mut has_escape_probes = false;
             for declaration in &module.surface().syntax_declarations {
+                has_escape_probes |= declaration.template_escapes.is_some();
                 let admission = if declaration.category
                     != crate::surface::SurfaceSyntaxCategory::Expression
-                    && declaration.contains_quote_or_escape
+                    && (declaration.contains_quote_or_escape || declaration.contains_generators)
                 {
                     let budget = syntax_budget
                         .as_deref_mut()
@@ -1786,8 +1820,30 @@ where
                     }
                 }
             }
-            let mut transformer_failure = None;
-            let mut transformer =
+            let escape_probes = if has_escape_probes {
+                let budget = syntax_budget
+                    .as_deref_mut()
+                    .ok_or_else(internal_file_failure)?;
+                module
+                    .prepare_escape_probes(budget)
+                    .map_err(|failure| match failure {
+                        crate::parser::MacroParseFailure::Syntax {
+                            diagnostics,
+                            resource,
+                        } => FileFailure::from(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+                            lexical: Vec::new(),
+                            parser: diagnostics,
+                            resource,
+                        }))),
+                        crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+                    })?
+            } else {
+                Vec::new()
+            };
+            let mut preliminary = !escape_probes.is_empty();
+            loop {
+                let mut transformer_failure = None;
+                let mut transformer =
                 |selection: &crate::syntax::SelectedSyntax,
                  captures: &[crate::surface::SurfaceSyntaxCapture],
                  span: Span,
@@ -1973,169 +2029,318 @@ where
                         }
                     }
                 };
-            let mut syntax_expansion = crate::syntax::SyntaxExpansion::new(
-                module.source(),
-                &selected,
-                &checked_syntax_imports,
-                syntax_owners,
-                syntax_budget.as_deref_mut(),
-                next_quote_ordinal.zip(module.quote_introduction()),
-                &mut transformer,
-            );
-            let dependencies = module
-                .dependencies()
-                .iter()
-                .map(|edge| {
-                    let dependency = checked_by_module
-                        .get(&edge.target())
-                        .and_then(|index| checked.get(*index))
-                        .ok_or(())?;
-                    DependencyExports::new(edge, dependency.exports()).map_err(|_| ())
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|()| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                        crate::elaborate::ElaborationFailure::InvalidState,
-                    )))
+                let owners = if preliminary {
+                    let budget = syntax_budget
+                        .as_deref_mut()
+                        .ok_or_else(internal_file_failure)?;
+                    budget
+                        .charge_units(syntax_owners.len())
+                        .map_err(quote_resource_failure)?;
+                    syntax_owners.clone()
+                } else {
+                    std::mem::take(&mut syntax_owners)
+                };
+                let mut syntax_expansion = crate::syntax::SyntaxExpansion::new(
+                    module.source(),
+                    &selected,
+                    &checked_syntax_imports,
+                    owners,
+                    syntax_budget.as_deref_mut(),
+                    next_quote_ordinal
+                        .as_deref_mut()
+                        .zip(module.quote_introduction()),
+                    &mut transformer,
+                );
+                let dependencies = module
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        let dependency = checked_by_module
+                            .get(&edge.target())
+                            .and_then(|index| checked.get(*index))
+                            .ok_or(())?;
+                        DependencyExports::new(edge, dependency.exports()).map_err(|_| ())
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|()| {
+                        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                            crate::elaborate::ElaborationFailure::InvalidState,
+                        )))
+                    })?;
+                let resolution_phase = crate::calibration::Phase::start("resolution");
+                let resolved = crate::resolve::resolve_module_with_syntax(
+                    module,
+                    &dependencies,
+                    &mut resolution_type_work,
+                    constraint_work,
+                    &[],
+                    &checked,
+                    &checked_syntax_terms,
+                    Some(&mut syntax_expansion),
+                );
+                let template_parse_failure = syntax_expansion.take_parse_failure();
+                drop(syntax_expansion);
+                drop(transformer);
+                if let Some(failure) = template_parse_failure {
+                    return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+                }
+                if let Some(failure) = transformer_failure {
+                    return Err(failure);
+                }
+                let resolved = resolved
+                    .map_err(|error| match error {
+                        ResolveModuleError::Resolution(error) => match error.syntax_depth() {
+                            Some((invocation, definition)) => {
+                                PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                    diagnostics: Vec::new(),
+                                    resource: Some(ResourceFailure::StructuralDepth {
+                                        limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                                    }),
+                                    invocation,
+                                    definition,
+                                    teardown: None,
+                                })
+                            }
+                            None => PipelineFailure::Resolution(error),
+                        },
+                        ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+                        ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
+                    })
+                    .map_err(FileFailure::from)?;
+                resolution_phase.finish(
+                    Some(resolution_type_work.used()),
+                    resolution_normal_limit,
+                    resolution_type_work.limit(),
+                );
+                drop(dependencies);
+                let requested = if preliminary {
+                    crate::syntax::escape_probe_binders(
+                        module.surface(),
+                        &resolved,
+                        &escape_probes,
+                        &mut checking_type_work,
+                    )
+                    .map_err(|()| {
+                        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                        )))
+                    })?
+                } else {
+                    Vec::new()
+                };
+                let source_phase = crate::calibration::Phase::start("source-checking");
+                let primary_work = Some(TypeWorkBudget::with_limit(
+                    modular_primary_limit(source_bytes).map_err(|()| {
+                        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                        )))
+                    })?,
+                ));
+                let rewrite_work = Some(TypeWorkBudget::with_limit(rewrite_limit));
+                let mut quote_resource = None;
+                let checked_module = if preliminary {
+                    crate::elaborate::check_escape_probes_with_quote_work(
+                        resolved,
+                        &mut checking_type_work,
+                        &mut coverage_work,
+                        constraint_work,
+                        primary_work,
+                        rewrite_work,
+                        syntax_budget.as_deref_mut(),
+                        &mut quote_resource,
+                        &requested,
+                    )
+                    .map(|(module, results)| (module, Some(results)))
+                } else if select_effect_core {
+                    crate::elaborate::check_module_in_effect_profile_with_quote_work(
+                        resolved,
+                        &mut checking_type_work,
+                        &mut coverage_work,
+                        constraint_work,
+                        primary_work,
+                        rewrite_work,
+                        syntax_budget.as_deref_mut(),
+                        &mut quote_resource,
+                    )
+                    .map(|module| (module, None))
+                } else {
+                    check_module_with_budget_and_rewrite_work(
+                        resolved,
+                        &mut checking_type_work,
+                        &mut coverage_work,
+                        constraint_work,
+                        primary_work,
+                        rewrite_work,
+                    )
+                    .map(|module| (module, None))
+                };
+                if let Some(resource) = quote_resource {
+                    return Err(FileFailure::from(PipelineFailure::Syntax(Box::new(
+                        SyntaxFailure {
+                            lexical: Vec::new(),
+                            parser: Vec::new(),
+                            resource: Some(resource),
+                        },
+                    ))));
+                }
+                let (checked_module, probe_results) = checked_module.map_err(|failure| {
+                    FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                        crate::compiler_work::CompilationPhase::SourceChecking
+                            .assess_with_allowance(
+                                checking_type_work.used(),
+                                checking_type_work.limit(),
+                            )
+                            .incomplete(),
+                    )
                 })?;
-            let resolution_phase = crate::calibration::Phase::start("resolution");
-            let resolved = crate::resolve::resolve_module_with_syntax(
-                module,
-                &dependencies,
-                &mut resolution_type_work,
-                constraint_work,
-                &[],
-                &checked,
-                &checked_syntax_terms,
-                Some(&mut syntax_expansion),
-            );
-            let template_parse_failure = syntax_expansion.take_parse_failure();
-            drop(syntax_expansion);
-            if let Some(failure) = template_parse_failure {
-                return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
-            }
-            if let Some(failure) = transformer_failure {
-                return Err(failure);
-            }
-            let resolved = resolved
-                .map_err(|error| match error {
-                    ResolveModuleError::Resolution(error) => match error.syntax_depth() {
-                        Some((invocation, definition)) => {
-                            PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                diagnostics: Vec::new(),
-                                resource: Some(ResourceFailure::StructuralDepth {
-                                    limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
-                                }),
-                                invocation,
-                                definition,
-                                teardown: None,
-                            })
+                if let Some(results) = probe_results {
+                    checking_type_work
+                        .charge(module.dependencies().len().saturating_add(2))
+                        .map_err(|()| {
+                            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                            )))
+                        })?;
+                    let builtin = module
+                        .dependencies()
+                        .iter()
+                        .find(|edge| edge.target().is_builtin_compiler_syntax())
+                        .and_then(|edge| checked_by_module.get(&edge.target()))
+                        .and_then(|index| checked.get(*index))
+                        .ok_or_else(internal_file_failure)?;
+                    checking_type_work.charge(requested.len()).map_err(|()| {
+                        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                        )))
+                    })?;
+                    let mut categories = Vec::new();
+                    categories
+                        .try_reserve_exact(requested.len())
+                        .map_err(|_| internal_file_failure())?;
+                    for (index, binder) in requested.iter().enumerate() {
+                        let mut selected = None;
+                        for result in &results {
+                            checking_type_work.charge(1).map_err(|()| {
+                                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                                )))
+                            })?;
+                            if result.binder == *binder {
+                                selected = Some(result);
+                                break;
+                            }
                         }
-                        None => PipelineFailure::Resolution(error),
-                    },
-                    ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
-                    ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
-                })
-                .map_err(FileFailure::from)?;
-            resolution_phase.finish(
-                Some(resolution_type_work.used()),
-                resolution_normal_limit,
-                resolution_type_work.limit(),
-            );
-            drop(dependencies);
-            let source_phase = crate::calibration::Phase::start("source-checking");
-            let primary_work = Some(TypeWorkBudget::with_limit(
-                modular_primary_limit(source_bytes).map_err(|()| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                    )))
-                })?,
-            ));
-            let rewrite_work = Some(TypeWorkBudget::with_limit(rewrite_limit));
-            let mut quote_resource = None;
-            let checked_module = if select_effect_core {
-                crate::elaborate::check_module_in_effect_profile_with_quote_work(
-                    resolved,
-                    &mut checking_type_work,
-                    &mut coverage_work,
-                    constraint_work,
-                    primary_work,
-                    rewrite_work,
-                    syntax_budget,
-                    &mut quote_resource,
+                        let result = selected.ok_or_else(internal_file_failure)?;
+                        let _ = result.origin();
+                        let category = crate::syntax::escape_result_category(
+                            result.ty(),
+                            builtin,
+                            &mut checking_type_work,
+                        )
+                        .map_err(|()| {
+                            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                            )))
+                        })?;
+                        let (category, disjoint_atom) = match category {
+                            Some(category) => (category, false),
+                            // These closed builtin atoms cannot be a syntax
+                            // fragment. Finish the existing expression shell
+                            // and let the full ordinary module check diagnose
+                            // the unchanged initializer against its result.
+                            None if matches!(
+                                result.ty(),
+                                Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit
+                            ) =>
+                            {
+                                (crate::syntax::EscapeResultCategory::Expression, true)
+                            }
+                            None => {
+                                return Err(FileFailure::from(PipelineFailure::Resolution(
+                                    crate::resolve::unsupported_syntax_template(
+                                        module.surface().definitions[escape_probes[index]].span,
+                                    ),
+                                )));
+                            }
+                        };
+                        checking_type_work.charge(1).map_err(|()| {
+                            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                            )))
+                        })?;
+                        categories.push((category, result.effects().is_empty(), disjoint_atom));
+                    }
+                    drop(checked_module);
+                    drop(results);
+                    let budget = syntax_budget
+                        .as_deref_mut()
+                        .ok_or_else(internal_file_failure)?;
+                    module
+                        .finish_escape_probes(&escape_probes, &categories, budget)
+                        .map_err(|failure| match failure {
+                            crate::parser::MacroParseFailure::Syntax {
+                                diagnostics,
+                                resource,
+                            } => FileFailure::from(PipelineFailure::Syntax(Box::new(
+                                SyntaxFailure {
+                                    lexical: Vec::new(),
+                                    parser: diagnostics,
+                                    resource,
+                                },
+                            ))),
+                            crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+                        })?;
+                    preliminary = false;
+                    continue;
+                }
+                crate::syntax::validate_transformers(
+                    &checked_module,
+                    &checked,
+                    &module.surface().syntax_declarations,
                 )
-            } else {
-                check_module_with_budget_and_rewrite_work(
-                    resolved,
-                    &mut checking_type_work,
-                    &mut coverage_work,
-                    constraint_work,
-                    primary_work,
-                    rewrite_work,
-                )
-            };
-            if let Some(resource) = quote_resource {
-                return Err(FileFailure::from(PipelineFailure::Syntax(Box::new(
-                    SyntaxFailure {
-                        lexical: Vec::new(),
-                        parser: Vec::new(),
-                        resource: Some(resource),
-                    },
-                ))));
-            }
-            let checked_module = checked_module.map_err(|failure| {
-                FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                .map_err(|span| {
+                    FileFailure::from(PipelineFailure::Resolution(
+                        crate::resolve::invalid_syntax_transformer(span),
+                    ))
+                })?;
+                let syntax_terms = if module.surface().syntax_declarations.is_empty()
+                    && !module.id().is_builtin_compiler_syntax()
+                    && module.quote_sites().is_empty()
+                {
+                    crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
+                } else {
+                    crate::syntax::SyntaxOwnerBindings::new(
+                        &checked_module,
+                        module,
+                        &checked,
+                        &mut checking_type_work,
+                    )
+                    .map_err(|()| {
+                        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                        )))
+                    })?
+                };
+                checked_by_module.insert(module.id(), checked.len());
+                checked_syntax.push(module.surface().syntax_declarations.clone());
+                checked_syntax_imports.push(selected);
+                checked_syntax_terms.push(syntax_terms);
+                checked.push(Arc::new(checked_module));
+                source_phase.finish(
+                    Some(checking_type_work.used()),
+                    source_normal_limit,
+                    checking_type_work.limit(),
+                );
+                compilation_work.source_checking = Some(
                     crate::compiler_work::CompilationPhase::SourceChecking
                         .assess_with_allowance(
                             checking_type_work.used(),
                             checking_type_work.limit(),
                         )
                         .incomplete(),
-                )
-            })?;
-            crate::syntax::validate_transformers(
-                &checked_module,
-                &checked,
-                &module.surface().syntax_declarations,
-            )
-            .map_err(|span| {
-                FileFailure::from(PipelineFailure::Resolution(
-                    crate::resolve::invalid_syntax_transformer(span),
-                ))
-            })?;
-            let syntax_terms = if module.surface().syntax_declarations.is_empty()
-                && !module.id().is_builtin_compiler_syntax()
-                && module.quote_sites().is_empty()
-            {
-                crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
-            } else {
-                crate::syntax::SyntaxOwnerBindings::new(
-                    &checked_module,
-                    module,
-                    &checked,
-                    &mut checking_type_work,
-                )
-                .map_err(|()| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                    )))
-                })?
-            };
-            checked_by_module.insert(module.id(), checked.len());
-            checked_syntax.push(module.surface().syntax_declarations.clone());
-            checked_syntax_imports.push(selected);
-            checked_syntax_terms.push(syntax_terms);
-            checked.push(Arc::new(checked_module));
-            source_phase.finish(
-                Some(checking_type_work.used()),
-                source_normal_limit,
-                checking_type_work.limit(),
-            );
-            compilation_work.source_checking = Some(
-                crate::compiler_work::CompilationPhase::SourceChecking
-                    .assess_with_allowance(checking_type_work.used(), checking_type_work.limit())
-                    .incomplete(),
-            );
+                );
+                break;
+            }
             Ok(())
         })?;
     }
@@ -2484,6 +2689,8 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -2497,6 +2704,308 @@ type TransformerOutputObserver = fn(
 enum TransformerContexts<'a> {
     Shared(Arc<crate::syntax::SyntaxContexts>),
     Quote(&'a mut Option<Arc<crate::syntax::SyntaxContexts>>),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_generator_transformer(
+    plan: &crate::syntax::GeneratorPlan,
+    selection: &crate::syntax::SelectedSyntax,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    staged: &crate::module::StagedModuleLoan<'_>,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    selected: &[crate::syntax::SelectedSyntax],
+    selected_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    checked_by_module: &HashMap<ModuleId, usize>,
+    checked_terms: &[crate::syntax::SyntaxOwnerBindings],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    resolution_work: &mut TypeWorkBudget,
+    checking_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    source_bytes: usize,
+    rewrite_limit: usize,
+) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
+    let selected_owner = checked
+        .get(selection.owner)
+        .ok_or_else(internal_file_failure)?;
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_OWNER_OBSERVER.get() {
+        observe(selected_owner, plan);
+    }
+    budget
+        .charge_units(
+            selected_owner
+                .direct_dependencies()
+                .len()
+                .saturating_add(checked.len())
+                .saturating_add(2),
+        )
+        .map_err(quote_resource_failure)?;
+    let route = selected_owner
+        .direct_dependencies()
+        .iter()
+        .find(|edge| edge.target().is_builtin_compiler_syntax())
+        .ok_or_else(internal_file_failure)?;
+    let builtin_index = *checked_by_module
+        .get(&route.target())
+        .ok_or_else(internal_file_failure)?;
+    let builtin = checked
+        .get(builtin_index)
+        .ok_or_else(internal_file_failure)?;
+    let live = owners.len();
+    budget
+        .charge_units(if live == owners.capacity() {
+            live.saturating_mul(2).saturating_add(1)
+        } else {
+            1
+        })
+        .map_err(quote_resource_failure)?;
+    if live == owners.capacity() {
+        owners.reserve_exact(1);
+    }
+    owners.push(crate::syntax::SyntaxOwner {
+        owner: Some(builtin_index),
+        declaration: builtin.span(),
+        import_span: route.import_span(),
+    });
+    let builtin_introduction = owners.len();
+    let bindings = checked_terms
+        .get(selection.owner)
+        .ok_or_else(internal_file_failure)?;
+    if bindings.module != selected_owner.module() {
+        return Err(internal_file_failure());
+    }
+    let type_resource = |()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    };
+    checking_work
+        .charge(plan.actions.len())
+        .map_err(type_resource)?;
+    let mut escape_categories = Vec::with_capacity(plan.actions.len());
+    for action in &plan.actions {
+        let category = if let crate::syntax::GeneratorAction::Escape {
+            escapes,
+            descriptor,
+            ..
+        } = action
+        {
+            let escape = escapes.get(*descriptor).ok_or_else(internal_file_failure)?;
+            checking_work
+                .charge(escape.adapter.text.len().saturating_add(1))
+                .map_err(type_resource)?;
+            let fact = bindings
+                .get(&escape.adapter.text)
+                .ok_or_else(internal_file_failure)?;
+            if fact.binder.module() != Some(selected_owner.module())
+                || !fact.scheme.type_parameters.is_empty()
+                || !fact.scheme.requirements.is_empty()
+            {
+                return Err(internal_file_failure());
+            }
+            let result = match fact.scheme.value_type() {
+                crate::types::Type::Function(_, result) => result.as_ref(),
+                crate::types::Type::EffectfulFunction(_, result) => result.value(),
+                _ => return Err(internal_file_failure()),
+            };
+            Some(
+                crate::syntax::escape_result_category(result, builtin, checking_work)
+                    .map_err(type_resource)?
+                    .ok_or_else(internal_file_failure)?,
+            )
+        } else {
+            None
+        };
+        escape_categories.push(category);
+    }
+    let contexts =
+        crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
+            .map_err(quote_resource_failure)?;
+    let quote_projection = staged.quote_projection();
+    let (definition, uses, quote_sites) = crate::syntax::generator_adapter_definition(
+        plan,
+        &escape_categories,
+        &selection.declaration.matcher,
+        captures,
+        source,
+        &contexts,
+        quote_projection,
+        introduction,
+        builtin_introduction,
+        owners,
+        &frame,
+        budget,
+    )
+    .map_err(|error| match error {
+        crate::parser::MacroParseFailure::Syntax {
+            diagnostics,
+            resource,
+        } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
+            diagnostics,
+            resource,
+            invocation: frame.invocation,
+            definition: selection.declaration.span,
+            teardown: None,
+        })),
+        crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+    })?;
+    let quote_introduction = if quote_sites.is_empty() {
+        None
+    } else {
+        Some(
+            quote_projection
+                .ok_or_else(internal_file_failure)?
+                .borrow()
+                .introduction,
+        )
+    };
+    let module = staged
+        .adapter_view(source, definition, quote_sites, quote_introduction, budget)
+        .map_err(quote_resource_failure)?;
+    budget
+        .charge_units(module.dependencies().len())
+        .map_err(quote_resource_failure)?;
+    let dependencies = module
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked_by_module
+                .get(&edge.target())
+                .and_then(|index| checked.get(*index))
+                .ok_or_else(internal_file_failure)?;
+            DependencyExports::new(edge, dependency.exports()).map_err(|_| internal_file_failure())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    budget
+        .charge_units(owners.len())
+        .map_err(quote_resource_failure)?;
+    let mut nested =
+        |_: &crate::syntax::SelectedSyntax,
+         _: &[crate::surface::SurfaceSyntaxCapture],
+         span: Span,
+         _: &crate::surface::SurfaceName,
+         _: usize,
+         _: &[Option<usize>],
+         _: &Arc<crate::syntax::ExpansionFrame>,
+         _: &mut InterfaceConstraintBudget,
+         _: Option<crate::syntax::QuoteExpansionLoan<'_>>| Err(span);
+    let mut expansion = crate::syntax::SyntaxExpansion::new(
+        source,
+        selected,
+        selected_imports,
+        owners.to_vec(),
+        Some(&mut *budget),
+        None,
+        &mut nested,
+    );
+    let resolved = crate::resolve::resolve_module_with_syntax(
+        &module,
+        &dependencies,
+        resolution_work,
+        constraint_work,
+        &uses,
+        checked,
+        checked_terms,
+        Some(&mut expansion),
+    );
+    let parse_failure = expansion.take_parse_failure();
+    drop(expansion);
+    if let Some(failure) = parse_failure {
+        return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+    }
+    let resolved = resolved
+        .map_err(|error| match error {
+            ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
+            ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+            ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
+        })
+        .map_err(FileFailure::from)?;
+    let primary = TypeWorkBudget::with_limit(
+        modular_primary_limit(source_bytes).map_err(|()| internal_file_failure())?,
+    );
+    let rewrite = TypeWorkBudget::with_limit(rewrite_limit);
+    let mut quote_resource = None;
+    let checked_module = crate::elaborate::check_module_in_effect_profile_with_quote_work(
+        resolved,
+        checking_work,
+        coverage_work,
+        constraint_work,
+        Some(primary),
+        Some(rewrite),
+        Some(&mut *budget),
+        &mut quote_resource,
+    );
+    if let Some(error) = quote_resource {
+        return Err(quote_resource_failure(error));
+    }
+    let checked_module = checked_module
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::from)?;
+    budget.charge().map_err(quote_resource_failure)?;
+    let checked_module = Arc::new(checked_module);
+    let binder = checked_module
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "\0ash_generator_adapter")
+        .map(|scheme| scheme.binder)
+        .ok_or_else(internal_file_failure)?;
+    budget
+        .charge_units(checked.len().saturating_add(2))
+        .map_err(quote_resource_failure)?;
+    let mut local = Vec::with_capacity(checked.len().saturating_add(1));
+    local.extend(checked.iter().cloned());
+    local.push(Arc::clone(&checked_module));
+    let entry = prepare_transformer_entry(
+        &checked_module,
+        binder,
+        &local,
+        constraint_work,
+        Some(&mut *budget),
+    )?;
+    budget.charge().map_err(quote_resource_failure)?;
+    #[cfg(test)]
+    let lifecycle_before = generator_lifecycle_counters();
+    let evaluated = crate::eval::evaluate_transformer_with_owners(
+        &entry,
+        // Only selected scalar leaves are exposed through the existing host.
+        &plan.captures,
+        source,
+        caller,
+        introduction,
+        Arc::new(contexts),
+        Arc::clone(&frame),
+        Some(&mut *budget),
+        Some(owners),
+    );
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_LIFECYCLE_OBSERVER.get() {
+        observe(lifecycle_before, generator_lifecycle_counters());
+    }
+    evaluated.map_err(|cause| {
+        FileFailure::from(PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
+            cause,
+            invocation: frame.invocation,
+            definition: selection.declaration.span,
+        }))
+    })
+}
+
+#[cfg(test)]
+fn generator_lifecycle_counters() -> [usize; 5] {
+    use crate::eval::machine_test_hooks as hooks;
+    [
+        hooks::TRANSFER_ATTEMPTS.get(),
+        hooks::TRANSFER_FAILURES.get(),
+        hooks::ROOT_CLOSES.get(),
+        hooks::TRANSFORMER_DROPS.get(),
+        hooks::ACTIVE_ROOT_DROPS.get(),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3210,19 +3719,20 @@ mod tests {
     fn parsed_input_has_no_syntax_ledger_loan() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/surface-macros/type-host/control.ash");
-        let graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+        let mut graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+        let first_id = graph.modules()[0].id();
         let mut input = CompilationInput::Parsed {
-            graph: &graph,
+            graph: &mut graph,
             next: 0,
         };
         assert!(input.current_with_syntax_budget().is_none());
         let mut input = CompilationInput::Parsed {
-            graph: &graph,
+            graph: &mut graph,
             next: 1,
         };
         let (module, budget, ordinal) = input.current_with_syntax_budget().unwrap();
         assert!(ordinal.is_none());
-        assert_eq!(module.id(), graph.modules()[0].id());
+        assert_eq!(module.id(), first_id);
         assert!(budget.is_none());
     }
 
@@ -5037,6 +5547,884 @@ mod tests {
         static INDEXED_TRANSFERRED: RefCell<Vec<(Vec<crate::surface::SurfaceSyntaxCapture>, Vec<crate::syntax::MacroOutputNode>)>> = const { RefCell::new(Vec::new()) };
         static DERIVE_WORK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
         static BOUNDED_OUTPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static GENERATOR_BINDERS: RefCell<Option<(crate::resolved::BinderId, crate::resolved::BinderId)>> = const { RefCell::new(None) };
+        static GENERATOR_TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_PLAN: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_TRANSFERS: Cell<usize> = const { Cell::new(0) };
+        static GENERATOR_LIFECYCLES: RefCell<Vec<[usize; 5]>> = const { RefCell::new(Vec::new()) };
+        static ESCAPE_OBSERVATIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static ESCAPE_CHECKED_HELPERS: Cell<usize> = const { Cell::new(0) };
+        static FRESH_QUOTE_SITES: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
+        static FRESH_QUOTE_TEMPLATES: RefCell<Vec<std::sync::Weak<crate::syntax::QuoteTemplate>>> = const { RefCell::new(Vec::new()) };
+        static FRESH_OBSERVED: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_OUTPUTS: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
+        static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn observe_generator_owner(
+        owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        let binder = |name| {
+            owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == name)
+                .expect("the original forms module owns the step")
+                .binder
+        };
+        GENERATOR_BINDERS
+            .with(|slot| *slot.borrow_mut() = Some((binder("is_first"), binder("next_number"))));
+        GENERATOR_PLAN.with(|slot| {
+            *slot.borrow_mut() = plan
+                .actions
+                .iter()
+                .map(|action| match action {
+                    crate::syntax::GeneratorAction::Enter {
+                        generators,
+                        binding,
+                        ..
+                    } => ("enter".to_owned(), generators[*binding].name.text.clone()),
+                    crate::syntax::GeneratorAction::Advance {
+                        generators,
+                        binding,
+                        ..
+                    } => ("step".to_owned(), generators[*binding].name.text.clone()),
+                    crate::syntax::GeneratorAction::Escape {
+                        escapes,
+                        descriptor,
+                        ..
+                    } => (
+                        "escape".to_owned(),
+                        escapes[*descriptor].adapter.text.clone(),
+                    ),
+                })
+                .collect();
+        });
+    }
+
+    fn observe_generator_trace(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::core::{EffectExprKind, PureComputation, PureExprKind};
+        let (first, number) = GENERATOR_BINDERS.with(|slot| slot.borrow().unwrap());
+        GENERATOR_TRACE.with(|slot| {
+            let mut output = slot.borrow_mut();
+            for event in &evaluation.trace {
+                let crate::eval::TraceEvent::Enter(node) = event;
+                let Some(expression) = entry.program.node(*node) else {
+                    continue;
+                };
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                    application,
+                ))) = &expression.kind
+                else {
+                    continue;
+                };
+                let mut function = application.function();
+                let variable = loop {
+                    let Some(function_expression) = entry.program.node(function) else {
+                        break None;
+                    };
+                    match &function_expression.kind {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                            break Some(variable);
+                        }
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::TypeApplication(application),
+                        )) => {
+                            function = application.function();
+                        }
+                        _ => break None,
+                    }
+                };
+                let Some(variable) = variable else {
+                    continue;
+                };
+                let name = if variable.binder() == first {
+                    Some("is_first")
+                } else if variable.binder() == number {
+                    Some("next_number")
+                } else {
+                    None
+                };
+                if let Some(name) = name {
+                    output.push(name);
+                }
+            }
+        });
+    }
+
+    fn observe_generator_lifecycle(before: [usize; 5], after: [usize; 5]) {
+        GENERATOR_LIFECYCLES.with(|slot| {
+            slot.borrow_mut()
+                .push(std::array::from_fn(|index| after[index] - before[index]));
+        });
+    }
+
+    fn assert_generator_cleanup(ordinary_executions: usize) {
+        use crate::eval::machine_test_hooks as hooks;
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get() + ordinary_executions
+        );
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+    }
+
+    fn observe_escape_checked_owner(
+        owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        for action in &plan.actions {
+            let crate::syntax::GeneratorAction::Escape {
+                escapes,
+                descriptor,
+                ..
+            } = action
+            else {
+                panic!("the early categories adapter contains only escapes")
+            };
+            let helper = &escapes[*descriptor].adapter;
+            let scheme = owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == helper.text)
+                .expect("the final defining owner contains the actual escape helper");
+            assert_eq!(scheme.binder.module(), Some(owner.module()));
+            assert_eq!(owner.span().source(), helper.span.source());
+            assert!(scheme.scheme.type_parameters.is_empty());
+            assert!(scheme.scheme.requirements.is_empty());
+            ESCAPE_CHECKED_HELPERS.set(ESCAPE_CHECKED_HELPERS.get() + 1);
+        }
+    }
+
+    fn observe_escape_categories(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{SurfaceExprKind, SurfaceSyntaxCapture},
+            syntax::MacroOutputNode,
+        };
+        let name = selection.declaration.name.text.as_str();
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        match name {
+            "make_expr" | "local_capture" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Expression(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller expression is captured");
+                let [MacroOutputNode::Expression(returned, origin)] = output else {
+                    panic!("{name} returns one quoted Expression: {output:?}")
+                };
+                fn has_caller_fragment(
+                    nodes: &[MacroOutputNode],
+                    original: &crate::surface::SurfaceExpressionCapture,
+                ) -> bool {
+                    nodes.iter().any(|node| match node {
+                        MacroOutputNode::Group(_, children, _) => {
+                            has_caller_fragment(children, original)
+                        }
+                        MacroOutputNode::Expression(fragment, _)
+                        | MacroOutputNode::ForwardedExpression(fragment, _) => {
+                            Arc::ptr_eq(&fragment.contents, &original.contents)
+                                || has_caller_fragment(&fragment.contents, original)
+                        }
+                        _ => false,
+                    })
+                }
+                assert!(
+                    has_caller_fragment(&returned.contents, original),
+                    "{name} retains the caller fragment and its original context: {returned:?}"
+                );
+                assert_eq!(origin.primary().source(), original.expression.span.source());
+                let SurfaceExprKind::Add(addition) = &returned.expression.kind else {
+                    panic!("the returned quote retains its addition")
+                };
+                let (caller, local, local_value) = if name == "make_expr" {
+                    (&addition.left, &addition.right, "100")
+                } else {
+                    (&addition.right, &addition.left, "7")
+                };
+                assert_eq!(caller.span, original.expression.span);
+                let caller_location = caller.diagnostic.as_ref().expect("caller origin");
+                assert_eq!(caller_location.primary.primary(), original.expression.span);
+                assert!(caller_location.captured_expression);
+                assert!(
+                    caller_location
+                        .frames
+                        .iter()
+                        .any(|frame| frame.invocation.source()
+                            == original.expression.span.source()
+                            && frame.definition.source() == selection.declaration.span.source())
+                );
+                let SurfaceExprKind::Integer(value) = &local.kind else {
+                    panic!("the definition quote retains its literal")
+                };
+                assert_eq!(value.to_string(), local_value);
+                assert_eq!(
+                    local
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .primary
+                        .primary()
+                        .source(),
+                    selection.declaration.span.source()
+                );
+                assert_eq!(
+                    addition.operator_span.source(),
+                    selection.declaration.span.source()
+                );
+                eprintln!("{name}: caller fragment and definition literal retain separate origins");
+            }
+            "make_ident" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Identifier(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller identifier is captured");
+                assert_eq!(output.len(), 2);
+                for node in output {
+                    let MacroOutputNode::Identifier(returned, origin) = node else {
+                        panic!("the identifier escape returns identifier and origin")
+                    };
+                    assert_eq!(returned, &original.name);
+                    assert_eq!(origin, &original.origin);
+                }
+            }
+            "make_type" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Type(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller type is captured");
+                assert_eq!(output.len(), 2);
+                for node in output {
+                    let MacroOutputNode::ForwardedType(returned, origin) = node else {
+                        panic!("the type escape returns a protected type")
+                    };
+                    assert_eq!(returned.ty, original.ty);
+                    assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                    assert_eq!(origin.primary().source(), original.ty.span.source());
+                }
+            }
+            "make_pattern" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Pattern(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller pattern is captured");
+                let [MacroOutputNode::ForwardedPattern(returned, origin)] = output else {
+                    panic!("the pattern escape returns a protected pattern")
+                };
+                assert_eq!(returned.pattern, original.pattern);
+                assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                assert_eq!(origin.primary().source(), original.pattern.span.source());
+            }
+            "pass_declaration" => {
+                let original = captures
+                    .iter()
+                    .find_map(|capture| match capture {
+                        SurfaceSyntaxCapture::Declaration(value) => Some(value),
+                        _ => None,
+                    })
+                    .expect("the caller declaration is captured");
+                let [MacroOutputNode::ForwardedDeclaration(returned, origin)] = output else {
+                    panic!("the declaration escape returns a protected declaration")
+                };
+                assert!(Arc::ptr_eq(&returned.contents, &original.contents));
+                assert_eq!(returned.contents, original.contents);
+                let first = original
+                    .contents
+                    .iter()
+                    .find_map(|node| match node {
+                        MacroOutputNode::Identifier(_, origin)
+                        | MacroOutputNode::Token(_, _, origin)
+                        | MacroOutputNode::Group(_, _, origin) => Some(origin.primary()),
+                        _ => None,
+                    })
+                    .expect("the original declaration has a source origin");
+                let invocation = origin.primary();
+                assert_eq!(invocation.source(), first.source());
+                assert!(invocation.range().start() <= first.range().start());
+                assert!(invocation.range().end() >= first.range().end());
+            }
+            _ => return,
+        }
+        ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().push(name.to_owned()));
+    }
+
+    #[test]
+    fn original_escape_categories_retain_captures_after_host_teardown() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+        ESCAPE_CHECKED_HELPERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_escape_checked_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_escape_categories));
+        let compiled = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/early_categories.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged early categories graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_eq!(ESCAPE_CHECKED_HELPERS.get(), 8);
+        assert_eq!(
+            ESCAPE_OBSERVATIONS.with(|slot| slot.borrow().clone()),
+            [
+                "make_expr",
+                "local_capture",
+                "make_ident",
+                "make_type",
+                "make_pattern",
+                "pass_declaration",
+            ]
+        );
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            vec![[1, 0, 1, 1, 0]; 6]
+        );
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "246");
+        assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    fn observe_fresh_quote_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let actual = entry
+            .quote_sites
+            .iter()
+            .filter(|site| {
+                let origin = site.nodes.template.origin;
+                let range = origin.range();
+                site.source.display_path().ends_with("freshness_forms.ash")
+                    && site.source.text()[range.start() as usize..range.end() as usize]
+                        .contains("let temporary")
+            })
+            .collect::<Vec<_>>();
+        let [site] = actual.as_slice() else {
+            panic!("the actual reached helper quote has one authenticated defining site")
+        };
+        assert_eq!(site.nodes.template.origin.source(), site.source.id());
+        assert!(hooks::QUOTE_COMPLETIONS.get() >= 3);
+        FRESH_QUOTE_SITES
+            .with(|slot| *slot.borrow_mut() = Some(Arc::downgrade(&entry.quote_sites)));
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            *slot.borrow_mut() = actual
+                .iter()
+                .map(|site| Arc::downgrade(&site.nodes.template))
+                .collect();
+            assert!(slot.borrow()[0].upgrade().is_some());
+        });
+    }
+
+    fn observe_fresh_quotes(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{
+                SurfaceExprKind, SurfaceLocalDeclaration, SurfacePatternKind, SurfaceReference,
+            },
+            syntax::MacroOutputNode,
+        };
+        if selection.declaration.name.text != "fresh_quotes" {
+            return;
+        }
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        FRESH_QUOTE_SITES.with(|slot| {
+            assert!(
+                slot.borrow().as_ref().unwrap().upgrade().is_none(),
+                "the entry and host have released the prepared quote-site slice"
+            )
+        });
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            assert!(
+                slot.borrow()[0].upgrade().is_some(),
+                "the defining module still owns the reached quote template"
+            )
+        });
+        let [MacroOutputNode::Expression(returned, _)] = output else {
+            panic!("the original freshness invocation returns one quoted expression")
+        };
+        let SurfaceExprKind::Add(addition) = &returned.expression.kind else {
+            panic!("the quote contains both helper results")
+        };
+        let names = |value: &crate::surface::SurfaceExpr| {
+            let SurfaceExprKind::Block(block) = &value.kind else {
+                panic!("each helper result remains a block")
+            };
+            let [SurfaceLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+                panic!("each quoted block owns its binding")
+            };
+            let SurfacePatternKind::Binder(binder) = &binding.pattern.kind else {
+                panic!("each quote binds temporary")
+            };
+            let SurfaceExprKind::Name(SurfaceReference::Unqualified(reference)) =
+                &block.result.kind
+            else {
+                panic!("each quote references its own temporary")
+            };
+            assert_eq!(binder.name.text, "temporary");
+            assert_eq!(reference.text, "temporary");
+            assert_eq!(binder.name.introduction, reference.introduction);
+            assert_ne!(binder.name.introduction, 0);
+            assert!(!binder.name.written && !reference.written);
+            (binder.name.introduction, binder.name.span, reference.span)
+        };
+        let left = names(&addition.left);
+        let right = names(&addition.right);
+        assert_ne!(left.0, right.0);
+        assert_eq!((left.1, left.2), (right.1, right.2));
+        assert_eq!(left.1.source(), selection.declaration.span.source());
+        FRESH_OBSERVED.set(FRESH_OBSERVED.get() + 1);
+    }
+
+    #[test]
+    fn original_fresh_quotes_keep_distinct_contexts_after_last_metadata_owner() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let configuration = || RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/freshness.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let baseline = compile_path(configuration()).expect("the unobserved graph compiles");
+        let baseline_work = *baseline.compilation_work();
+        assert_eq!(execute(&baseline).unwrap().value_display(), "20");
+        drop(baseline);
+        hooks::reset();
+        FRESH_QUOTE_SITES.with(|slot| *slot.borrow_mut() = None);
+        FRESH_QUOTE_TEMPLATES.with(|slot| slot.borrow_mut().clear());
+        FRESH_OBSERVED.set(0);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_fresh_quote_entry));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_fresh_quotes));
+        let program = compile_path(configuration()).expect("the original freshness graph compiles");
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_eq!(FRESH_OBSERVED.get(), 1);
+        assert_eq!(*program.compilation_work(), baseline_work);
+        FRESH_QUOTE_TEMPLATES.with(|slot| {
+            let templates = slot.borrow();
+            assert!(!templates.is_empty());
+            assert!(
+                templates
+                    .iter()
+                    .all(|template| template.upgrade().is_none()),
+                "the final quote-template metadata owners have been released"
+            );
+        });
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&program).unwrap().value_display(), "20");
+        assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    fn observe_failure_output(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        match selection.declaration.name.text.as_str() {
+            "wrong_category" => {
+                let [crate::syntax::MacroOutputNode::Expression(fragment, _)] = output else {
+                    panic!("the actual escaped expression reaches output admission")
+                };
+                let crate::surface::SurfaceExprKind::Integer(value) = &fragment.expression.kind
+                else {
+                    panic!("the actual returned expression retains the original quote's integer")
+                };
+                assert_eq!(value.to_string(), "0");
+                assert_eq!(
+                    fragment
+                        .expression
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .primary
+                        .primary()
+                        .source(),
+                    selection.declaration.span.source()
+                );
+                FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1);
+            }
+            "abort" => FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1),
+            _ => {}
+        }
+    }
+
+    fn observe_failure_staged_module(source: &SourceFile, _module: &crate::surface::SurfaceModule) {
+        if source.display_path().ends_with("atomic.ash")
+            || source.display_path().ends_with("wrong_category.ash")
+        {
+            FAILURE_STAGED_CALLERS.set(FAILURE_STAGED_CALLERS.get() + 1);
+        }
+        if source.display_path().ends_with("freshness.ash") {
+            FAILURE_STAGED_CONTROLS.set(FAILURE_STAGED_CONTROLS.get() + 1);
+        }
+    }
+
+    fn assert_failure_stage_observer_is_active() {
+        FAILURE_STAGED_CONTROLS.set(0);
+        let control = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/freshness.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original completed-caller control compiles");
+        assert_eq!(execute(&control).unwrap().value_display(), "20");
+        assert_eq!(FAILURE_STAGED_CONTROLS.get(), 1);
+    }
+
+    #[test]
+    fn original_wrong_category_checks_transferred_expression_at_admission() {
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        assert_failure_stage_observer_is_active();
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/wrong_category.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("an Expression fragment cannot be admitted as a type");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_eq!(FAILURE_OUTPUTS.get(), 1);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(failure.reason_code(), "parse.expected-form");
+    }
+
+    #[test]
+    fn original_atomic_failure_publishes_no_caller_module_or_output() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        assert_failure_stage_observer_is_active();
+        hooks::reset();
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/escapes/atomic.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the later escape exceeds the existing execution bound");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_eq!(failure.reason_code(), "syntax.transformer-failed");
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::SyntaxRuntime(cause))
+            if cause.cause().reason_code() == "runtime.resource-capacity")
+        );
+        assert_eq!(FAILURE_OUTPUTS.get(), 0);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+        eprintln!(
+            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+            hooks::ACTIVE_ROOT_RECORDS.get()
+        );
+        assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    fn observe_generator_output(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{surface::SurfaceExprKind, syntax::MacroOutputNode};
+        if !matches!(
+            selection.declaration.name.text.as_str(),
+            "make_constants" | "mixed_depth"
+        ) {
+            return;
+        }
+        GENERATOR_TRANSFERS.set(GENERATOR_TRANSFERS.get() + 1);
+        GENERATOR_OUTPUT.with(|slot| {
+            let mut values = slot.borrow_mut();
+            for node in output {
+                let MacroOutputNode::Expression(capture, _) = node else {
+                    panic!("the generator returned expression fragments")
+                };
+                values.push(match &capture.expression.kind {
+                    SurfaceExprKind::Boolean(value) => value.to_string(),
+                    SurfaceExprKind::Integer(value) => value.to_string(),
+                    other => panic!("the fixed step returned an unexpected fragment: {other:?}"),
+                });
+            }
+        });
+    }
+
+    fn observe_generator_order(_source: &SourceFile, module: &crate::surface::SurfaceModule) {
+        use crate::surface::SurfaceDefinitionKind;
+        let names = module
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.kind {
+                SurfaceDefinitionKind::Equational(global) => {
+                    Some(global.interface.name.text.as_str())
+                }
+                SurfaceDefinitionKind::InlineOperational(_) => None,
+            })
+            .filter(|name| ["first", "second", "third"].contains(name))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            GENERATOR_ORDER.with(|slot| *slot.borrow_mut() = names);
+        }
+    }
+
+    #[test]
+    fn original_generator_steps_once_per_iteration_and_survives_host_teardown() {
+        use crate::eval::machine_test_hooks as hooks;
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        hooks::reset();
+        GENERATOR_TRACE.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_ORDER.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_PLAN.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_generator_trace));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_generator_order));
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        let compiled = compile_path(RunConfiguration {
+            entry: fixtures.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged I17 graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        assert_generator_cleanup(1);
+        assert_eq!(
+            GENERATOR_PLAN.with(|slot| slot.borrow().clone()),
+            [
+                ("enter".to_owned(), "number".to_owned()),
+                ("enter".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+            ]
+        );
+        assert_eq!(
+            GENERATOR_TRACE.with(|slot| slot.borrow().clone()),
+            [
+                "is_first",
+                "next_number",
+                "is_first",
+                "next_number",
+                "is_first",
+                "next_number"
+            ]
+        );
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            ["true", "0", "false", "1", "false", "2"]
+        );
+        assert_eq!(
+            GENERATOR_ORDER.with(|slot| slot.borrow().clone()),
+            ["first", "second", "third"]
+        );
+        assert_eq!(GENERATOR_TRANSFERS.get(), 1);
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0]]
+        );
+        assert_generator_cleanup(1);
+
+        // A separate ordinary consumer calls every unchanged generated output
+        // after expansion's host has transferred and closed its root.
+        let consumer = TestSource::write(concat!(
+            "import original (first, second, third)\n",
+            "main : Unit -> Int\n",
+            "main () = match (first(()) == 100, second(()) == 1, third(()) == 2) {\n",
+            "    (true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        consumer.write_sibling(
+            "original.ash",
+            &fs::read_to_string(fixtures.join("main.ash")).unwrap(),
+        );
+        consumer.write_sibling(
+            "forms.ash",
+            &fs::read_to_string(fixtures.join("forms.ash")).unwrap(),
+        );
+        let compiled =
+            compile_path(consumer.configuration()).expect("the generated functions remain usable");
+        assert_generator_cleanup(1);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup(2);
+        hooks::reset();
+    }
+
+    #[test]
+    fn two_generator_invocations_do_not_alias_their_checked_entries() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
+        let source = TestSource::write(concat!(
+            "import forms (syntax make_constants)\n",
+            "make_constants starting_at 0 names first, second, third\n",
+            "make_constants starting_at 3 names fourth, fifth, sixth\n",
+            "main : Unit -> Int\n",
+            "main () = match (first(()) == 100, second(()) == 1, third(()) == 2, fourth(()) == 103, fifth(()) == 4, sixth(()) == 5) {\n",
+            "    (true, true, true, true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        let forms = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators/forms.ash");
+        source.write_sibling("forms.ash", &fs::read_to_string(forms).unwrap());
+        let compiled = compile_path(source.configuration())
+            .expect("both independent generator invocations compile");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup(1);
+        assert_eq!(GENERATOR_TRANSFERS.get(), 2);
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            [
+                "true", "0", "false", "1", "false", "2", "true", "3", "false", "4", "false", "5"
+            ]
+        );
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0], [1, 0, 1, 1, 0]]
+        );
+        assert_generator_cleanup(1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn mixed_depth_generator_restores_each_outer_cached_value() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        GENERATOR_TRACE.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_TRANSFERS.set(0);
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_owner));
+        GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_generator_trace));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        let compiled = compile_path(RunConfiguration {
+            entry: fixtures.join("mixed_depth.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged mixed-depth graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "546210");
+        assert_generator_cleanup(1);
+        assert_eq!(
+            GENERATOR_TRACE.with(|slot| slot.borrow().clone()),
+            ["next_number"; 6]
+        );
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            ["0", "1", "2", "3", "4", "5"]
+        );
+        assert_eq!(GENERATOR_TRANSFERS.get(), 1);
+        assert_eq!(
+            GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
+            [[1, 0, 1, 1, 0]]
+        );
+        assert_generator_cleanup(1);
+
+        // These eight ordinary calls expose the repeated outer values on both
+        // sides of each nested repetition, after the host root is closed.
+        let consumer = TestSource::write(concat!(
+            "import original (left_before, first, second, left_after, right_before, third, fourth, right_after)\n",
+            "main : Unit -> Int\n",
+            "main () = match (left_before(()) == 0, first(()) == 1, second(()) == 2, left_after(()) == 0, right_before(()) == 3, third(()) == 4, fourth(()) == 5, right_after(()) == 3) {\n",
+            "    (true, true, true, true, true, true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        consumer.write_sibling(
+            "original.ash",
+            &fs::read_to_string(fixtures.join("mixed_depth.ash")).unwrap(),
+        );
+        consumer.write_sibling(
+            "forms.ash",
+            &fs::read_to_string(fixtures.join("forms.ash")).unwrap(),
+        );
+        let compiled =
+            compile_path(consumer.configuration()).expect("the mixed-depth outputs remain usable");
+        assert_generator_cleanup(1);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup(2);
+        hooks::reset();
     }
 
     fn observe_derive_input(
@@ -6806,7 +8194,7 @@ wrong input = {
                 "}\n",
             ),
         );
-        let graph = load_module_graph(&source.0, &ModuleRoots::empty())
+        let mut graph = load_module_graph(&source.0, &ModuleRoots::empty())
             .expect("imported cell source graph loads");
         let original_handle_count = Arc::strong_count(graph.modules()[0].retained_source());
         let mut refused_work = TypeWorkBudget::with_limit(2 * graph.modules().len() - 1);
@@ -6820,9 +8208,9 @@ wrong input = {
             original_handle_count,
             "refusal precedes all shared-handle copies",
         );
-        let compile = |retention| {
+        let mut compile = |retention| {
             compile_graph_with_consumers(
-                &graph,
+                &mut graph,
                 &mut InterfaceConstraintBudget::default(),
                 validate_interface_evidence_with_budget,
                 validate_modular_effect_core,

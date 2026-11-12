@@ -87,13 +87,22 @@ fn check_declaration_contents(
     contents: &[MacroOutputNode],
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), RuntimeFailure> {
+    check_declaration_contents_at(contents, 0, budget)
+}
+
+fn check_declaration_contents_at(
+    contents: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), RuntimeFailure> {
     // The capture retains one Arc layer before any delimiter groups.
+    let prefix = crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?;
     budget
         .charge_units(contents.len())
         .map_err(syntax_failure)?;
     let mut pending = contents
         .iter()
-        .map(|node| (node, 1usize))
+        .map(|node| (node, prefix))
         .collect::<Vec<_>>();
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(syntax_failure)?;
@@ -112,6 +121,14 @@ fn check_declaration_contents(
                 budget
                     .charge_units(children.len())
                     .map_err(syntax_failure)?;
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(syntax_failure)?;
+                    pending.reserve_exact(children.len());
+                }
                 pending.extend(children.iter().map(|child| (child, depth)));
             }
             _ => return Err(RuntimeFailure::InvalidControlState),
@@ -1610,6 +1627,7 @@ impl<'inv> SyntaxHost<'inv> {
             let type_accounting = self.type_accounting
                 || !self.types.is_empty()
                 || !self.patterns.is_empty()
+                || (self.syntax_work.is_some() && !self.declarations.is_empty())
                 || (self.syntax_work.is_some() && !self.expressions.is_empty());
             return self
                 .transfer_syntax_inner(
@@ -1786,11 +1804,34 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if self.constructors.get("DeclarationNode") == Some(&tag) {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    }
                 }
                 let (value, origin) = pair(payload, heap)?;
+                if self.syntax_work.is_some()
+                    && self.constructors.get("DeclarationNode") == Some(&tag)
+                {
+                    let CompilerSyntaxHandleKind::Declaration(index) =
+                        self.admitted_handle(value)?
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if self.declarations.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.declarations[index];
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the declaration route owns a budget");
+                    check_declaration_contents_at(&capture.contents, prefix, budget)?;
+                    budget.charge_units(2).map_err(syntax_failure)?; // retained Arc and output slot
+                    reserve_type_push(&mut output, Some(budget), true)?;
+                    let capture = capture.clone();
+                    output.push(MacroOutputNode::ForwardedDeclaration(capture, origin));
+                    nodes = rest;
+                    continue;
+                }
                 if self.syntax_work.is_some() && tag == self.constructor("TypeNode")? {
                     let CompilerSyntaxHandleKind::Type(index) = self.admitted_handle(value)? else {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -7508,6 +7549,303 @@ mod tests {
         assert_eq!(Arc::strong_count(&original), retained);
         eprintln!(
             "component pre-spent 17; phase totals {measured:?}; refused (phase, prefix, paid, limit) {refusals:?}; exact and retry"
+        );
+    }
+
+    fn issued_declaration(
+        fixture: &DeclarationHostFixture,
+        host: &mut super::SyntaxHost<'_>,
+        heap: &mut Vec<super::HeapCell>,
+    ) -> super::Value {
+        use super::{HeapCell, Value, allocate_heap, constructor_fields};
+        use crate::{integer::Integer, types::TypeWorkBudget};
+
+        let input = Value::Location(
+            allocate_heap(
+                heap,
+                HeapCell::Tuple(vec![host.input(), Value::integer(Integer::from_i64(0))].into()),
+            )
+            .unwrap(),
+        );
+        let captured = host
+            .request(
+                fixture.capture,
+                input,
+                heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let (_, capture) = constructor_fields(&captured, heap).unwrap();
+        let (_, declaration) = constructor_fields(capture.unwrap(), heap).unwrap();
+        declaration.unwrap().clone()
+    }
+
+    fn declaration_node_result(
+        host: &mut super::SyntaxHost<'_>,
+        heap: &mut Vec<super::HeapCell>,
+        declaration: super::Value,
+        origin: super::Value,
+        group_origin: super::Value,
+        groups: usize,
+    ) -> (super::Value, super::Value) {
+        use super::{HeapCell, SyntaxHost, Value, allocate_heap};
+
+        fn tuple(heap: &mut Vec<HeapCell>, fields: Vec<Value>) -> Value {
+            Value::Location(allocate_heap(heap, HeapCell::Tuple(fields.into())).unwrap())
+        }
+        fn syntax(host: &mut SyntaxHost<'_>, heap: &mut Vec<HeapCell>, node: Value) -> Value {
+            let end = host.construct(heap, "NoNodes", None).unwrap();
+            let pair = tuple(heap, vec![node, end]);
+            let nodes = host.construct(heap, "MoreNodes", Some(pair)).unwrap();
+            host.construct(heap, "Syntax", Some(nodes)).unwrap()
+        }
+        let pair = tuple(heap, vec![declaration, origin]);
+        let node = host.construct(heap, "DeclarationNode", Some(pair)).unwrap();
+        let mut value = syntax(host, heap, node);
+        for _ in 0..groups {
+            let delimiter = host.construct(heap, "Parentheses", None).unwrap();
+            let fields = tuple(heap, vec![delimiter, value, group_origin.clone()]);
+            let group = host.construct(heap, "GroupNode", Some(fields)).unwrap();
+            value = syntax(host, heap, group);
+        }
+        let expanded = host
+            .construct(heap, "Expanded", Some(value.clone()))
+            .unwrap();
+        (value, expanded)
+    }
+
+    #[test]
+    fn declaration_node_transfer_authenticates_handles_before_packet_work() {
+        use super::{RuntimeFailure, Value};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            lexer::TokenKind,
+            surface::{SurfaceDeclarationCapture, SurfaceSyntaxCapture},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let packet: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::Token(
+            TokenKind::Type,
+            Arc::from("type"),
+            fixture.caller.span.into(),
+        )]);
+        let captures = [SurfaceSyntaxCapture::Declaration(
+            SurfaceDeclarationCapture {
+                contents: Arc::clone(&packet),
+            },
+        )];
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&captures, &mut budget).unwrap();
+        assert!(!host.type_accounting);
+        let mut heap = Vec::new();
+        let declaration = issued_declaration(&fixture, &mut host, &mut heap);
+        let origin = host.issue_origin(fixture.caller.span.into()).unwrap();
+        let mut foreign_budget = SyntaxBudget::default();
+        let mut foreign = fixture.host(&captures, &mut foreign_budget).unwrap();
+        let foreign_origin = foreign.issue_origin(fixture.caller.span.into()).unwrap();
+        let foreign_declaration = issued_declaration(&fixture, &mut foreign, &mut Vec::new());
+        let (stale_origin, stale_declaration) = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&captures, &mut stale_budget).unwrap();
+            let origin = stale.issue_origin(fixture.caller.span.into()).unwrap();
+            let declaration = issued_declaration(&fixture, &mut stale, &mut Vec::new());
+            (origin, declaration)
+        };
+        let retained = Arc::strong_count(&packet);
+        let invalid_origins = [
+            foreign_origin,
+            stale_origin,
+            host.input(),
+            host.handle(CompilerSyntaxHandleKind::Origin(999)),
+            Value::Unit,
+        ];
+        for invalid in invalid_origins {
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::default();
+            let (_, result) = declaration_node_result(
+                &mut host,
+                &mut heap,
+                declaration.clone(),
+                invalid,
+                origin.clone(),
+                0,
+            );
+            // Exactly the list traversal and leaf setup fit. Packet inspection
+            // would exhaust the remaining budget before authentication.
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + 5);
+            host.syntax_work
+                .as_deref_mut()
+                .unwrap()
+                .charge_units(17)
+                .unwrap();
+            assert!(matches!(
+                host.transfer(&result, &heap, &mut TypeWorkBudget::unbounded()),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.syntax_work.as_deref().unwrap().consumed(), 22);
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+        for invalid in [
+            foreign_declaration,
+            stale_declaration,
+            origin.clone(),
+            host.handle(CompilerSyntaxHandleKind::Declaration(999)),
+        ] {
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::default();
+            let (_, result) = declaration_node_result(
+                &mut host,
+                &mut heap,
+                invalid,
+                origin.clone(),
+                origin.clone(),
+                0,
+            );
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + 5);
+            host.syntax_work
+                .as_deref_mut()
+                .unwrap()
+                .charge_units(17)
+                .unwrap();
+            assert!(matches!(
+                host.transfer(&result, &heap, &mut TypeWorkBudget::unbounded()),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.syntax_work.as_deref().unwrap().consumed(), 22);
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+        eprintln!(
+            "DeclarationNode rejects foreign, stale, wrong-kind and out-of-range declaration and Origin handles before packet work"
+        );
+    }
+
+    #[test]
+    fn declaration_only_group_transfer_pays_growth_and_composed_depth() {
+        use super::RuntimeFailure;
+        use crate::{
+            lexer::TokenKind,
+            surface::{SurfaceDeclarationCapture, SurfaceSyntaxCapture},
+            syntax::{MacroDelimiter, MacroOutputNode, TransformerOutput},
+            syntax_resource::SyntaxBudget,
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        fn run(
+            fixture: &DeclarationHostFixture,
+            packet: &Arc<[MacroOutputNode]>,
+            groups: usize,
+            limit: usize,
+            public: bool,
+        ) -> (Result<Vec<MacroOutputNode>, RuntimeFailure>, usize) {
+            let captures = [SurfaceSyntaxCapture::Declaration(
+                SurfaceDeclarationCapture {
+                    contents: Arc::clone(packet),
+                },
+            )];
+            let mut budget = SyntaxBudget::default();
+            let mut host = fixture.host(&captures, &mut budget).unwrap();
+            assert!(!host.type_accounting);
+            let mut heap = Vec::new();
+            let declaration = issued_declaration(fixture, &mut host, &mut heap);
+            let origin = host.issue_origin(fixture.caller.span.into()).unwrap();
+            let (syntax, result) = declaration_node_result(
+                &mut host,
+                &mut heap,
+                declaration,
+                origin.clone(),
+                origin,
+                groups,
+            );
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + limit);
+            host.syntax_work
+                .as_deref_mut()
+                .unwrap()
+                .charge_units(17)
+                .unwrap();
+            let result = if public {
+                host.transfer(&result, &heap, &mut TypeWorkBudget::unbounded())
+                    .map(|output| match output {
+                        TransformerOutput::Expanded(nodes) => nodes,
+                        _ => panic!("expected expanded declaration"),
+                    })
+            } else {
+                host.transfer_syntax_inner(&syntax, &heap, 0, false)
+            };
+            let consumed = host.syntax_work.as_deref().unwrap().consumed();
+            drop(host);
+            drop(heap);
+            (result, consumed)
+        }
+
+        let fixture = DeclarationHostFixture::new();
+        let packet: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::Token(
+            TokenKind::Type,
+            Arc::from("type"),
+            fixture.caller.span.into(),
+        )]);
+        let retained = Arc::strong_count(&packet);
+        let (measured, total) = run(&fixture, &packet, 2, 10_000, true);
+        let measured = measured.unwrap();
+        let (legacy, legacy_total) = run(&fixture, &packet, 2, 10_000, false);
+        assert_eq!(legacy.unwrap(), measured);
+        // Group continuation stack 1+3 and two parent-output slots 1+1.
+        assert_eq!(total - legacy_total, 6);
+        drop(measured);
+        assert_eq!(Arc::strong_count(&packet), retained);
+        let cost = total - 17;
+        let (short, paid) = run(&fixture, &packet, 2, cost - 1, true);
+        assert!(matches!(short, Err(RuntimeFailure::Report(report))
+            if report.primary.reason_code() == "internal.resource.syntax-work"));
+        assert!(paid <= 17 + cost - 1);
+        assert_eq!(Arc::strong_count(&packet), retained);
+        for _ in 0..2 {
+            let (exact, paid) = run(&fixture, &packet, 2, cost, true);
+            assert_eq!(paid, total);
+            let output = exact.unwrap();
+            let [MacroOutputNode::Group(_, first, _)] = output.as_slice() else {
+                panic!("outer group survived host teardown")
+            };
+            let [MacroOutputNode::Group(_, second, _)] = first.as_slice() else {
+                panic!("inner group survived host teardown")
+            };
+            let [MacroOutputNode::ForwardedDeclaration(capture, origin)] = second.as_slice() else {
+                panic!("declaration survived host teardown")
+            };
+            assert!(Arc::ptr_eq(&capture.contents, &packet));
+            assert_eq!(origin.primary(), fixture.caller.span);
+            drop(output);
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+
+        for (inside, success) in [(125, true), (126, false)] {
+            let mut node = MacroOutputNode::Token(
+                TokenKind::Type,
+                Arc::from("type"),
+                fixture.caller.span.into(),
+            );
+            for _ in 0..inside {
+                node = MacroOutputNode::Group(
+                    MacroDelimiter::Parentheses,
+                    vec![node],
+                    fixture.caller.span.into(),
+                );
+            }
+            let packet: Arc<[MacroOutputNode]> = Arc::from([node]);
+            let retained = Arc::strong_count(&packet);
+            let (result, _) = run(&fixture, &packet, 2, 10_000, true);
+            if success {
+                drop(result.unwrap());
+            } else {
+                assert!(matches!(result, Err(RuntimeFailure::Report(report))
+                    if report.primary.reason_code() == "internal.resource.structural-depth"));
+            }
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+        eprintln!(
+            "declaration-only transfer pays group and parent growth: pre-spent 17, short/exact/retry, depth 128 accepted and 129 refused"
         );
     }
 

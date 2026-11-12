@@ -335,9 +335,10 @@ empty one-or-more matcher, or trailing separator at the relevant source; JSON
 diagnostics retain the invocation and definition relationships where applicable.
 An introduced signature can use a nominal visible to its defining module
 without importing the nominal into the caller.
-Generator clauses and escapes within repetitions are not yet supported. The
+An imported declaration syntax template or one of its repetitions can bind
+state-threaded generators with a `with` clause. The
 [declaration syntax specification](../../spec/syntax-expansion.md#imported-declaration-syntax)
-describes the current boundary.
+describes their scope, checking, and current caller-quotation boundary.
 
 ## Imported derives
 
@@ -357,23 +358,29 @@ complete Declaration at capture 0 and that optional Identifier at capture 1.
 Derives run in list order; their declarations are checked by the ordinary
 compiler. The [derive specification](../../spec/syntax-expansion.md#derive-syntax)
 describes capture behavior and the currently recorded downstream limitations.
-Generator clauses and matcher-capture reads in escaped code remain under
-development.
+An introduced implementation method head uses its authenticated syntax
+context; the [name rules](../../spec/syntax-expansion.md#names-and-hygiene)
+describe how an unbound head selects an interface member.
+Generator clauses and matcher-capture reads in escaped derive code remain
+under development.
 
 ## Quotation in declaration expansion
 
 During checked declaration expansion, an ordinary helper can construct an
 expression fragment with `syntax { ... }`. A `$name` inside the quote inserts
-the fragment stored in that ordinary variable. A declaration template can
-run an expression or multiline block in `${ ... }` and insert the resulting
-expression fragment. The escaped code is checked as ordinary Ash; integers
-and other primitive values are not implicitly converted to syntax.
+the fragment stored in that ordinary variable. An imported declaration
+syntax template can run an expression or multiline block in `${ ... }`.
+Escaped code can read in-scope captures and generator values and pass them to
+ordinary helpers. Its result can be an expression, identifier with origin,
+type, pattern, or declaration fragment, and is admitted in its actual output
+position. The code is checked as ordinary Ash; integers and other primitive
+values are not implicitly converted to syntax.
 
 A reached quotation needs the compile-time syntax host. Running it in an
 ordinary program without that host fails. A procedural expression transformer
-can return the token and group view of a quoted capture for reparsing. Direct
-forwarding of a protected quoted expression, matcher-capture reads in escaped
-code, per-iteration escapes, and generator forms are still under development. See
+can return the token and group view of a quoted capture for reparsing. The
+supported protected quote round trip preserves its syntax boundary. Some
+caller-owned quoted seeds and nested syntax contexts remain under development. See
 [quotation and template escapes](../../spec/syntax-expansion.md#quotation-and-template-escapes)
 for the current boundary.
 

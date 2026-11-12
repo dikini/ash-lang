@@ -155,6 +155,13 @@ fn retained_reason_code(reason: ParseReason) -> &'static str {
         ParseReason::UnexpectedAnd => "parse.unexpected-and",
         ParseReason::Semicolon => "parse.semicolon",
         ParseReason::UnexpectedToken => "parse.unexpected-token",
+        ParseReason::UnknownTemplateCapture => "parse.unknown-template-capture",
+        ParseReason::RepetitionMissingDriver => "parse.repetition-missing-driver",
+        ParseReason::RepetitionLengthMismatch => "parse.repetition-length-mismatch",
+        ParseReason::RepetitionEmpty => "parse.repetition-empty",
+        ParseReason::MatcherRepetitionAmbiguous => "parse.matcher-repetition-ambiguous",
+        ParseReason::MatcherRepetitionEmpty => "parse.matcher-repetition-empty",
+        ParseReason::MatcherTrailingSeparator => "parse.matcher-trailing-separator",
     }
 }
 
@@ -169,6 +176,13 @@ fn public_parse_reasons_describe_only_retained_diagnostics() {
         ParseReason::UnexpectedAnd,
         ParseReason::Semicolon,
         ParseReason::UnexpectedToken,
+        ParseReason::UnknownTemplateCapture,
+        ParseReason::RepetitionMissingDriver,
+        ParseReason::RepetitionLengthMismatch,
+        ParseReason::RepetitionEmpty,
+        ParseReason::MatcherRepetitionAmbiguous,
+        ParseReason::MatcherRepetitionEmpty,
+        ParseReason::MatcherTrailingSeparator,
     ] {
         assert_eq!(retained_reason_code(reason), reason.to_string());
     }

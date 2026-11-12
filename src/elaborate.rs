@@ -2589,6 +2589,41 @@ impl Drop for OriginOwner {
     }
 }
 
+/// A compiler-requested local result, released only after its complete normal
+/// module check succeeds. The type and origin retain their bounded owners.
+pub(crate) struct CheckedEscapeResult {
+    pub(crate) binder: BinderId,
+    ty: IterativeTypeOwner,
+    effects: EffectRow,
+    origin: OriginOwner,
+}
+
+impl std::fmt::Debug for CheckedEscapeResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CheckedEscapeResult")
+            .field("binder", &self.binder)
+            .field("ty", &*self.ty)
+            .field("effects", &self.effects)
+            .field("origin", self.origin.as_ref())
+            .finish()
+    }
+}
+
+impl CheckedEscapeResult {
+    pub(crate) fn ty(&self) -> &Type {
+        &self.ty
+    }
+
+    pub(crate) fn effects(&self) -> &EffectRow {
+        &self.effects
+    }
+
+    pub(crate) fn origin(&self) -> &Origin {
+        self.origin.as_ref()
+    }
+}
+
 #[cfg(test)]
 struct CheckedTypeVariableBuffer(Vec<crate::resolved::ResolvedTypeVariable>);
 
@@ -3271,6 +3306,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     checked_quote_sites: Vec<CheckedQuoteSite>,
     quote_syntax_work: Option<crate::syntax_resource::SyntaxBudget>,
     quote_resource_failure: Option<crate::syntax_resource::ResourceFailure>,
+    escape_result_requests: Vec<BinderId>,
+    escape_results: Vec<CheckedEscapeResult>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
@@ -3992,6 +4029,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_quote_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
+            escape_result_requests: Vec::new(),
+            escape_results: Vec::new(),
         }
     }
 
@@ -4148,6 +4187,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_quote_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
+            escape_result_requests: Vec::new(),
+            escape_results: Vec::new(),
         })
     }
 
@@ -4517,6 +4558,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_quote_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
+            escape_result_requests: Vec::new(),
+            escape_results: Vec::new(),
         };
         Ok(elaborator)
     }
@@ -5429,6 +5472,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_quote_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
+            escape_result_requests: Vec::new(),
+            escape_results: Vec::new(),
         })
     }
 
@@ -17993,6 +18038,33 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     #[inline(never)]
+    fn finalize_escape_results(&mut self) -> Result<(), TypeError> {
+        if self.escape_result_requests.len() != self.escape_results.len() {
+            return Err(invalid_state());
+        }
+        for request in &self.escape_result_requests {
+            let mut found = false;
+            for result in &self.escape_results {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if result.binder == *request {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(invalid_state());
+            }
+        }
+        let mut results = std::mem::take(&mut self.escape_results);
+        for result in &mut results {
+            let ty = self.zonk(&result.ty)?;
+            result.ty.replace(ty);
+            result.effects = self.zonk_effect_row(&result.effects)?;
+        }
+        self.escape_results = results;
+        Ok(())
+    }
+
     fn finish_expression_binding(
         &mut self,
         binding: &ResolvedBinding,
@@ -18110,6 +18182,58 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } => {
                 discard_type_iteratively(ty);
                 discard_origin_iteratively(pattern_origin);
+                let mut requested = false;
+                for candidate in &self.escape_result_requests {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    if *candidate == binder.id() {
+                        requested = true;
+                        break;
+                    }
+                }
+                if requested {
+                    for prior in &self.escape_results {
+                        self.type_work.charge(1).map_err(|()| type_resource())?;
+                        if prior.binder == binder.id() {
+                            return Err(invalid_state());
+                        }
+                    }
+                    let ResolvedPatternKind::Binder(source_binder) = &binding.pattern.kind else {
+                        return Err(invalid_state());
+                    };
+                    if source_binder.id != binder.id() {
+                        return Err(invalid_state());
+                    }
+                    let live = self.escape_results.len();
+                    self.type_work
+                        .charge(if live == self.escape_results.capacity() {
+                            live.saturating_mul(2).saturating_add(1)
+                        } else {
+                            1
+                        })
+                        .map_err(|()| type_resource())?;
+                    if live == self.escape_results.capacity() {
+                        self.escape_results
+                            .try_reserve_exact(1)
+                            .map_err(|_| type_resource())?;
+                    }
+                    let ty = IterativeTypeOwner::new(self.clone_type(&binding_type.ty)?);
+                    let effects =
+                        clone_effect_row_with_budget(&initializer_effects, &mut self.type_work)
+                            .map_err(|()| type_resource())?;
+                    let origin = OriginOwner::new(
+                        crate::resolved::clone_effect_origin_with_budget(
+                            &source_binder.origin,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| type_resource())?,
+                    );
+                    self.escape_results.push(CheckedEscapeResult {
+                        binder: binder.id(),
+                        ty,
+                        effects,
+                        origin,
+                    });
+                }
                 let quantified = generalized.into_boxed_slice();
                 let context_quantified =
                     clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
@@ -25373,6 +25497,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             rewrite_work,
             None,
             None,
+            None,
         )
     } else {
         check_module_with_budget_family::<PureOperationFamily>(
@@ -25382,6 +25507,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             constraint_work,
             primary_work,
             rewrite_work,
+            None,
             None,
             None,
         )
@@ -25408,6 +25534,7 @@ pub(crate) fn check_module_in_effect_profile_with_rewrite_work(
         rewrite_work,
         None,
         None,
+        None,
     )
 }
 
@@ -25431,7 +25558,35 @@ pub(crate) fn check_module_in_effect_profile_with_quote_work(
         rewrite_work,
         syntax_work,
         Some(resource_failure),
+        None,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_escape_probes_with_quote_work(
+    resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
+    rewrite_work: Option<TypeWorkBudget>,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    resource_failure: &mut Option<crate::syntax_resource::ResourceFailure>,
+    requested: &[BinderId],
+) -> Result<(CheckedModule, Vec<CheckedEscapeResult>), TypeError> {
+    let mut results = Vec::new();
+    let checked = check_module_with_budget_family::<EffectOperationFamily>(
+        resolved,
+        type_work,
+        coverage_work,
+        constraint_work,
+        primary_work,
+        rewrite_work,
+        syntax_work,
+        Some(resource_failure),
+        Some((requested, &mut results)),
+    )?;
+    Ok((checked, results))
 }
 
 #[allow(
@@ -25449,6 +25604,7 @@ fn check_module_with_budget_family<
     rewrite_work: Option<TypeWorkBudget>,
     mut syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
     resource_failure: Option<&mut Option<crate::syntax_resource::ResourceFailure>>,
+    escape: Option<(&[BinderId], &mut Vec<CheckedEscapeResult>)>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
         .authenticate_owner_definitions(type_work)
@@ -25478,6 +25634,19 @@ fn check_module_with_budget_family<
     )?;
     elaborator.quote_syntax_work = syntax_work.as_deref_mut().map(std::mem::take);
     let result: Result<_, TypeError> = (|| {
+        if let Some((requested, _)) = escape.as_ref() {
+            elaborator
+                .type_work
+                .charge(requested.len())
+                .map_err(|()| type_resource())?;
+            elaborator
+                .escape_result_requests
+                .try_reserve_exact(requested.len())
+                .map_err(|_| type_resource())?;
+            elaborator
+                .escape_result_requests
+                .extend_from_slice(requested);
+        }
         elaborator.install_quote_sites(resolved.module(), resolved.quote_sites())?;
         let interface_facts = checked_interface_facts(
             &resolved,
@@ -25621,6 +25790,9 @@ fn check_module_with_budget_family<
         exports
             .retain_local_lowering(local_lowering, &mut elaborator.type_work)
             .map_err(resolved_build_error)?;
+        if escape.is_some() {
+            elaborator.finalize_escape_results()?;
+        }
 
         Ok((
             schemes,
@@ -25687,6 +25859,7 @@ fn check_module_with_budget_family<
         resolved.definitions().len(),
         resolved.implementations().len(),
     )?;
+    let escape_results = std::mem::take(&mut elaborator.escape_results);
     let typed_fragment = F::retain_checked_fragment(CheckedTypedFragment {
         builder: elaborator.builder,
         globals,
@@ -25724,7 +25897,7 @@ fn check_module_with_budget_family<
             .into_iter()
             .map(CheckedImplementationBody::new),
     );
-    Ok(CheckedModule::new(
+    let checked = CheckedModule::new(
         resolved,
         CheckedModuleParts {
             definitions: definitions.into_boxed_slice(),
@@ -25738,7 +25911,11 @@ fn check_module_with_budget_family<
             exports,
             typed_fragment: Some(typed_fragment),
         },
-    ))
+    );
+    if let Some((_, destination)) = escape {
+        *destination = escape_results;
+    }
+    Ok(checked)
 }
 
 fn build_evidence_selector(

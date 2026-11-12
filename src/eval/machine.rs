@@ -6992,6 +6992,10 @@ pub(crate) fn evaluate_transformer_with_context_slot<'a>(
         }
         let mut transferred = (|| {
             let evaluation = machine.run_loop()?;
+            #[cfg(test)]
+            if let Some(observe) = machine_test_hooks::TRANSFORMER_EVALUATION_OBSERVER.get() {
+                observe(entry, &evaluation);
+            }
             let (value, heap) = evaluation.into_observation_parts();
             let host = machine
                 .syntax_host

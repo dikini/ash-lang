@@ -126,6 +126,7 @@ pub struct Lexed {
     syntax_budget: SyntaxBudget,
     resource_failure: Option<ResourceFailure>,
     needs_quote_dependency: bool,
+    needs_generator_dependency: bool,
 }
 
 impl Lexed {
@@ -137,6 +138,10 @@ impl Lexed {
 
     pub(crate) const fn needs_quote_dependency(&self) -> bool {
         self.needs_quote_dependency
+    }
+
+    pub(crate) const fn needs_generator_dependency(&self) -> bool {
+        self.needs_generator_dependency
     }
 
     pub(crate) fn into_parts(
@@ -162,13 +167,15 @@ enum DelimiterContext {
     Paren,
     Brace,
     TemplateRepeat { emits_line_end: bool },
+    // The derive template uses ordinary parenthesis line-end rules.
+    GeneratorRepeat,
 }
 
 impl DelimiterContext {
     const fn emits_line_end(self) -> bool {
         match self {
             Self::File | Self::Brace => true,
-            Self::Paren => false,
+            Self::Paren | Self::GeneratorRepeat => false,
             Self::TemplateRepeat { emits_line_end } => emits_line_end,
         }
     }
@@ -186,6 +193,16 @@ enum DeclarationHeader {
     Opening,
     Matcher,
     Arrow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratorSuffix {
+    None,
+    TemplateClosed,
+    RepeatClosed,
+    RepeatSeparator,
+    RepeatQuantified,
+    With,
 }
 
 /// Lexes one admitted source file.
@@ -214,6 +231,12 @@ pub(crate) fn lex_with_budget(
     let mut declaration_template_depth = None;
     let mut template_escape_depth = None;
     let mut needs_quote_dependency = false;
+    let mut generator_header = DeclarationHeader::None;
+    let mut generator_template_depth = None;
+    let mut generator_escape_depth = None;
+    let mut generator_quote_depth = None;
+    let mut generator_suffix = GeneratorSuffix::None;
+    let mut needs_generator_dependency = false;
     macro_rules! charge_syntax {
         () => {
             if let Err(resource_failure) = syntax_budget.charge() {
@@ -223,6 +246,7 @@ pub(crate) fn lex_with_budget(
                     syntax_budget: syntax_budget.clone(),
                     resource_failure: Some(resource_failure),
                     needs_quote_dependency,
+                    needs_generator_dependency,
                 });
             }
         };
@@ -247,8 +271,10 @@ pub(crate) fn lex_with_budget(
                     span: checked_span(source, start, offset)?,
                 });
                 logical_line_has_token = false;
+                generator_suffix = GeneratorSuffix::None;
                 if contexts.len() == 1 {
                     declaration_header = DeclarationHeader::None;
+                    generator_header = DeclarationHeader::None;
                 }
             }
             continue;
@@ -426,6 +452,58 @@ pub(crate) fn lex_with_budget(
         let previous_is_dollar = tokens
             .last()
             .is_some_and(|previous: &Token| previous.kind == TokenKind::Dollar);
+        // This is only an admission hint. The ordinary template parser still
+        // decides whether the encountered suffix is a generator clause.
+        if generator_header != DeclarationHeader::None
+            || generator_template_depth.is_some()
+            || generator_suffix != GeneratorSuffix::None
+        {
+            charge_syntax!();
+        }
+        generator_suffix = match (generator_suffix, &kind) {
+            (
+                GeneratorSuffix::TemplateClosed | GeneratorSuffix::RepeatQuantified,
+                TokenKind::With,
+            ) => GeneratorSuffix::With,
+            (GeneratorSuffix::RepeatClosed, TokenKind::Star | TokenKind::Plus)
+            | (GeneratorSuffix::RepeatSeparator, TokenKind::Star | TokenKind::Plus) => {
+                GeneratorSuffix::RepeatQuantified
+            }
+            (GeneratorSuffix::RepeatClosed, _) => GeneratorSuffix::RepeatSeparator,
+            (GeneratorSuffix::With, TokenKind::LeftBrace) => {
+                needs_generator_dependency = true;
+                GeneratorSuffix::None
+            }
+            _ => GeneratorSuffix::None,
+        };
+        generator_header = match (generator_header, &kind) {
+            (DeclarationHeader::None, TokenKind::Pub) if at_file && !logical_line_has_token => {
+                DeclarationHeader::Pub
+            }
+            (DeclarationHeader::Pub, TokenKind::SyntaxKeyword) if at_file => {
+                DeclarationHeader::Syntax
+            }
+            (DeclarationHeader::Syntax, TokenKind::Identifier(name))
+                if at_file && (name == "declaration" || name == "derive") =>
+            {
+                DeclarationHeader::Declaration
+            }
+            (DeclarationHeader::Declaration, TokenKind::Colon) if at_file => {
+                DeclarationHeader::Opening
+            }
+            (DeclarationHeader::Opening, TokenKind::LeftParen) if at_file => {
+                DeclarationHeader::Matcher
+            }
+            (DeclarationHeader::Matcher, TokenKind::FatArrow) if at_file => {
+                DeclarationHeader::Arrow
+            }
+            (DeclarationHeader::Matcher, _) => DeclarationHeader::Matcher,
+            (DeclarationHeader::Arrow, TokenKind::LeftBrace) if at_file => {
+                generator_template_depth = Some(contexts.len() + 1);
+                DeclarationHeader::None
+            }
+            _ => DeclarationHeader::None,
+        };
         declaration_header = match (declaration_header, &kind) {
             (DeclarationHeader::None, TokenKind::Pub) if at_file && !logical_line_has_token => {
                 DeclarationHeader::Pub
@@ -466,7 +544,55 @@ pub(crate) fn lex_with_budget(
             && template_escape_depth.is_none()
             && previous_is_dollar
             && kind == TokenKind::LeftParen;
-        update_delimiter_contexts(&mut contexts, &kind, template_repeat);
+        let in_generator_template = generator_template_depth.is_some();
+        if in_generator_template
+            && generator_quote_depth.is_none()
+            && kind == TokenKind::LeftBrace
+            && tokens
+                .last()
+                .is_some_and(|previous: &Token| previous.kind == TokenKind::SyntaxKeyword)
+        {
+            generator_quote_depth = Some(contexts.len() + 1);
+        }
+        if in_generator_template
+            && generator_escape_depth.is_none()
+            && previous_is_dollar
+            && kind == TokenKind::LeftBrace
+        {
+            generator_escape_depth = Some(contexts.len() + 1);
+        }
+        let generator_repeat = in_generator_template
+            && !in_template
+            && generator_escape_depth.is_none()
+            && generator_quote_depth.is_none()
+            && previous_is_dollar
+            && kind == TokenKind::LeftParen;
+        let closes_repeat = in_generator_template
+            && generator_escape_depth.is_none()
+            && generator_quote_depth.is_none()
+            && kind == TokenKind::RightParen
+            && matches!(
+                contexts.last(),
+                Some(DelimiterContext::TemplateRepeat { .. } | DelimiterContext::GeneratorRepeat)
+            );
+        let closes_template =
+            generator_template_depth == Some(contexts.len()) && kind == TokenKind::RightBrace;
+        update_delimiter_contexts(&mut contexts, &kind, template_repeat, generator_repeat);
+        if closes_repeat {
+            generator_suffix = GeneratorSuffix::RepeatClosed;
+        }
+        if closes_template {
+            generator_suffix = GeneratorSuffix::TemplateClosed;
+        }
+        if generator_escape_depth.is_some_and(|depth| contexts.len() < depth) {
+            generator_escape_depth = None;
+        }
+        if generator_quote_depth.is_some_and(|depth| contexts.len() < depth) {
+            generator_quote_depth = None;
+        }
+        if generator_template_depth.is_some_and(|depth| contexts.len() < depth) {
+            generator_template_depth = None;
+        }
         if template_escape_depth.is_some_and(|depth| contexts.len() < depth) {
             template_escape_depth = None;
         }
@@ -499,6 +625,7 @@ pub(crate) fn lex_with_budget(
         syntax_budget: syntax_budget.clone(),
         resource_failure: None,
         needs_quote_dependency,
+        needs_generator_dependency,
     })
 }
 
@@ -590,6 +717,7 @@ fn update_delimiter_contexts(
     contexts: &mut Vec<DelimiterContext>,
     kind: &TokenKind,
     template_repeat: bool,
+    generator_repeat: bool,
 ) {
     match kind {
         TokenKind::LeftParen if template_repeat => {
@@ -598,12 +726,19 @@ fn update_delimiter_contexts(
                 .is_some_and(|context| context.emits_line_end());
             contexts.push(DelimiterContext::TemplateRepeat { emits_line_end });
         }
+        TokenKind::LeftParen if generator_repeat => {
+            contexts.push(DelimiterContext::GeneratorRepeat)
+        }
         TokenKind::LeftParen => contexts.push(DelimiterContext::Paren),
         TokenKind::LeftBrace => contexts.push(DelimiterContext::Brace),
         TokenKind::RightParen
             if matches!(
                 contexts.last(),
-                Some(DelimiterContext::Paren | DelimiterContext::TemplateRepeat { .. })
+                Some(
+                    DelimiterContext::Paren
+                        | DelimiterContext::TemplateRepeat { .. }
+                        | DelimiterContext::GeneratorRepeat
+                )
             ) =>
         {
             let _ = contexts.pop();
@@ -674,4 +809,40 @@ fn checked_span(source: &SourceFile, start: usize, end: usize) -> Result<Span, S
     let end = u32::try_from(end).map_err(|_| SourceError::TextTooLarge)?;
     let range = ByteRange::new(start, end).map_err(|_| SourceError::InvalidLineState)?;
     source.span(range)
+}
+
+#[cfg(test)]
+mod generator_dependency_tests {
+    use super::*;
+
+    #[test]
+    fn only_generator_template_suffixes_request_the_separate_dependency() {
+        for text in [
+            "pub syntax declaration: (make) => {} with { $g from 0 step next }\n",
+            "pub syntax declaration: (make) $( $n:ident ),* => { $( $n : Unit -> Int ),* with { $g from 0 step next } }\n",
+            "pub syntax derive: (Mark) => {} with { $g from 0 step next }\n",
+        ] {
+            let source = SourceFile::new("generator.ash", text).unwrap();
+            let lexed = lex(&source).unwrap();
+            assert!(lexed.needs_generator_dependency(), "{text}");
+            assert!(!lexed.needs_quote_dependency(), "{text}");
+        }
+        for text in [
+            "value () = handle f(()) with { op _ => 0 }\n",
+            "pub syntax declaration: (make) => { value () = handle f(()) with { op _ => 0 } }\n",
+            "pub syntax declaration: (make) => { value () = 0 }\n",
+        ] {
+            let source = SourceFile::new("ordinary.ash", text).unwrap();
+            let lexed = lex(&source).unwrap();
+            assert!(!lexed.needs_generator_dependency(), "{text}");
+        }
+        let source = SourceFile::new("quote.ash", "value () = syntax { 0 }\n").unwrap();
+        let lexed = lex(&source).unwrap();
+        assert!(lexed.needs_quote_dependency());
+        assert!(!lexed.needs_generator_dependency());
+        let source = SourceFile::new("quoted-payload.ash", "pub syntax declaration: (make) => { value () = syntax { $( x )* with { $g from 0 step next } } }\n").unwrap();
+        let lexed = lex(&source).unwrap();
+        assert!(lexed.needs_quote_dependency());
+        assert!(!lexed.needs_generator_dependency());
+    }
 }

@@ -602,7 +602,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
                 let _ = parser.bump();
             }
         }
-        syntax_declaration_body(parser, false);
+        syntax_declaration_body(parser, false, true);
         parser.finish();
         return;
     }
@@ -709,7 +709,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     if !declaration && (!previous_capture || !final_expression || names.is_empty()) {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
-    syntax_declaration_body(parser, declaration);
+    syntax_declaration_body(parser, declaration, declaration);
     parser.finish();
 }
 
@@ -1202,17 +1202,20 @@ fn syntax_matcher_items(
     (nullable, first_capture, previous_capture, first, pending)
 }
 
-fn syntax_declaration_body(parser: &mut Parser<'_>, declaration: bool) {
+fn syntax_declaration_body(parser: &mut Parser<'_>, declaration: bool, generators: bool) {
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
     if parser.at(&TokenKind::Using) {
         let _ = parser.bump();
         expect_lower_identifier(parser);
     } else {
-        template_body(parser, declaration);
+        template_body(parser, declaration, generators);
+        if generators && parser.at(&TokenKind::With) {
+            template_generator_clause(parser);
+        }
     }
 }
 
-fn template_body(parser: &mut Parser<'_>, declaration: bool) {
+fn template_body(parser: &mut Parser<'_>, declaration: bool, generators: bool) {
     parser.start(NodeKind::TemplateBody);
     if !parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace) {
         parser.finish();
@@ -1229,30 +1232,50 @@ fn template_body(parser: &mut Parser<'_>, declaration: bool) {
         QuoteMode::Template
     };
     let previous_mode = std::mem::replace(&mut parser.quote_mode, mode);
-    let mut closing = vec![TokenKind::RightBrace];
-    while let Some(expected) = closing.last() {
+    let mut closing = vec![(TokenKind::RightBrace, false)];
+    while let Some((expected, repetition)) = closing.last().cloned() {
         if parser.at(&TokenKind::SyntaxKeyword) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
             syntax_quote(parser);
         } else if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
             syntax_escape(parser);
-        } else if parser.at(expected) {
+        } else if parser.at(&expected) {
             let _ = parser.bump();
             closing.pop();
             parser.leave_structure();
+            if repetition {
+                if !matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus))
+                    && matches!(parser.nth(1), Some(TokenKind::Star | TokenKind::Plus))
+                {
+                    let _ = parser.bump(); // Optional repetition separator.
+                }
+                if matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
+                    let _ = parser.bump();
+                    if generators
+                        && parser.at(&TokenKind::With)
+                        && parser.nth(1) == Some(&TokenKind::LeftBrace)
+                    {
+                        template_generator_clause(parser);
+                    }
+                }
+            }
         } else if matches!(
             parser.current(),
             Some(TokenKind::LeftBrace | TokenKind::LeftParen)
         ) {
-            let end = if parser.at(&TokenKind::LeftBrace) {
-                TokenKind::RightBrace
+            let (end, repetition) = if parser.at(&TokenKind::LeftBrace) {
+                (TokenKind::RightBrace, false)
             } else {
-                TokenKind::RightParen
+                (
+                    TokenKind::RightParen,
+                    parser.position > 0
+                        && parser.tokens[parser.position - 1].kind == TokenKind::Dollar,
+                )
             };
             if !parser.enter_structure() {
                 parser.consume_rest();
                 break;
             }
-            closing.push(end);
+            closing.push((end, repetition));
             let _ = parser.bump();
         } else if matches!(
             parser.current(),
@@ -1260,7 +1283,7 @@ fn template_body(parser: &mut Parser<'_>, declaration: bool) {
         ) {
             parser.report(
                 ParseReason::ExpectedForm,
-                if *expected == TokenKind::RightBrace {
+                if expected == TokenKind::RightBrace {
                     ExpectedForm::RightBrace
                 } else {
                     ExpectedForm::RightParen
@@ -1275,6 +1298,78 @@ fn template_body(parser: &mut Parser<'_>, declaration: bool) {
         parser.leave_structure();
     }
     parser.quote_mode = previous_mode;
+    parser.finish();
+}
+
+fn template_generator_clause(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::TemplateGeneratorClause);
+    let _ = parser.bump(); // with
+    if !parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace) {
+        parser.finish();
+        return;
+    }
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::RightBrace) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile) | None
+    ) && parser.resource_failure.is_none()
+    {
+        parser.start(NodeKind::TemplateGenerator);
+        let _ = parser.expect(&TokenKind::Dollar, ExpectedForm::Identifier);
+        if matches!(
+            parser.current(),
+            Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+        ) {
+            let _ = parser.bump();
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "from") {
+            let _ = parser.bump();
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        parser.start(NodeKind::TemplateGeneratorSeed);
+        let previous_mode = std::mem::replace(&mut parser.quote_mode, QuoteMode::GeneratorSeed);
+        if parser.charge_matcher_work(4) {
+            let stop = TokenKind::Identifier("step".to_owned());
+            if push_structured_stop(parser, &stop, "step") {
+                expression(parser);
+                let _ = parser.syntax_stops.pop();
+            }
+        }
+        parser.quote_mode = previous_mode;
+        parser.finish();
+        if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "step") {
+            let _ = parser.bump();
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        if parser.at_upper_identifier() {
+            qualified_name(parser, false);
+        } else {
+            expect_syntax_name(parser);
+        }
+        parser.finish();
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        } else if !parser.at(&TokenKind::RightBrace) {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::LineEnd);
+            break;
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.leave_structure();
     parser.finish();
 }
 
@@ -1293,7 +1388,9 @@ pub(super) fn syntax_quote(parser: &mut Parser<'_>) {
     let mode = match parser.quote_mode {
         QuoteMode::Template => QuoteMode::Template,
         QuoteMode::DeclarationTemplate => QuoteMode::DeclarationTemplate,
-        QuoteMode::Ordinary | QuoteMode::Escape | QuoteMode::Quote => QuoteMode::Quote,
+        QuoteMode::Ordinary | QuoteMode::GeneratorSeed | QuoteMode::Escape | QuoteMode::Quote => {
+            QuoteMode::Quote
+        }
     };
     let previous_mode = std::mem::replace(&mut parser.quote_mode, mode);
     if parser.at(&TokenKind::LineEnd) {
@@ -1338,7 +1435,9 @@ pub(super) fn syntax_escape(parser: &mut Parser<'_>) {
 
 pub(super) fn quote_hole(parser: &mut Parser<'_>) {
     let kind = match parser.quote_mode {
-        QuoteMode::Template | QuoteMode::DeclarationTemplate => NodeKind::TemplateSplice,
+        QuoteMode::Template | QuoteMode::DeclarationTemplate | QuoteMode::GeneratorSeed => {
+            NodeKind::TemplateSplice
+        }
         QuoteMode::Escape => NodeKind::EscapeCaptureRead,
         QuoteMode::Quote => NodeKind::QuoteHole,
         QuoteMode::Ordinary => unreachable!("ordinary Ash has no quote holes"),
@@ -4358,6 +4457,26 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn fixed_generator_definition_graph_parses_with_owned_clauses() {
+        let source = SourceFile::new(
+            "generators/forms.ash",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/docs/design/macros/fixtures/generators/forms.ash"
+            )),
+        )
+        .unwrap();
+        let tree = super::super::parse(lex(&source).unwrap());
+        assert!(tree.lexical_diagnostics().is_empty());
+        assert_eq!(tree.resource_failure(), None);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+    }
 
     #[test]
     fn extended_matcher_insertion_prepays_shift_and_full_event_growth() {
