@@ -928,8 +928,8 @@ pub(super) struct ResourceIdentity {
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct InterfaceIdentity {
-    module: u32,
-    local: u32,
+    pub(super) module: u32,
+    pub(super) local: u32,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct InterfaceOwnerRecord {
