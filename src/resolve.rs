@@ -907,6 +907,7 @@ enum ResolveContext {
     MissingModuleAlias,
     SyntaxNameReservation,
     MixedTypeRowRoles,
+    ForeignContract(crate::foreign::source_contract::ForeignContractCause),
     IdentityExhaustion(ResolveIdentitySpace),
 }
 
@@ -1068,6 +1069,19 @@ impl ResolveError {
         }
     }
 
+    pub(crate) const fn foreign_contract_cause(&self) -> Option<&'static str> {
+        use crate::foreign::source_contract::ForeignContractCause;
+        match self.0.context {
+            Some(ResolveContext::ForeignContract(
+                ForeignContractCause::MissingSupportedProfile,
+            )) => Some("missing-supported-profile"),
+            Some(ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember)) => {
+                Some("unsupported-member")
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn resource_name(&self) -> Option<&'static str> {
         match self.reason {
             ResolveReason::TypeResourceExhausted => Some("type-work"),
@@ -1127,6 +1141,9 @@ impl ResolveError {
             return Some((self.message()?, "resolution_site"));
         }
         match self.reason {
+            ResolveReason::ForeignContract if self.foreign_contract_cause().is_some() => {
+                return Some((self.message()?, "foreign_contract"));
+            }
             ResolveReason::BinderIdExhausted => {
                 return Some((self.message()?, "identity_allocation"));
             }
@@ -1273,6 +1290,7 @@ impl ResolveError {
                 | ResolveContext::MissingLexicalScope
                 | ResolveContext::MissingNominalScope
                 | ResolveContext::MissingConstructorScope
+                | ResolveContext::ForeignContract(_)
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
@@ -1372,6 +1390,18 @@ impl ResolveError {
             return Some(context.message());
         }
         match self.reason {
+            ResolveReason::ForeignContract => {
+                use crate::foreign::source_contract::ForeignContractCause;
+                return Some(match self.0.context? {
+                    ResolveContext::ForeignContract(
+                        ForeignContractCause::MissingSupportedProfile,
+                    ) => crate::message::Message::foreign_missing_profile(),
+                    ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember) => {
+                        crate::message::Message::foreign_unsupported_member()
+                    }
+                    _ => return None,
+                });
+            }
             ResolveReason::TypeResourceExhausted => {
                 return Some(crate::message::Message::resolve_type_resources());
             }
@@ -1510,6 +1540,7 @@ impl ResolveError {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
             ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::ForeignContract(_)
             | ResolveContext::SyntaxNameReservation
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
@@ -2726,9 +2757,53 @@ impl GeneratedParameterOrder {
     }
 }
 
-fn validate_newtype_shape(
-    declaration: &SurfaceTypeDeclaration,
-) -> Result<(&SurfaceConstructorDeclaration, &SurfaceType), ResolveError> {
+// Pay for the actual flat DiagnosticLocation clone before a new label retains
+// it. Combined origins retain two Arcs; their shared inputs are not cloned.
+fn prepay_diagnostic_location(
+    work: &mut TypeWorkBudget,
+    location: Option<&crate::syntax::DiagnosticLocation>,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let Some(location) = location else {
+        return Ok(());
+    };
+    let resource = || {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "diagnostic location retention exceeded its type-work budget",
+        )
+    };
+    work.charge(2).map_err(|()| resource())?;
+    work.charge(location.related.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    for origin in std::iter::once(&location.primary).chain(&location.related) {
+        work.charge(1).map_err(|()| resource())?;
+        let depth = match origin {
+            crate::syntax::MacroOrigin::Source(_) => 0,
+            crate::syntax::MacroOrigin::Combined { depth, .. } => {
+                work.charge(2).map_err(|()| resource())?;
+                *depth
+            }
+        };
+        if depth
+            .checked_add(1)
+            .is_none_or(|depth| depth > crate::parser::STRUCTURAL_DEPTH_LIMIT)
+        {
+            return Err(resource());
+        }
+    }
+    Ok(())
+}
+
+fn validate_newtype_shape<'a>(
+    declaration: &'a SurfaceTypeDeclaration,
+    work: &mut TypeWorkBudget,
+) -> Result<(&'a SurfaceConstructorDeclaration, &'a SurfaceType), ResolveError> {
     let [constructor] = declaration.constructors.as_slice() else {
         return Err(error(
             ResolveReason::InternalState,
@@ -2752,17 +2827,31 @@ fn validate_newtype_shape(
         }));
     };
     if constructor.name.text != declaration.name.text {
+        prepay_diagnostic_location(
+            work,
+            constructor.name.diagnostic.as_deref(),
+            constructor.name.span,
+        )?;
+        prepay_diagnostic_location(
+            work,
+            declaration.name.diagnostic.as_deref(),
+            declaration.name.span,
+        )?;
         let mut diagnostic = Diagnostic::new(
             ResolveReason::NewtypeConstructorName,
             SourceLabel::new(
                 constructor.name.span,
                 "this newtype constructor must use the nominal type's spelling",
-            ),
+            )
+            .with_location_preserving_span(constructor.name.diagnostic.as_deref()),
         );
-        diagnostic.related.push(SourceLabel::new(
-            declaration.name.span,
-            "this nominal declaration defines the required spelling",
-        ));
+        diagnostic.related.push(
+            SourceLabel::new(
+                declaration.name.span,
+                "this nominal declaration defines the required spelling",
+            )
+            .with_location_preserving_span(declaration.name.diagnostic.as_deref()),
+        );
         diagnostic.expected = Some(declaration.name.text.clone());
         diagnostic.found = Some(constructor.name.text.clone());
         return Err(diagnostic.into());
@@ -3140,7 +3229,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn validate_local_namespaces(&self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+    fn validate_local_namespaces(&mut self, surface: &SurfaceModule) -> Result<(), ResolveError> {
         let mut type_names: HashMap<&str, (&SurfaceName, LocalTypeDeclarationKind)> =
             HashMap::new();
         let mut term_names: HashMap<&str, (&SurfaceName, Option<crate::source::Span>)> =
@@ -3234,18 +3323,32 @@ impl Resolver<'_, '_> {
                     let mut operations = HashMap::new();
                     for operation in &declaration.operations {
                         if let Some(first) =
-                            operations.insert(&operation.name.text, operation.name.span)
+                            operations.insert(&operation.name.text, &operation.name)
                         {
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                operation.name.diagnostic.as_deref(),
+                                operation.name.span,
+                            )?;
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                first.diagnostic.as_deref(),
+                                first.span,
+                            )?;
                             let mut diagnostic = Diagnostic::new(
                                 ResolveReason::DuplicateGlobal,
                                 SourceLabel::new(
                                     operation.name.span,
                                     "this effect operation is already declared",
+                                )
+                                .with_location_preserving_span(
+                                    operation.name.diagnostic.as_deref(),
                                 ),
                             );
-                            diagnostic
-                                .related
-                                .push(SourceLabel::new(first, "the first operation is here"));
+                            diagnostic.related.push(
+                                SourceLabel::new(first.span, "the first operation is here")
+                                    .with_location_preserving_span(first.diagnostic.as_deref()),
+                            );
                             diagnostic.found = Some(operation.name.text.clone());
                             return Err(diagnostic.into());
                         }
@@ -8539,12 +8642,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this qualified nominal type is not available in the syntax context",
+                        &name.member,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(&name.member, &self.diagnostic_frames)
                 });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8587,12 +8693,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this nominal type is not declared in the syntax context",
+                        name,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(name, &self.diagnostic_frames)
                 });
         }
         if self.interface_names.contains_key(&name.text) {
@@ -9308,12 +9417,15 @@ impl Resolver<'_, '_> {
                 ))
                 .copied();
             return selected.ok_or_else(|| {
-                error(
+                contextual_unknown_name(
                     ResolveReason::UnknownConstructor,
+                    ResolveContext::Constructor,
                     member.span,
                     "this constructor is not exported through the syntax owner's alias",
+                    member,
+                    &self.diagnostic_frames,
+                    &mut self.type_work,
                 )
-                .with_name(member, &self.diagnostic_frames)
             });
         }
         let mut checked_contextual_lexical = false;
@@ -9333,12 +9445,15 @@ impl Resolver<'_, '_> {
                     .get(&(member.text.clone(), member.introduction))
                     .copied()
                     .ok_or_else(|| {
-                        error(
+                        contextual_unknown_name(
                             ResolveReason::UnknownConstructor,
+                            ResolveContext::Constructor,
                             member.span,
                             "this constructor is not declared in the syntax owner",
+                            member,
+                            &self.diagnostic_frames,
+                            &mut self.type_work,
                         )
-                        .with_name(member, &self.diagnostic_frames)
                     });
             }
             checked_contextual_lexical = true;
@@ -10843,7 +10958,7 @@ impl Resolver<'_, '_> {
         let mut introduced_anchor = None;
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
-                let _ = validate_newtype_shape(declaration)?;
+                let _ = validate_newtype_shape(declaration, &mut self.type_work)?;
             }
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
@@ -11075,7 +11190,8 @@ impl Resolver<'_, '_> {
                 problem: "wrong",
             }));
         }
-        let (constructor, representation) = validate_newtype_shape(declaration)?;
+        let (constructor, representation) =
+            validate_newtype_shape(declaration, &mut self.type_work)?;
 
         let parameters = self.allocate_nominal_type_parameters(declaration)?;
         let type_scope_checkpoint = self.type_scopes.len();
@@ -16528,6 +16644,28 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
+fn contextual_unknown_name(
+    reason: ResolveReason,
+    context: ResolveContext,
+    span: Span,
+    message: &str,
+    name: &SurfaceName,
+    frames: &[Arc<crate::syntax::ExpansionFrame>],
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "contextual name diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(ResolveReason::TypeResourceExhausted, span, RESOURCE_MESSAGE);
+    }
+    let found = match try_clone_resolution_string(&name.text, span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    diagnostic.found = Some(found);
+    ResolveError::new(diagnostic, Some(context)).with_name(name, frames)
+}
+
 pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
     lookup_error(
         ResolveContext::MissingExport,
@@ -16585,7 +16723,8 @@ fn lookup_error(
         | ResolveContext::MissingFileScope
         | ResolveContext::MissingLexicalScope
         | ResolveContext::MissingNominalScope
-        | ResolveContext::MissingConstructorScope => ResolveReason::InternalState,
+        | ResolveContext::MissingConstructorScope
+        | ResolveContext::ForeignContract(_) => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -23385,6 +23524,354 @@ mod tests {
         )
         .expect("the actual declaration stager should emit the fixture");
         (module, owners)
+    }
+
+    fn staged_diagnostic_fixture(
+        template: &str,
+        invocation: &str,
+    ) -> (SurfaceModule, SourceFile, SourceFile) {
+        use crate::parser::{
+            finish_module_from_checkpoint_with_syntax, parse_module_header,
+            project_declaration_expansions, project_module_retaining_templates,
+        };
+        use crate::syntax::SelectedSyntax;
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new("diagnostic-forms.ash", template).unwrap();
+        let tree = parse(lex(&forms).unwrap());
+        let selected: Vec<_> = project_module_retaining_templates(&forms, &tree)
+            .unwrap()
+            .syntax_declarations
+            .into_iter()
+            .map(|declaration| SelectedSyntax {
+                name: declaration.name.text.clone(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            })
+            .collect();
+        let caller = SourceFile::new("diagnostic-caller.ash", invocation).unwrap();
+        let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) =
+            finish_module_from_checkpoint_with_syntax(checkpoint, budget, Some(&caller), &selected);
+        assert!(tree.parse_diagnostics().is_empty());
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut Vec::new(),
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .unwrap();
+        (module, forms, caller)
+    }
+
+    #[test]
+    fn diagnostic_location_copy_is_paid_flat_and_drops_retained_frames() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin};
+        let source = SourceFile::new("location-work.ash", "source").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut location = DiagnosticLocation::new(MacroOrigin::Combined {
+            inputs: Arc::from([MacroOrigin::Source(span)]),
+            frame: Arc::clone(&frame),
+            span_count: 1,
+            depth: 1,
+        });
+        location.related.push(MacroOrigin::Source(span));
+        location.add_frame(&frame);
+        location.add_frame(&frame);
+        assert_eq!(location.frames.len(), 1);
+        let original_count = Arc::strong_count(&frame);
+        let mut absent = TypeWorkBudget::with_limit(0);
+        prepay_diagnostic_location(&mut absent, None, span).unwrap();
+        assert_eq!(absent.used(), 0);
+
+        const COPY_WORK: usize = 9;
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + COPY_WORK - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                prepay_diagnostic_location(&mut short, Some(&location), span)
+                    .unwrap_err()
+                    .reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(Arc::strong_count(&frame), original_count);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + COPY_WORK);
+                exact.charge(prefix).unwrap();
+                prepay_diagnostic_location(&mut exact, Some(&location), span).unwrap();
+                assert_eq!(exact.used(), prefix + COPY_WORK);
+                let label = SourceLabel::new(span, "original input")
+                    .with_location_preserving_span(Some(&location));
+                assert_eq!(label.span(), span);
+                assert_eq!(Arc::strong_count(&frame), original_count + 2);
+                drop(label);
+                assert_eq!(Arc::strong_count(&frame), original_count);
+            }
+        }
+        if let MacroOrigin::Combined { depth, .. } = &mut location.primary {
+            *depth = crate::parser::STRUCTURAL_DEPTH_LIMIT;
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        assert_eq!(
+            prepay_diagnostic_location(&mut work, Some(&location), span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(Arc::strong_count(&frame), original_count);
+    }
+
+    #[test]
+    fn contextual_unknown_lookup_forms_keep_name_scope_and_paid_retries() {
+        let (surface, _) = staged_module_constructor_fixture();
+        let member = surface.type_declarations[0].name.clone();
+        let qualifier = surface.type_declarations[4].name.clone();
+        assert_ne!(member.introduction, 0);
+        assert_ne!(qualifier.introduction, 0);
+        let references = [
+            SurfaceReference::Unqualified(member.clone()),
+            SurfaceReference::Qualified(crate::surface::SurfaceQualifiedName {
+                span: member.span,
+                qualifier,
+                member: member.clone(),
+            }),
+        ];
+        for reference in &references {
+            for constructor in [false, true] {
+                let run = |limit: usize, prefix: usize| {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(7_104),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    resolver.type_work.charge(prefix).unwrap();
+                    let failure = if constructor {
+                        resolver.constructor_reference(reference).unwrap_err()
+                    } else {
+                        resolver.nominal_reference(reference).unwrap_err()
+                    };
+                    (failure, resolver.type_work.used())
+                };
+                let (failure, work) = run(usize::MAX, 0);
+                let expected = if constructor {
+                    ResolveReason::UnknownConstructor
+                } else {
+                    ResolveReason::UnknownType
+                };
+                assert_eq!(failure.reason, expected);
+                assert_eq!(failure.found.as_deref(), Some(member.text.as_str()));
+                assert_eq!(
+                    failure.lookup_scope_name(),
+                    Some(if constructor { "constructor" } else { "type" })
+                );
+                let mut stripped = reference.clone();
+                match &mut stripped {
+                    SurfaceReference::Unqualified(name) => name.diagnostic = None,
+                    SurfaceReference::Qualified(name) => name.member.diagnostic = None,
+                }
+                let mut ordinary = Resolver::new(ModuleId::new(7_104));
+                let unchanged = if constructor {
+                    ordinary.constructor_reference(&stripped).unwrap_err()
+                } else {
+                    ordinary.nominal_reference(&stripped).unwrap_err()
+                };
+                assert_eq!(unchanged.reason, failure.reason);
+                assert_eq!(unchanged.found, failure.found);
+                assert_eq!(unchanged.lookup_scope_name(), failure.lookup_scope_name());
+                assert_eq!(unchanged.primary.span(), failure.primary.span());
+                assert!(work >= member.text.len());
+                for prefix in [0, 7] {
+                    let (short, _) = run(prefix + work - 1, prefix);
+                    assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                    for _ in 0..2 {
+                        let (retry, used) = run(prefix + work, prefix);
+                        assert_eq!(retry.reason, expected);
+                        assert_eq!(retry.found.as_deref(), Some(member.text.as_str()));
+                        assert_eq!(used, prefix + work);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_diagnostic_labels_preserve_sources_and_retry_paid_failures() {
+        use crate::presentation::{PresentationError, compile_resolve_diagnostic, write_json};
+
+        let fixtures = [
+            (
+                "pub syntax declaration: (ops) $name:ident first $first:ident second $second:ident => {\n    pub effect $name {\n        $first : Unit -> Int\n        $second : Unit -> Int\n    }\n}\n",
+                "ops Ask first ask second ask\n",
+                ResolveReason::DuplicateGlobal,
+            ),
+            (
+                "pub syntax declaration: (box) $name:ident constructor $ctor:ident => {\n    pub newtype $name = $ctor(Int)\n}\n",
+                "box Box constructor Wrap\n",
+                ResolveReason::NewtypeConstructorName,
+            ),
+            (
+                "pub syntax declaration: (foreign) $name:ident symbol $symbol:ident => {\n    pub foreign library $name {\n        symbol $symbol : Unit -> Unit { name \"stop\" }\n    }\n}\n",
+                "foreign Fixture symbol Stop\n",
+                ResolveReason::ForeignContract,
+            ),
+        ];
+        for (index, (template, invocation, expected)) in fixtures.into_iter().enumerate() {
+            let (surface, forms, caller) = staged_diagnostic_fixture(template, invocation);
+            let original = match index {
+                0 => &surface.effects[0].operations[1].name,
+                1 => &surface.type_declarations[0].constructors[0].name,
+                _ => &surface.foreign_libraries[0].name,
+            };
+            let frame = Arc::clone(&original.diagnostic.as_ref().unwrap().frames[0]);
+            let base_count = Arc::strong_count(&frame);
+            let run = |limit: usize, prefix: usize| {
+                let mut resolver = Resolver::with_type_work(
+                    ModuleId::new(7_105),
+                    TypeWorkBudget::with_limit(limit),
+                );
+                resolver.type_work.charge(prefix).unwrap();
+                let failure = match index {
+                    0 => resolver.validate_local_namespaces(&surface).unwrap_err(),
+                    1 => validate_newtype_shape(
+                        &surface.type_declarations[0],
+                        &mut resolver.type_work,
+                    )
+                    .unwrap_err(),
+                    _ => match resolver.prepare_source_foreign(&surface) {
+                        Ok(_) => panic!("the missing profile must fail"),
+                        Err(failure) => failure,
+                    },
+                };
+                (failure, resolver.type_work.used())
+            };
+            let (failure, work) = run(usize::MAX, 0);
+            assert_eq!(failure.reason, expected);
+            let primary_span = if index == 2 {
+                surface.foreign_libraries[0].span
+            } else {
+                original.span
+            };
+            assert_eq!(failure.primary.span(), primary_span);
+            assert!(failure.primary.diagnostic_location().is_some());
+            assert!(Arc::strong_count(&frame) > base_count);
+            let view = compile_resolve_diagnostic(&failure, &[&forms, &caller]).unwrap();
+            let mut encoded = Vec::new();
+            write_json(&mut encoded, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            let labels = json["labels"].as_array().unwrap();
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == "syntax_invocation")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == "syntax_definition")
+                    .count(),
+                1
+            );
+            assert!(matches!(
+                compile_resolve_diagnostic(&failure, &[&caller]),
+                Err(PresentationError::MissingSource)
+            ));
+            drop(view);
+            let mut stripped = surface.clone();
+            match index {
+                0 => stripped.effects[0].operations[1].name.diagnostic = None,
+                1 => {
+                    stripped.type_declarations[0].constructors[0]
+                        .name
+                        .diagnostic = None
+                }
+                _ => stripped.foreign_libraries[0].name.diagnostic = None,
+            }
+            let mut ordinary = Resolver::new(ModuleId::new(7_105));
+            let unchanged = match index {
+                0 => ordinary.validate_local_namespaces(&stripped).unwrap_err(),
+                1 => {
+                    validate_newtype_shape(&stripped.type_declarations[0], &mut ordinary.type_work)
+                        .unwrap_err()
+                }
+                _ => match ordinary.prepare_source_foreign(&stripped) {
+                    Ok(_) => panic!("the missing profile must fail"),
+                    Err(failure) => failure,
+                },
+            };
+            assert_eq!(unchanged.reason, failure.reason);
+            assert_eq!(unchanged.primary.span(), failure.primary.span());
+            assert_eq!(unchanged.expected, failure.expected);
+            assert_eq!(unchanged.found, failure.found);
+            assert_eq!(
+                unchanged.foreign_contract_cause(),
+                failure.foreign_contract_cause()
+            );
+            assert_eq!(
+                unchanged
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>(),
+                failure
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>()
+            );
+            assert!(unchanged.primary.diagnostic_location().is_none());
+            drop(unchanged);
+            drop(stripped);
+            drop(failure);
+            assert_eq!(Arc::strong_count(&frame), base_count);
+            for prefix in [0, 11] {
+                let (short, _) = run(prefix + work - 1, prefix);
+                assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                drop(short);
+                assert_eq!(Arc::strong_count(&frame), base_count);
+                for _ in 0..2 {
+                    let (retry, used) = run(prefix + work, prefix);
+                    assert_eq!(retry.reason, expected);
+                    assert_eq!(retry.primary.span(), primary_span);
+                    assert_eq!(used, prefix + work);
+                    drop(retry);
+                    assert_eq!(Arc::strong_count(&frame), base_count);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_untagged_and_resource_failures_keep_existing_classification() {
+        let surface = declaration_fixture(
+            "foreign-untagged.ash",
+            "foreign library Fixture {\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Stop : Unit -> Unit { name \"\" }\n}\n",
+        );
+        let run = |limit| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(7_106), TypeWorkBudget::with_limit(limit));
+            match resolver.prepare_source_foreign(&surface) {
+                Ok(_) => panic!("the invalid native name must fail"),
+                Err(failure) => failure,
+            }
+        };
+        let failure = run(usize::MAX);
+        assert_eq!(failure.reason, ResolveReason::ForeignContract);
+        assert_eq!(failure.foreign_contract_cause(), None);
+        assert!(failure.primary.diagnostic_location().is_none());
+        let short = run(0);
+        assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.foreign_contract_cause(), None);
     }
 
     #[test]

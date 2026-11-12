@@ -1024,6 +1024,13 @@ fn resolve_facts(error: &crate::resolve::ResolveError) -> Vec<Fact<'_>> {
         value: FactValue::Text(value),
     });
     let mut facts: Vec<_> = subject.into_iter().collect();
+    if let Some(cause) = error.foreign_contract_cause() {
+        facts.push(Fact {
+            name: "contract_cause",
+            kind: "foreign-contract-cause",
+            value: FactValue::Text(cause),
+        });
+    }
     if let Some((part, problem)) = error.work_state_context() {
         facts.push(Fact {
             name: "state_part",

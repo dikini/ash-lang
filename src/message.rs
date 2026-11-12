@@ -1471,6 +1471,10 @@ messages! {
     resolve_unknown_operation => "resolve-unknown-operation" { name: &'a str = "missing" },
     /// A checked name occurrence carrying an unresolved lookup.
     unresolved_name => "unresolved-name" {},
+    /// A foreign library is missing its supported profile.
+    foreign_missing_profile => "foreign-missing-profile" {},
+    /// A foreign library contains a member outside the existing supported set.
+    foreign_unsupported_member => "foreign-unsupported-member" {},
     /// A term or operation name conflicts in its declaration scope.
     resolve_duplicate_global => "resolve-duplicate-global" { name: &'a str = "value" },
     /// Nominal types, interfaces and effects share a declaration namespace.

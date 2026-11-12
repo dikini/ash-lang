@@ -9,12 +9,19 @@ use std::{error::Error, fmt};
 
 pub(crate) const PROFILE: &str = "x86_64-unknown-linux-gnu";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ForeignContractCause {
+    MissingSupportedProfile,
+    UnsupportedMember,
+}
+
 /// A source declaration rejected before native linking or entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ForeignContractError {
     span: Span,
     message: &'static str,
     resource: bool,
+    cause: Option<ForeignContractCause>,
 }
 impl ForeignContractError {
     pub(crate) const fn new(span: Span, message: &'static str) -> Self {
@@ -22,7 +29,15 @@ impl ForeignContractError {
             span,
             message,
             resource: false,
+            cause: None,
         }
+    }
+    const fn with_cause(mut self, cause: ForeignContractCause) -> Self {
+        self.cause = Some(cause);
+        self
+    }
+    pub(crate) const fn diagnostic_cause(self) -> Option<ForeignContractCause> {
+        self.cause
     }
     pub const fn span(self) -> Span {
         self.span
@@ -42,6 +57,7 @@ fn paid(work: &mut TypeWorkBudget, n: usize, span: Span) -> Result<(), ForeignCo
         span,
         message: "foreign declaration work exhausted",
         resource: true,
+        cause: None,
     })
 }
 fn text(
@@ -56,6 +72,7 @@ fn text(
             span,
             message: "foreign declaration storage exhausted",
             resource: true,
+            cause: None,
         })?;
     copy.push_str(value);
     Ok(copy)
@@ -132,6 +149,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
             span: source.span,
             message: "foreign declaration storage exhausted",
             resource: true,
+            cause: None,
         })?;
     for (member_index, member) in source.members.iter().enumerate() {
         match member {
@@ -166,7 +184,8 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 return Err(ForeignContractError::new(
                     source.span,
                     "unsupported foreign library member",
-                ));
+                )
+                .with_cause(ForeignContractCause::UnsupportedMember));
             }
         }
     }
@@ -174,7 +193,8 @@ pub(crate) fn prepare_foreign_library_with_budget(
         return Err(ForeignContractError::new(
             source.span,
             "one supported foreign profile is required",
-        ));
+        )
+        .with_cause(ForeignContractCause::MissingSupportedProfile));
     }
     Ok(PreparedForeignLibrary {
         module,

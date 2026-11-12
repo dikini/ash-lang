@@ -222,6 +222,13 @@ causal labels. Runtime records retain resource details, the first teardown
 failure and cleanup status. Output remains on standard error; selecting a format
 does not change success output or exit status.
 
+Contextual unknown-type and unknown-constructor diagnostics retain the actual
+name and lookup scope. When available, their labels also identify the syntax
+invocation and definition. For a presentable missing-profile or unsupported-member
+foreign-library failure, the JSON `contract_cause` fact records the existing
+cause; a duplicate profile follows the unsupported-member path. These facts
+describe the original failure and do not change admission.
+
 Diagnostic options must precede the entry path and may each occur only once.
 An explicit locale overrides the first nonempty `LC_ALL`, `LC_MESSAGES` or
 `LANG`. English and Bulgarian are supported. POSIX locale spelling and parent

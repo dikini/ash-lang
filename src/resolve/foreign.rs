@@ -1,8 +1,10 @@
 //! Native symbols use the ordinary source effect operation path.
 use super::{
-    DependencyExports, ResolveError, ResolveReason, ResolvedDeclarations, Resolver, error,
+    DependencyExports, ResolveContext, ResolveError, ResolveReason, ResolvedDeclarations, Resolver,
+    error, prepay_diagnostic_location,
 };
 use crate::{
+    diagnostic::{Diagnostic, SourceLabel},
     foreign::{
         checked_source::{ForeignBindingContext, NativeLibraryId, bind_foreign_symbol},
         source_contract::{PreparedForeignLibrary, prepare_foreign_library_with_budget},
@@ -152,19 +154,37 @@ impl Resolver<'_, '_> {
                 )
             })?;
         for library in &surface.foreign_libraries {
-            let prepared =
-                prepare_foreign_library_with_budget(self.module, library, &mut self.type_work)
-                    .map_err(|failure| {
-                        error(
-                            if failure.is_resource_exhaustion() {
-                                ResolveReason::TypeResourceExhausted
-                            } else {
-                                ResolveReason::ForeignContract
-                            },
+            let prepared = match prepare_foreign_library_with_budget(
+                self.module,
+                library,
+                &mut self.type_work,
+            ) {
+                Ok(prepared) => prepared,
+                Err(failure) => {
+                    if let Some(cause) = failure.diagnostic_cause() {
+                        prepay_diagnostic_location(
+                            &mut self.type_work,
+                            library.name.diagnostic.as_deref(),
                             failure.span(),
-                            &failure.to_string(),
-                        )
-                    })?;
+                        )?;
+                        let label = SourceLabel::new(failure.span(), failure.to_string())
+                            .with_location_preserving_span(library.name.diagnostic.as_deref());
+                        return Err(ResolveError::new(
+                            Diagnostic::new(ResolveReason::ForeignContract, label),
+                            Some(ResolveContext::ForeignContract(cause)),
+                        ));
+                    }
+                    return Err(error(
+                        if failure.is_resource_exhaustion() {
+                            ResolveReason::TypeResourceExhausted
+                        } else {
+                            ResolveReason::ForeignContract
+                        },
+                        failure.span(),
+                        &failure.to_string(),
+                    ));
+                }
+            };
             let start = surface
                 .effects
                 .iter()
