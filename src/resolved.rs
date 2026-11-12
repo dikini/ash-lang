@@ -21031,6 +21031,327 @@ mod tests {
     }
     use super::*;
 
+    #[test]
+    fn admitted_effect_summary_reauthenticates_and_releases_its_source() {
+        use crate::{
+            elaborate::check_module,
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+        };
+
+        fn authenticate_capture(
+            summary: &ExportSummary,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), ResolvedBuildFailure> {
+            let capture = &summary.term("invoke").expect("public callable").capture;
+            let mut visits = crate::core::capture::CaptureGraphVisits::default();
+            let mut originals = OriginalEffectMemo::new();
+            summary.authenticate_capture_effect_closure(
+                capture,
+                &KindEnvironments::new(),
+                &mut visits,
+                &mut originals,
+                work,
+            )
+        }
+
+        let (summary, source_weak, record_weak) = {
+            let entry = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/effects/admitted-coordinate-summary/entry.ash");
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let mut checked_dependencies = Vec::<CheckedModule>::new();
+            for module in graph
+                .modules()
+                .iter()
+                .filter(|module| module.id() != graph.entry())
+            {
+                let dependencies = module
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        DependencyExports::new(
+                            edge,
+                            checked_dependencies
+                                .iter()
+                                .find(|checked| checked.module() == edge.target())
+                                .unwrap()
+                                .exports(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                checked_dependencies
+                    .push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+            }
+            let loaded = graph.module(graph.entry()).unwrap();
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked_dependencies
+                            .iter()
+                            .find(|checked| checked.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut resolved = resolve_module(loaded, &dependencies).unwrap();
+            let checked = check_module(resolve_module(loaded, &dependencies).unwrap()).unwrap();
+            let source_weak = Arc::downgrade(loaded.retained_source());
+            let record = resolved.effect_coordinates.take().unwrap();
+            let record_weak = Arc::downgrade(&record);
+            let record_count = Arc::strong_count(&record);
+
+            // The real resolved-module transport pays before accepting its Arc.
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    resolved.retain_effect_coordinates(Arc::clone(&record), &mut short),
+                    Err(ResolvedBuildFailure::TypeResource),
+                );
+                assert!(resolved.effect_coordinates.is_none());
+                assert_eq!(Arc::strong_count(&record), record_count);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + 1);
+                    exact.charge(prefix).unwrap();
+                    resolved
+                        .retain_effect_coordinates(Arc::clone(&record), &mut exact)
+                        .unwrap();
+                    assert_eq!(exact.used(), prefix + 1);
+                    assert!(Arc::ptr_eq(
+                        resolved.effect_coordinates.as_ref().unwrap(),
+                        &record
+                    ));
+                    drop(resolved.effect_coordinates.take());
+                    assert_eq!(Arc::strong_count(&record), record_count);
+                }
+            }
+            let (donor_module, donor) = checked_dependencies
+                .iter()
+                .filter(|dependency| dependency.module() != loaded.id())
+                .find_map(|dependency| {
+                    dependency
+                        .exports
+                        .effect_coordinates
+                        .as_ref()
+                        .map(|record| (dependency.module(), record))
+                })
+                .expect("an actual checked dependency supplies a different owner record");
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(donor), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            let original_source = Arc::clone(&resolved.defining_sources[0].1);
+            resolved.defining_sources[0].1 = Arc::new(original_source.as_ref().clone());
+            assert_eq!(resolved.defining_sources[0].1.id(), original_source.id());
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            resolved.defining_sources[0].1 = Arc::clone(&original_source);
+            let original_module = resolved.defining_sources[0].0;
+            resolved.defining_sources[0].0 = donor_module;
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            resolved.defining_sources[0].0 = original_module;
+            resolved
+                .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default())
+                .unwrap();
+            drop(original_source);
+            drop(record);
+
+            let freeze =
+                |work: &mut TypeWorkBudget,
+                 constraints: &mut crate::interface::InterfaceConstraintBudget| {
+                    ExportSummary::freeze(
+                        &resolved,
+                        &checked.schemes,
+                        &checked.interface_facts,
+                        &checked.checked_implementations,
+                        &checked.implementation_facts,
+                        work,
+                        constraints,
+                    )
+                };
+            let mut measured = TypeWorkBudget::default();
+            let mut summary = freeze(
+                &mut measured,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .unwrap();
+            let total = measured.used();
+            let record = resolved.effect_coordinates.as_ref().unwrap();
+            let record_count = Arc::strong_count(record);
+            let source_count = Arc::strong_count(loaded.retained_source());
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    freeze(
+                        &mut short,
+                        &mut crate::interface::InterfaceConstraintBudget::default()
+                    ),
+                    Err(ResolvedBuildFailure::TypeResource)
+                ));
+                assert_eq!(Arc::strong_count(record), record_count);
+                assert_eq!(Arc::strong_count(loaded.retained_source()), source_count);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                    exact.charge(prefix).unwrap();
+                    let retry = freeze(
+                        &mut exact,
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + total);
+                    assert!(Arc::ptr_eq(
+                        retry.effect_coordinates.as_ref().unwrap(),
+                        record
+                    ));
+                    drop(retry);
+                    assert_eq!(Arc::strong_count(record), record_count);
+                    assert_eq!(Arc::strong_count(loaded.retained_source()), source_count);
+                }
+            }
+
+            let first = summary
+                .effects
+                .iter()
+                .position(|effect| effect.spelling == "First")
+                .unwrap();
+            let second = summary
+                .effects
+                .iter()
+                .position(|effect| effect.spelling == "Second")
+                .unwrap();
+            let first_id = summary.effects[first].id;
+            let second_id = summary.effects[second].id;
+            let captured = summary
+                .term("invoke")
+                .unwrap()
+                .capture
+                .effects(&mut TypeWorkBudget::default())
+                .unwrap()
+                .collect::<HashSet<_>>();
+            assert!(captured.contains(&first_id) && captured.contains(&second_id));
+            summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .unwrap();
+            let mut measured = TypeWorkBudget::default();
+            authenticate_capture(&summary, &mut measured).unwrap();
+            let capture_total = measured.used();
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + capture_total - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    authenticate_capture(&summary, &mut short),
+                    Err(ResolvedBuildFailure::TypeResource)
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + capture_total);
+                    exact.charge(prefix).unwrap();
+                    authenticate_capture(&summary, &mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + capture_total);
+                }
+            }
+            for mutation in 0..3 {
+                let saved = summary.effects[first].clone();
+                match mutation {
+                    0 => summary.effects[first].spelling = summary.effects[second].spelling.clone(),
+                    1 => summary.effects[first].span = summary.effects[second].span,
+                    _ => summary.effects[first].origin = summary.effects[second].origin.clone(),
+                }
+                assert_eq!(
+                    authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                    Err(ResolvedBuildFailure::InvalidState)
+                );
+                summary.effects[first] = saved;
+            }
+            let effects = summary.effects.clone();
+            let positions = summary.effect_positions.clone();
+            summary.effects[first].id = second_id;
+            summary.effects[second].id = first_id;
+            for operation in summary.effects[first].operations.iter_mut() {
+                operation.id = OperationId::new(second_id, operation.id.operation());
+            }
+            for operation in summary.effects[second].operations.iter_mut() {
+                operation.id = OperationId::new(first_id, operation.id.operation());
+            }
+            summary.effect_positions.insert(first_id, second);
+            summary.effect_positions.insert(second_id, first);
+            assert_eq!(
+                summary.effects[*summary.effect_positions.get(&first_id).unwrap()].id,
+                first_id
+            );
+            assert_eq!(
+                summary.effects[*summary.effect_positions.get(&second_id).unwrap()].id,
+                second_id
+            );
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.effects = effects;
+            summary.effect_positions = positions;
+
+            let own_source = summary
+                .defining_sources
+                .iter()
+                .position(|(module, _)| *module == summary.module)
+                .unwrap();
+            let source = Arc::clone(&summary.defining_sources[own_source].1);
+            summary.defining_sources[own_source].1 = Arc::new(source.as_ref().clone());
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.defining_sources[own_source].1 = source;
+            let original_record = summary.effect_coordinates.take().unwrap();
+            summary.effect_coordinates = Some(Arc::clone(donor));
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.effect_coordinates = Some(original_record);
+            authenticate_capture(&summary, &mut TypeWorkBudget::default()).unwrap();
+            (summary, source_weak, record_weak)
+        };
+        assert!(source_weak.upgrade().is_some());
+        assert!(record_weak.upgrade().is_some());
+        let source = Arc::clone(
+            &summary
+                .defining_sources
+                .iter()
+                .find(|(module, _)| *module == summary.module)
+                .unwrap()
+                .1,
+        );
+        let record = Arc::clone(summary.effect_coordinates.as_ref().unwrap());
+        drop(summary);
+        assert!(source_weak.upgrade().is_some());
+        assert!(record_weak.upgrade().is_some());
+        drop(source);
+        drop(record);
+        assert!(source_weak.upgrade().is_none());
+        assert!(record_weak.upgrade().is_none());
+    }
+
     fn capture_method_fixture() -> ResolvedImplementationMethodGroup {
         let file = SourceFile::new("capture-work.ash", "x + x + y").expect("source");
         let module = ModuleId::new(42_005);
