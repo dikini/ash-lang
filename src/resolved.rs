@@ -17641,6 +17641,51 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_nominal_invocation_for_core_test(
+        &mut self,
+        id: NominalTypeId,
+        original: Span,
+        replacement: Span,
+    ) -> bool {
+        let Some(position) = self.nominal_positions.get(&id).copied() else {
+            return false;
+        };
+        let Some(nominal) = self.nominals.get(position) else {
+            return false;
+        };
+        if nominal.id != id
+            || !matches!(nominal.origin, Origin::Expansion { invocation, .. } if invocation == original)
+            || nominal.constructors.is_empty()
+            || self.constructors.iter().filter(|constructor| constructor.owner == id).count()
+                != nominal.constructors.len()
+            || self
+                .constructors
+                .iter()
+                .filter(|constructor| constructor.owner == id)
+                .any(|constructor| {
+                    !matches!(constructor.origin, Origin::Expansion { invocation, .. } if invocation == original)
+                })
+        {
+            return false;
+        }
+        let Origin::Expansion { invocation, .. } = &mut self.nominals[position].origin else {
+            unreachable!()
+        };
+        *invocation = replacement;
+        for constructor in self
+            .constructors
+            .iter_mut()
+            .filter(|constructor| constructor.owner == id)
+        {
+            let Origin::Expansion { invocation, .. } = &mut constructor.origin else {
+                unreachable!()
+            };
+            *invocation = replacement;
+        }
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
         let Some(nominal) = self.lexical_nominals.first_mut() else {
             return false;

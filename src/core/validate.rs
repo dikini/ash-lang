@@ -3569,6 +3569,9 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     newtype_conversion_parameter_work: Cell<usize>,
     #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
+    #[cfg(test)]
+    nominal_overlap_refusal:
+        Cell<Option<(crate::types::NominalTypeId, crate::types::NominalTypeId)>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -3810,6 +3813,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             newtype_conversion_parameter_work: Cell::new(0),
             #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
+            #[cfg(test)]
+            nominal_overlap_refusal: Cell::new(None),
         }
     }
 
@@ -7919,6 +7924,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 && nominal_span != previous_span
                 && !self.allows_original_nominal_overlap(previous, nominal, source)?
             {
+                #[cfg(test)]
+                self.nominal_overlap_refusal
+                    .set(Some((previous.id, nominal.id)));
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
@@ -33393,6 +33401,169 @@ mod tests {
             }
         }
         eprintln!("checked original owner preparation used exactly {exact} work units");
+    }
+
+    #[test]
+    fn checked_original_nested_nominal_pair_rejects_contained_origin_mutation() {
+        use super::super::dialect::checked_owner_anchors::OriginalNominalPair;
+
+        fn configuration() -> crate::driver::RunConfiguration {
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/derives/nested.ash"),
+                roots: ModuleRoots::empty(),
+            }
+        }
+
+        fn check_pair(pair: OriginalNominalPair) {
+            assert_eq!(
+                pair.previous_source.range(),
+                ByteRange::new(35, 76).unwrap()
+            );
+            assert_eq!(pair.invocation.range(), ByteRange::new(70, 75).unwrap());
+            assert_ne!(pair.definition.source(), pair.source);
+        }
+
+        fn mutate_and_check(
+            program: &mut UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            prepared: Option<&GeneratedParameterAnchors>,
+            pair: OriginalNominalPair,
+        ) {
+            check_pair(pair);
+            let source = sources
+                .iter()
+                .find(|source| source.id() == pair.source)
+                .unwrap();
+            let changed = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+            assert!(changed.range().start() >= pair.previous_source.range().start());
+            assert!(changed.range().end() <= pair.previous_source.range().end());
+            let registry = Arc::make_mut(&mut program.registry);
+            assert!(registry.replace_nominal_invocation_for_core_test(
+                pair.current,
+                pair.invocation,
+                changed,
+            ));
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed
+            )));
+            let mut validator = Validator::new_modules(program, sources, relations).unwrap();
+            validator.prepared_owner_anchors = prepared;
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .err()
+                .expect("the fixed-original overlap must refuse");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+        }
+
+        let original = crate::driver::compile_path(configuration())
+            .expect("the unchanged nested derive graph compiles");
+        assert_eq!(
+            crate::driver::execute(&original).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = original.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the actual checked nested pair is retained");
+        check_pair(pair);
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild the original nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &relations)
+                .expect("the untouched nested transform independently validates");
+            let mut changed = rebuild().expect("rebuild for the fixed-original mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            mutate_and_check(&mut changed, &sources, &relations, None, pair);
+            assert!(validate_effect_modules(changed, &sources, &relations).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "{name}: exact original nominal pair rejected the still-contained 70..75 to 69..75 mutation"
+            );
+        }
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |mut program, sources, relations, linked| {
+                let anchors = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("prepare the actual checked linked originals");
+                let pair = *anchors
+                    .nominal_pairs()
+                    .iter()
+                    .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                    .expect("the actual linked nominal pair is present");
+                mutate_and_check(&mut program, sources, relations, Some(&anchors), pair);
+                reached.set(true);
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        );
+        assert!(reached.get(), "the actual linked guard was reached");
+        assert!(
+            negative.is_err(),
+            "the linked entry must reject the mutation"
+        );
+        eprintln!(
+            "linked: actual checked original pair rejected the coordinated contained mutation"
+        );
     }
 
     #[test]
