@@ -25477,6 +25477,7 @@ mod tests {
                 &[],
                 &[],
                 vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: if mode == 3 {
                         None
                     } else if mode == 4 {
@@ -25594,6 +25595,7 @@ mod tests {
                 &[],
                 &[],
                 vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: Some(selected_index),
                     declaration: selected.span(),
                     import_span: entry.surface().span,
