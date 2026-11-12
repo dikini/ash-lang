@@ -9441,6 +9441,7 @@ mod tests {
         let mut constructors = registry.constructors().to_vec();
         let effects = registry.effects().to_vec();
         let owner = nominals[0].id;
+        let shared_origin = constructors.last().unwrap().origin.clone();
         let mut ids = nominals[0].constructors.to_vec();
         for (index, name) in ["NoCaptures", "MoreCaptures", "RepeatedCapture"]
             .iter()
@@ -9453,7 +9454,7 @@ mod tests {
                 owner,
                 spelling: (*name).into(),
                 payload: (*name != "NoCaptures").then_some(Type::Unit),
-                origin: Origin::Source(fixture.caller.span),
+                origin: shared_origin.clone(),
             });
         }
         nominals[0].constructors = ids.into_boxed_slice();
