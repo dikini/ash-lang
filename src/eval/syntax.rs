@@ -3587,6 +3587,80 @@ mod tests {
     }
 
     #[test]
+    fn declaration_syntax_checks_handle_ownership_and_releases_contents() {
+        use super::{RuntimeFailure, Value};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind, surface::SurfaceDeclarationCapture,
+            syntax::MacroOutputNode, syntax_resource::SyntaxBudget, types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let weak = Arc::downgrade(&contents);
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&[], &mut budget).unwrap();
+        host.declarations.push(SurfaceDeclarationCapture {
+            contents: Arc::clone(&contents),
+        });
+        let local = host.handle(CompilerSyntaxHandleKind::Declaration(0));
+
+        let mut foreign_budget = SyntaxBudget::default();
+        let mut foreign = fixture.host(&[], &mut foreign_budget).unwrap();
+        foreign.declarations.push(SurfaceDeclarationCapture {
+            contents: Arc::clone(&contents),
+        });
+        let foreign_handle = foreign.handle(CompilerSyntaxHandleKind::Declaration(0));
+        let stale_handle = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&[], &mut stale_budget).unwrap();
+            stale.declarations.push(SurfaceDeclarationCapture {
+                contents: Arc::clone(&contents),
+            });
+            stale.handle(CompilerSyntaxHandleKind::Declaration(0))
+        };
+        let invalid = [
+            foreign_handle,
+            stale_handle,
+            host.handle(CompilerSyntaxHandleKind::Type(0)),
+            host.handle(CompilerSyntaxHandleKind::Declaration(1)),
+            Value::Unit,
+        ];
+        let mut heap = Vec::new();
+        let retained = Arc::strong_count(&contents);
+        for handle in invalid {
+            assert!(matches!(
+                host.request(
+                    fixture.unwrap,
+                    handle,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.declarations.len(), 1);
+            assert_eq!(Arc::strong_count(&contents), retained);
+            assert!(heap.is_empty());
+        }
+        for _ in 0..2 {
+            host.request(
+                fixture.unwrap,
+                local.clone(),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the local declaration handle remains reusable");
+            assert_eq!(Arc::strong_count(&contents), retained);
+        }
+        drop(heap);
+        drop(host);
+        drop(foreign);
+        assert_eq!(Arc::strong_count(&contents), 1);
+        drop(contents);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     fn type_host_origin_arena_prepays_growth_before_issuance() {
         use crate::{
             eval::RuntimeFailure,
@@ -6810,6 +6884,169 @@ mod tests {
                 let syntax = input_syntax(&mut exact_host, &mut heap, valid);
                 parse_type(&mut exact_host, operation, &syntax, &mut heap).unwrap();
                 parse_type(&mut exact_host, operation, &syntax, &mut heap).unwrap();
+                assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+            }
+        }
+    }
+
+    #[test]
+    fn declaration_parse_result_and_failure_work_have_exact_retry_boundaries() {
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
+        use crate::{
+            lexer::{TokenKind, lex},
+            module::ModuleId,
+            source::{ByteRange, SourceFile},
+            syntax::{ExpansionFrame, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        fn host(budget: &mut SyntaxBudget) -> (SyntaxHost<'_>, OperationId) {
+            let mut host = scalar_host(budget);
+            let operation = OperationId::new(host.ops, 0);
+            host.operations
+                .insert(operation, "parse_declaration".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip([
+                "Syntax",
+                "NoNodes",
+                "MoreNodes",
+                "GroupNode",
+                "DeclarationNode",
+                "TypeNode",
+                "PatternNode",
+                "ExpressionNode",
+                "IdentifierNode",
+                "TokenNode",
+                "ParsedDeclaration",
+                "ParseRejected",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            let source =
+                SourceFile::new("parse-declaration-component.ash", "answer _ = 42").unwrap();
+            let span = source
+                .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                .unwrap();
+            host.source = source;
+            host.frame = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            host.caller.span = span;
+            (host, operation)
+        }
+
+        fn syntax(host: &mut SyntaxHost<'_>, heap: &mut Vec<HeapCell>, valid: bool) -> Value {
+            let nodes = if valid {
+                let lexed = lex(&host.source).unwrap();
+                assert!(lexed.diagnostics.is_empty());
+                lexed
+                    .tokens
+                    .into_iter()
+                    .filter(|token| token.kind != TokenKind::EndOfFile)
+                    .map(|token| {
+                        let range = token.span.range();
+                        let spelling =
+                            &host.source.text()[range.start() as usize..range.end() as usize];
+                        MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            host.syntax_value(&nodes, heap, 0).unwrap()
+        }
+
+        fn parse(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            syntax: Value,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields = vec![host.input(), syntax].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        // These synthetic constructors exercise the actual host, parser and
+        // continuing work ledger; imported public consumers are checked separately.
+        for valid in [true, false] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let (mut measured_host, operation) = host(&mut measured);
+            let mut heap = Vec::new();
+            let input = syntax(&mut measured_host, &mut heap, valid);
+            let result = parse(&mut measured_host, operation, input, &mut heap).unwrap();
+            let (tag, _) = constructor_fields(&result, &heap).unwrap();
+            assert_eq!(
+                tag,
+                measured_host
+                    .constructor(if valid {
+                        "ParsedDeclaration"
+                    } else {
+                        "ParseRejected"
+                    })
+                    .unwrap()
+            );
+            assert_eq!(measured_host.declarations.len(), usize::from(valid));
+            assert_eq!(measured_host.parse_failures.len(), usize::from(!valid));
+            if !valid {
+                assert!(measured_host.parse_failures[0].1.is_none());
+            }
+            let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+            drop(measured_host);
+
+            // The last unit constructs the public result. A one-unit-short
+            // request may retain a private arena entry, but returns no handle;
+            // dropping the host disposes that entry before the fresh retry.
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            let (mut short_host, operation) = host(&mut short);
+            let mut heap = Vec::new();
+            let input = syntax(&mut short_host, &mut heap, valid);
+            let heap_before = heap.len();
+            assert!(matches!(
+                parse(&mut short_host, operation, input, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            // The input pair is private to the call; no result constructor was added.
+            assert_eq!(heap.len(), heap_before + 1);
+            assert_eq!(short_host.declarations.len(), usize::from(valid));
+            assert_eq!(short_host.parse_failures.len(), usize::from(!valid));
+            let retained = short_host
+                .declarations
+                .first()
+                .map(|capture| Arc::downgrade(&capture.contents));
+            drop(heap);
+            drop(short_host);
+            if let Some(retained) = retained {
+                assert!(retained.upgrade().is_none());
+            }
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                let (mut exact_host, operation) = host(&mut exact);
+                let mut heap = Vec::new();
+                let input = syntax(&mut exact_host, &mut heap, valid);
+                let result = parse(&mut exact_host, operation, input, &mut heap).unwrap();
+                let (tag, _) = constructor_fields(&result, &heap).unwrap();
+                assert_eq!(
+                    tag,
+                    exact_host
+                        .constructor(if valid {
+                            "ParsedDeclaration"
+                        } else {
+                            "ParseRejected"
+                        })
+                        .unwrap()
+                );
                 assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
             }
         }
