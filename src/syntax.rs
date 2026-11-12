@@ -2034,11 +2034,6 @@ fn copy_fragment_output_inner(
             }
             MacroOutputNode::Expression(capture, origin)
             | MacroOutputNode::ForwardedExpression(capture, origin) => {
-                if matches!(mode, FragmentCopy::ForwardedDeclaration(_))
-                    && matches!(node, MacroOutputNode::Expression(_, _))
-                {
-                    return Err(MacroParseFailure::Invalid);
-                }
                 contains_expression = true;
                 contains_protected_type |= capture.contains_protected_type;
                 let child = type_depth(depth, 1).map_err(resource)?;

@@ -2112,6 +2112,15 @@ impl ParserCheckpoint {
     pub(crate) const fn resource_failure(&self) -> Option<ResourceFailure> {
         self.resource_failure
     }
+
+    pub(crate) fn into_diagnostics(
+        self,
+    ) -> (
+        Vec<Diagnostic<crate::lexer::LexReason>>,
+        Vec<ParseDiagnostic>,
+    ) {
+        (self.lexical_diagnostics, self.diagnostics)
+    }
 }
 
 pub(crate) fn parse_module_header(

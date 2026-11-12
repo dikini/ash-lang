@@ -6927,8 +6927,11 @@ mod tests {
                 host.constructors
                     .insert(name.into(), ConstructorId::new(owner, index));
             }
-            let source =
-                SourceFile::new("parse-declaration-component.ash", "answer _ = 42").unwrap();
+            let source = SourceFile::new(
+                "parse-declaration-component.ash",
+                "answer : Int -> Int\nanswer _ = 42",
+            )
+            .unwrap();
             let span = source
                 .span(ByteRange::new(0, source.text().len() as u32).unwrap())
                 .unwrap();

@@ -3192,6 +3192,25 @@ fn parse_graph_module(
             });
         }
     };
+    let needs_quote_dependency = if needs_quote_dependency {
+        true
+    } else {
+        match syntax_import_needs_quote_dependency(&imports, syntax_budget) {
+            Ok(needs_quote_dependency) => needs_quote_dependency,
+            Err(resource) => {
+                // The checkpoint already owns these diagnostics; move them
+                // without copying after the continuing budget refuses work.
+                let (lexical, parser) = checkpoint.into_diagnostics();
+                return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    lexical,
+                    parser,
+                    resource: Some(resource),
+                    source,
+                    import_span,
+                })));
+            }
+        }
+    };
     let span = match module_span_from_checkpoint(&source, &checkpoint) {
         Ok(span) => span,
         Err(error) => {
@@ -3213,6 +3232,24 @@ fn parse_graph_module(
             needs_generator_dependency,
         },
     ))
+}
+
+fn syntax_import_needs_quote_dependency(
+    imports: &[SurfaceImport],
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    for import in imports {
+        budget.charge()?;
+        if let SurfaceImportSelection::Targeted(items) = &import.selection {
+            for item in items {
+                budget.charge()?;
+                if matches!(item, SurfaceImportItem::Syntax { .. }) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 // Source, syntax owners and the budget are separate projection inputs.

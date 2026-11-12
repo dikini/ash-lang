@@ -3996,14 +3996,16 @@ pub(crate) fn project_declaration_expansions_with_resource(
                         )
                         .into());
                     }
-                    let protected_type = check_narrow_protected_refusal_inner(
+                    let mut raw_quote = false;
+                    let protected_type = check_narrow_protected_refusal_with_quote(
                         child,
                         tokens.originals,
                         false,
                         Some(&current.contexts),
+                        Some(&mut raw_quote),
                         budget,
                     )?;
-                    if protected_type || current.forwarded_expression {
+                    if protected_type || current.forwarded_expression || raw_quote {
                         if charge_projection_preflight_with_expression(
                             child,
                             &tokens,
@@ -4012,7 +4014,7 @@ pub(crate) fn project_declaration_expansions_with_resource(
                             true,
                             Some(&current.contexts),
                             0,
-                            false,
+                            raw_quote,
                             budget,
                         )? {
                             return Err(ProjectionError::MalformedTree(
@@ -4023,6 +4025,9 @@ pub(crate) fn project_declaration_expansions_with_resource(
                         let expression_budget = std::cell::RefCell::new(&mut *budget);
                         let mut selected_tokens = current.tokens(&staging_frames);
                         selected_tokens.expression_budget = Some(&expression_budget);
+                        if raw_quote {
+                            selected_tokens.quote_sites = quote_sites;
+                        }
                         if derived_outputs.is_some() {
                             module.project_consumed_nominal(source, child, &selected_tokens)?;
                         } else {
@@ -6624,6 +6629,24 @@ fn check_narrow_protected_refusal_inner(
     template_contexts: Option<&crate::syntax::SyntaxContexts>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    check_narrow_protected_refusal_with_quote(
+        root,
+        originals,
+        transformer_type_arguments,
+        template_contexts,
+        None,
+        budget,
+    )
+}
+
+fn check_narrow_protected_refusal_with_quote(
+    root: &ConcreteNode,
+    originals: Option<&std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
+    transformer_type_arguments: bool,
+    template_contexts: Option<&crate::syntax::SyntaxContexts>,
+    mut raw_quote: Option<&mut bool>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     // The dummy value represents an argument without a usable callee token.
     // A one-based offset reserves it while keeping the legacy worklist's size.
     let dummy = std::num::NonZeroU32::new(1).expect("one is nonzero");
@@ -6636,6 +6659,11 @@ fn check_narrow_protected_refusal_inner(
     };
     let mut protected_type = false;
     while let Some((node, expression_argument, declaration_argument)) = pending.pop() {
+        if node.kind == NodeKind::SyntaxQuote
+            && let Some(raw_quote) = raw_quote.as_deref_mut()
+        {
+            *raw_quote = true;
+        }
         if transformer_type_arguments {
             budget.charge()?;
         }
