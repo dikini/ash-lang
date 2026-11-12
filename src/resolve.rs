@@ -20323,6 +20323,29 @@ mod tests {
         }
     }
 
+    fn resolve_coordinate_fixture(
+        graph: &crate::module::ModuleGraph,
+        loaded: &LoadedModule,
+    ) -> ResolvedModule {
+        let checked = checked_import_dependencies(graph);
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("fixture dependency should be checked")
+                        .exports(),
+                )
+                .expect("fixture dependency should match its edge")
+            })
+            .collect::<Vec<_>>();
+        resolve_module(loaded, &dependencies).expect("the effect fixture should resolve")
+    }
+
     #[test]
     fn admitted_effect_coordinates_keep_slots_anchors_and_current_fact_checks() {
         let fixture = ImportBudgetFixture::create(
@@ -20360,7 +20383,7 @@ mod tests {
         }
         assert_eq!(Arc::strong_count(source), strong);
 
-        let resolved = resolve_module(loaded, &[]).unwrap();
+        let resolved = resolve_coordinate_fixture(&graph, loaded);
         let [first, second] = resolved.effects() else {
             panic!("two effects")
         };
@@ -20461,7 +20484,7 @@ mod tests {
             &mut TypeWorkBudget::default(),
         )
         .unwrap();
-        let resolved = resolve_module(loaded, &[]).unwrap();
+        let resolved = resolve_coordinate_fixture(&graph, loaded);
         let [before, native, after] = resolved.effects() else {
             panic!("three effects")
         };
