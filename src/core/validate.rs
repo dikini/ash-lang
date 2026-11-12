@@ -7825,7 +7825,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
-        let mut previous_nominal = HashMap::<ModuleId, Span>::new();
+        let mut previous_nominal = HashMap::<ModuleId, (&ResolvedNominalType, Span)>::new();
 
         let source_original = original.is_some();
         let nominals = registry_source_order(
@@ -7911,16 +7911,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal.get(&module).is_some_and(|previous| {
-                    nominal_range.start() < previous.range().end() && nominal_span != *previous
-                })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            if let Some((previous, previous_span)) = previous_nominal.get(&module).copied()
+                && nominal_range.start() < previous_span.range().end()
+                && nominal_span != previous_span
+                && !self.allows_original_nominal_overlap(previous, nominal, source)?
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_nominal.insert(module, nominal_span);
+            previous_nominal.insert(module, (nominal, nominal_span));
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
 

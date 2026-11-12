@@ -8,8 +8,8 @@ use crate::{
     },
     interface::MethodId,
     module::ModuleId,
-    resolved::{OwnerId, ResolvedTypeVariable},
-    source::{Origin, Span},
+    resolved::{OwnerId, ResolvedNominalType, ResolvedTypeVariable},
+    source::{Origin, SourceId, Span},
     types::TypeVariableId,
 };
 
@@ -340,5 +340,63 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.authenticate_checked_originals()?;
         Ok(self.original_slot_matches(previous.id, *previous_span)?
             && self.original_slot_matches(current.id, *current_span)?)
+    }
+
+    pub(super) fn allows_original_nominal_overlap(
+        &self,
+        previous: &ResolvedNominalType,
+        current: &ResolvedNominalType,
+        source: SourceId,
+    ) -> Result<bool, ValidationError> {
+        let (
+            Origin::Source(previous_source),
+            Origin::Expansion {
+                invocation,
+                definition,
+            },
+        ) = (&previous.origin, &current.origin)
+        else {
+            return Ok(false);
+        };
+        let module = current.id.module();
+        let outer = previous_source.range();
+        let inner = invocation.range();
+        if previous.id.module() != module
+            || previous.id.is_lexical()
+            || current.id.is_lexical()
+            || previous.id.declaration().checked_add(1) != Some(current.id.declaration())
+            || previous_source.source() != source
+            || invocation.source() != source
+            || outer.start() >= outer.end()
+            || inner.start() >= inner.end()
+            || inner.start() < outer.start()
+            || inner.end() > outer.end()
+        {
+            return Ok(false);
+        }
+        let pairs = self
+            .prepared_owner_anchors
+            .unwrap_or(self.program.generated_parameter_anchors.as_ref())
+            .nominal_pairs();
+        let (mut low, mut high) = (0, pairs.len());
+        while low < high {
+            self.charge_type_work(1)?;
+            let middle = low + (high - low) / 2;
+            let pair = &pairs[middle];
+            match pair.current.cmp(&current.id) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => {
+                    return Ok(pair.module == module
+                        && pair.source == source
+                        && pair.previous == previous.id
+                        && pair.previous_source == *previous_source
+                        && pair.current == current.id
+                        && pair.invocation == *invocation
+                        && pair.definition == *definition);
+                }
+            }
+        }
+        Ok(false)
     }
 }
