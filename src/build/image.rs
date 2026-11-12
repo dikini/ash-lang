@@ -5154,6 +5154,23 @@ mod tests {
                     "42"
                 );
             }
+            if generated {
+                crate::core::validate::exercise_restored_owner_swap_for_image_test(
+                    &restored.program,
+                    &sources,
+                    &module_sources,
+                );
+                assert_eq!(
+                    image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+                    bytes
+                );
+                assert_eq!(
+                    image
+                        .encode_native_expectations(&mut TypeWorkBudget::default())
+                        .unwrap(),
+                    expected
+                );
+            }
             for prefix in [0, 17] {
                 let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
                 short.charge(prefix).unwrap();
@@ -5390,7 +5407,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_image_rejects_coordinated_restored_owner_swap() {
+    fn concrete_method_image_keeps_existing_evidence_refusal() {
         let tree = SourceTree::new();
         tree.write(
             "forms.ash",
@@ -5401,53 +5418,23 @@ mod tests {
             "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
         );
         let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
         let (program, provenance) = compiled.effect_build_input().unwrap();
-        let build = encode_effect_for_build(
-            program,
-            provenance,
-            &[],
-            super::super::NATIVE_TARGET,
-            &mut TypeWorkBudget::default(),
-        )
-        .unwrap();
-        let bytes = build
-            .image
-            .encode_bytes(&mut TypeWorkBudget::default())
-            .unwrap();
-        let expected = build
-            .image
-            .encode_native_expectations(&mut TypeWorkBudget::default())
-            .unwrap();
-        drop(build);
-        drop(compiled);
-        drop(tree);
-
-        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = image
-            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
-            .unwrap();
-        let sources = restored._sources.iter().collect::<Vec<_>>();
-        let module_sources = restored
-            .modules
-            .iter()
-            .copied()
-            .zip(restored._sources.iter().map(SourceFile::id))
-            .collect::<Vec<_>>();
-        crate::core::validate::exercise_restored_owner_swap_for_image_test(
-            &restored.program,
-            &sources,
-            &module_sources,
-        );
-        assert_eq!(
-            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
-            bytes
-        );
-        assert_eq!(
-            image
-                .encode_native_expectations(&mut TypeWorkBudget::default())
-                .unwrap(),
-            expected
-        );
+        assert!(matches!(
+            encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(NativeImageFailure::Image(ImageFailure::Unsupported(
+                Unsupported::MethodEvidence
+            )))
+        ));
     }
 
     #[test]
