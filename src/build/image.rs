@@ -5316,7 +5316,18 @@ mod tests {
         changed
             .original_owner_rows
             .push(changed.original_owner_rows[method_row]);
-        refuses(&changed, &expected);
+        // The expectation intentionally compares the sealed prefix. The
+        // checked preflight must reject an owner-table suffix before mint.
+        assert!(
+            changed
+                .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                .is_ok()
+        );
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
         let mut changed = decode();
         changed.original_owner_parameters.remove(method_parameter);
         refuses(&changed, &expected);
