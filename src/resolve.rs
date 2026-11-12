@@ -8656,8 +8656,35 @@ impl Resolver<'_, '_> {
                 origin: Origin::Source(reference.span()),
             });
         }
-        if self.file_name_is_bound(&member.text) || self.contextual_type_variable(member).is_some()
-        {
+        let bound_as_type = if self.file_name_is_bound(&member.text) {
+            true
+        } else if member.introduction == 0 {
+            self.contextual_type_variable(member).is_some()
+        } else {
+            let message = "caller quote interface type-scope lookup exceeded its type-work budget";
+            self.type_work
+                .charge(member.text.len())
+                .map_err(|()| error(ResolveReason::TypeResourceExhausted, member.span, message))?;
+            let key = (
+                try_clone_resolution_string(&member.text, member.span, message)?,
+                member.introduction,
+            );
+            let mut found = false;
+            for scope in self.syntax_type_scopes.iter().rev() {
+                // Pay for the reached hash, comparison, and scope visit first.
+                self.type_work
+                    .charge(member.text.len().saturating_mul(2).saturating_add(1))
+                    .map_err(|()| {
+                        error(ResolveReason::TypeResourceExhausted, member.span, message)
+                    })?;
+                if scope.contains_key(&key) {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if bound_as_type {
             return Err(interface_kind_error(member.span, &member.text)
                 .with_name(member, &self.diagnostic_frames));
         }

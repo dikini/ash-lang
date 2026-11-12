@@ -4128,6 +4128,163 @@ mod tests {
     }
 
     #[test]
+    fn caller_quote_interface_lookup_pays_reached_type_scopes() {
+        use crate::{
+            interface::InterfaceConstraintBudget,
+            resolve::{ResolveModuleError, ResolveReason, resolve_module_with_syntax},
+            surface::{
+                SurfaceDefinitionKind, SurfaceExprKind, SurfaceLocalDeclaration, SurfaceReference,
+            },
+            syntax::{CallerQuoteOwner, SyntaxExpansion, SyntaxOwner},
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let run = |depth: usize,
+                   reference_introduction: usize,
+                   binder_introduction: usize,
+                   limit: usize,
+                   spent: usize| {
+            let mut text = String::from("main : Unit -> Int\nmain () = region<A> outer {\n");
+            for (name, handle) in [("B", "inner_b"), ("C", "inner_c"), ("D", "inner_d")]
+                .iter()
+                .take(depth)
+            {
+                text.push_str(&format!("region<{name}> {handle} {{\n"));
+            }
+            text.push_str("with A<Int> {\nunused value = value\n}\n42\n");
+            for _ in 0..=depth {
+                text.push_str("}\n");
+            }
+            let source =
+                Arc::new(SourceFile::new("caller-quote-interface-budget.ash", &text).unwrap());
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let mut surface = crate::parser::project_module(&source, &tree).unwrap();
+            let span = surface.span;
+            let SurfaceDefinitionKind::Equational(main) = &mut surface.definitions[0].kind else {
+                panic!("equational main")
+            };
+            let SurfaceExprKind::Region(outer) = &mut main.equations[0].body.kind else {
+                panic!("outer region")
+            };
+            outer.identity.introduction = binder_introduction;
+            if binder_introduction != 0 {
+                outer.identity.introduced_at = Some(span);
+                outer.identity.written = false;
+            }
+            let mut body = &mut outer.body;
+            for _ in 0..depth {
+                let SurfaceExprKind::Region(inner) = &mut body.result.kind else {
+                    panic!("inner region")
+                };
+                body = &mut inner.body;
+            }
+            let [SurfaceLocalDeclaration::Evidence(evidence)] = body.declarations.as_mut_slice()
+            else {
+                panic!("lexical evidence")
+            };
+            let SurfaceReference::Unqualified(member) = &mut evidence.application.interface else {
+                panic!("unqualified interface")
+            };
+            member.introduction = reference_introduction;
+            if reference_introduction != 0 {
+                member.introduced_at = Some(span);
+                member.written = false;
+            }
+            let id = ModuleId::new(90_402);
+            let owner = Arc::new(CallerQuoteOwner {
+                module: id,
+                source: Arc::clone(&source),
+                selected: Arc::from([]),
+            });
+            let loaded = LoadedModule {
+                id,
+                canonical_path: PathBuf::from("caller-quote-interface-budget.ash"),
+                source: Arc::clone(&source),
+                surface,
+                dependencies: Box::new([]),
+                quote_sites: Vec::new(),
+                quote_introduction: None,
+                caller_quote_owner: Some(Arc::clone(&owner)),
+            };
+            let mut transformer =
+                |_: &crate::syntax::SelectedSyntax,
+                 _: &[crate::surface::SurfaceSyntaxCapture],
+                 span: Span,
+                 _: &crate::surface::SurfaceName,
+                 _: usize,
+                 _: &[Option<usize>],
+                 _: &Arc<crate::syntax::ExpansionFrame>,
+                 _: &mut InterfaceConstraintBudget,
+                 _: Option<crate::syntax::QuoteExpansionLoan<'_>>|
+                 -> Result<(crate::syntax::ExpandedExpression, usize), Span> {
+                    Err(span)
+                };
+            let mut expansion = SyntaxExpansion::new(
+                loaded.source(),
+                &[],
+                &[],
+                vec![SyntaxOwner {
+                    owner: None,
+                    caller_quote_owner: Some(owner),
+                    declaration: span,
+                    import_span: span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut work = TypeWorkBudget::with_limit(limit);
+            work.charge(spent).unwrap();
+            let result = resolve_module_with_syntax(
+                &loaded,
+                &[],
+                &mut work,
+                &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+                &[],
+                &[],
+                &[],
+                Some(&mut expansion),
+            );
+            let Err(ResolveModuleError::Resolution(error)) = result else {
+                panic!("the fixture reaches the interface lookup")
+            };
+            (
+                error.reason,
+                error.diagnostic().primary.message().to_owned(),
+                work.used(),
+            )
+        };
+
+        for depth in 0..=3 {
+            let (ordinary, _, ordinary_work) = run(depth, 0, 0, usize::MAX, 0);
+            assert_eq!(ordinary, ResolveReason::InterfaceKind);
+            let (introduced, _, exact) = run(depth, 1, 1, usize::MAX, 0);
+            assert_eq!(introduced, ResolveReason::InterfaceKind);
+            // Three owner comparisons, one copied byte, then a hash, comparison,
+            // and visit for each scope up to the matching outer region.
+            assert_eq!(exact - ordinary_work, 3 + 1 + 3 * (depth + 1));
+            assert_eq!(
+                run(depth, 1, 2, usize::MAX, 0).0,
+                ResolveReason::UnknownInterface
+            );
+            for spent in [0, 17] {
+                let (reason, message, _) = run(depth, 1, 1, exact + spent - 1, spent);
+                assert_eq!(reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(
+                    message,
+                    "caller quote interface type-scope lookup exceeded its type-work budget"
+                );
+                for _ in 0..2 {
+                    let (reason, _, used) = run(depth, 1, 1, exact + spent, spent);
+                    assert_eq!(reason, ResolveReason::InterfaceKind);
+                    assert_eq!(used, exact + spent);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn completed_caller_record_releases_its_source_before_extraction() {
         use std::sync::Arc;
         for external in [false, true] {
