@@ -34148,6 +34148,336 @@ mod tests {
         );
     }
 
+    /// Read-only I16 inventory. A missing actual Adapter is a stop, not a mutation pass.
+    #[test]
+    fn i16_inventory_actual_indexed_color_selection_and_core_identity() {
+        use std::fmt::Write as _;
+
+        fn inspect(
+            program: &UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+        ) -> Result<(String, usize), String> {
+            fn find_module(
+                suffix: &str,
+                sources: &[&SourceFile],
+                relations: &[(ModuleId, SourceId)],
+            ) -> Result<(ModuleId, SourceId), String> {
+                let matches = sources
+                    .iter()
+                    .filter(|source| std::path::Path::new(source.display_path()).ends_with(suffix))
+                    .collect::<Vec<_>>();
+                let [source] = matches.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source, found {}",
+                        matches.len()
+                    ));
+                };
+                let modules = relations
+                    .iter()
+                    .filter(|(_, source_id)| *source_id == source.id())
+                    .map(|(module, _)| *module)
+                    .collect::<Vec<_>>();
+                let [module] = modules.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source/module relation, found {}",
+                        modules.len()
+                    ));
+                };
+                Ok((*module, source.id()))
+            }
+
+            let (api_id, _) = find_module("indexed/api.ash", sources, relations)?;
+            let (export_id, export_source) =
+                find_module("indexed/exported.ash", sources, relations)?;
+            let api = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == api_id)
+                .ok_or_else(|| "the linked api group is absent".to_owned())?;
+            let exported = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == export_id)
+                .ok_or_else(|| "the linked exported group is absent".to_owned())?;
+            let interfaces = api
+                .interface_facts()
+                .iter()
+                .filter(|fact| fact.spelling == "Indexed")
+                .collect::<Vec<_>>();
+            let [interface] = interfaces.as_slice() else {
+                return Err(format!(
+                    "expected one checked Indexed interface, found {}",
+                    interfaces.len()
+                ));
+            };
+            let methods = interface
+                .methods
+                .iter()
+                .filter(|method| method.spelling == "index")
+                .collect::<Vec<_>>();
+            let [method] = methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index method, found {}",
+                    methods.len()
+                ));
+            };
+            let colors = program.registry.nominals().iter().filter(|nominal| {
+                nominal.id.module() == export_id && nominal.spelling == "Color"
+                    && matches!(&nominal.origin, Origin::Source(span) if span.source() == export_source)
+            }).collect::<Vec<_>>();
+            let [color] = colors.as_slice() else {
+                return Err(format!(
+                    "expected the original exported Color nominal, found {}",
+                    colors.len()
+                ));
+            };
+            let implementations = exported
+                .implementation_facts()
+                .iter()
+                .filter(|implementation| {
+                    implementation.interface() == interface.id
+                        && matches!(implementation.arguments(),
+                    [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                })
+                .collect::<Vec<_>>();
+            let [implementation] = implementations.as_slice() else {
+                return Err(format!(
+                    "expected the actual Indexed<Color> implementation, found {}",
+                    implementations.len()
+                ));
+            };
+            let implementation_methods = implementation
+                .methods
+                .iter()
+                .filter(|selected| selected.method == method.id)
+                .collect::<Vec<_>>();
+            let [selected] = implementation_methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index implementation method, found {}",
+                    implementation_methods.len()
+                ));
+            };
+            let definitions = exported
+                .definitions()
+                .iter()
+                .filter_map(|definition| match definition.kind() {
+                    crate::resolved::ResolvedDefinitionKind::Equational(global)
+                        if global.interface.name.spelling == "computed" =>
+                    {
+                        Some(global)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [computed] = definitions.as_slice() else {
+                return Err(format!(
+                    "expected one checked computed definition, found {}",
+                    definitions.len()
+                ));
+            };
+            let [equation] = computed.equations.as_slice() else {
+                return Err(format!(
+                    "expected one computed equation, found {}",
+                    computed.equations.len()
+                ));
+            };
+            let mut pending = vec![&equation.body];
+            let mut occurrences = Vec::new();
+            while let Some(expression) = pending.pop() {
+                match &expression.kind {
+                    crate::resolved::ResolvedExprKind::Add(binary) => {
+                        pending.push(&binary.right);
+                        pending.push(&binary.left);
+                    }
+                    crate::resolved::ResolvedExprKind::Apply(application) => {
+                        pending.push(&application.argument);
+                        pending.push(&application.function);
+                    }
+                    crate::resolved::ResolvedExprKind::Occurrence(occurrence)
+                        if occurrence.term
+                            == crate::resolved::ResolvedTermName::Method(method.id) =>
+                    {
+                        occurrences.push(occurrence);
+                    }
+                    crate::resolved::ResolvedExprKind::Constructor(_)
+                    | crate::resolved::ResolvedExprKind::Integer(_) => {}
+                    other => {
+                        return Err(format!("unexpected fixed computed expression: {other:?}"));
+                    }
+                }
+            }
+            if occurrences.is_empty() {
+                return Err("no real resolved index occurrence in computed".to_owned());
+            }
+            let catalog = &program.method_evidence;
+            let mut report = format!(
+                "I16 original: interface={:?} method={:?} Color={:?} implementation={:?} implementation_method={:?} binder={:?}",
+                interface.id, method.id, color.id, implementation.id, selected.id, selected.binder
+            );
+            let mut matched_anchors = 0;
+            for occurrence in &occurrences {
+                let [slot] = occurrence.evidence.as_ref() else {
+                    return Err(format!(
+                        "index occurrence has {} evidence slots",
+                        occurrence.evidence.len()
+                    ));
+                };
+                let (checked_method, application, method_arguments, _, selection) = slot
+                    .filled_method()
+                    .ok_or_else(|| "the actual checked index slot is not published".to_owned())?;
+                if checked_method != method.id
+                    || application.interface() != interface.id
+                    || !matches!(application.arguments(),
+                        [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                    || !method_arguments.is_empty()
+                {
+                    return Err(
+                        "the checked index slot is not the original Indexed<Color> occurrence"
+                            .to_owned(),
+                    );
+                }
+                let selection_node = selection.root();
+                let Some(EvidenceNode::Implementation {
+                    implementation: selected_impl,
+                    methods,
+                    ..
+                }) = selection.node(selection_node)
+                else {
+                    return Err(
+                        "the actual root selection is not a concrete implementation".to_owned()
+                    );
+                };
+                if selected_impl != implementation.id || !methods.contains(&selected.id) {
+                    return Err(
+                        "the actual selection does not choose the checked implementation method"
+                            .to_owned(),
+                    );
+                }
+                let slot_id = slot.storage_id();
+                let original_span = occurrence.origin.primary_span();
+                let matching_variables = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable))
+                            if variable.binder() == selected.binder =>
+                        {
+                            let node_id = node_id(program.arena, index).ok()?;
+                            Some((node_id, node.origin.primary_span()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let at_occurrence = matching_variables
+                    .iter()
+                    .filter(|(_, origin)| *origin == original_span)
+                    .count();
+                let retained_occurrences = catalog
+                    .occurrences()
+                    .iter()
+                    .filter(|row| row.slot == slot_id)
+                    .count();
+                let anchors = program.method_evidence_anchors.iter().filter(|anchor| {
+                    anchor.occurrence == Some(slot_id) && anchor.method == method.id
+                        && matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { implementation: actual, selection_node: node }
+                            if actual == selected.id && node == selection_node)
+                }).map(|anchor| anchor.node).collect::<Vec<_>>();
+                matched_anchors += anchors.len();
+                writeln!(report, "\nslot={slot_id} span={original_span:?} selection_node={selection_node:?} selected={:?} binder={:?} binder_variables={matching_variables:?} variables_at_occurrence={at_occurrence} retained_occurrences={retained_occurrences} matching_adapter_nodes={anchors:?}", selected.id, selected.binder).unwrap();
+            }
+            let checked_occurrences = catalog
+                .occurrences()
+                .iter()
+                .filter(|row| row.checked_method == Some(method.id))
+                .map(|row| {
+                    (
+                        row.slot,
+                        row.checked_application.interface(),
+                        row.selection.root(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let implementation_owners = catalog
+                .implementation_owners()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.binder))
+                .collect::<Vec<_>>();
+            let adapters = catalog
+                .adapters()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.selection_node, row.binder))
+                .collect::<Vec<_>>();
+            let concrete_sources = catalog
+                .concrete_sources()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| {
+                    (
+                        row.occurrence,
+                        row.selection_node,
+                        row.implementation,
+                        row.binder,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expectations = catalog
+                .expectations()
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.method == method.id)
+                .map(|(index, row)| (index, row.occurrence, row.role))
+                .collect::<Vec<_>>();
+            let method_anchors = program
+                .method_evidence_anchors
+                .iter()
+                .filter(|anchor| anchor.method == method.id)
+                .map(|anchor| (anchor.node, anchor.occurrence, anchor.role))
+                .collect::<Vec<_>>();
+            writeln!(report, "\nchecked_occurrences={checked_occurrences:?} implementation_owners={implementation_owners:?} adapters={adapters:?} concrete_sources={concrete_sources:?} method_expectations={expectations:?} method_anchors={method_anchors:?}").unwrap();
+            Ok((report, matched_anchors))
+        }
+
+        let inventory = std::cell::RefCell::new(None);
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/indexed/integrated.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |program, sources, relations, linked| {
+                *inventory.borrow_mut() = Some(inspect(&program, sources, relations, linked));
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the unmodified original graph must independently validate");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let observed = inventory
+            .into_inner()
+            .expect("the actual linked validation callback must run")
+            .unwrap_or_else(|reason| {
+                panic!("I16 STOP: actual-site inventory unavailable: {reason}")
+            });
+        eprintln!("{}", observed.0);
+        assert!(
+            observed.1 > 0,
+            "I16 STOP: the actual selected Indexed<Color> occurrence has no matching Core Adapter identity to mutate"
+        );
+    }
+
     #[test]
     fn checked_nominal_pair_work_is_exact_retryable_and_last_owner_drops() {
         let configuration = || crate::driver::RunConfiguration {
