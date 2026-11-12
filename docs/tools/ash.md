@@ -379,8 +379,10 @@ values are not implicitly converted to syntax.
 A reached quotation needs the compile-time syntax host. Running it in an
 ordinary program without that host fails. A procedural expression transformer
 can return the token and group view of a quoted capture for reparsing. The
-supported protected quote round trip preserves its syntax boundary. Some
-caller-owned quoted seeds and nested syntax contexts remain under development. See
+supported protected quote round trip preserves its syntax boundary. A
+caller-owned quoted seed can retain ordinary caller references when its output
+is resolved in the completed caller. Some nested syntax invocation and
+quotation paths remain under development. See
 [quotation and template escapes](../../spec/syntax-expansion.md#quotation-and-template-escapes)
 for the current boundary.
 

@@ -80,6 +80,7 @@ pub(crate) struct ResolvedQuoteSite {
 pub(crate) struct PreparedQuoteSite {
     pub(crate) nodes: crate::elaborate::CheckedQuoteSite,
     pub(crate) owner: usize,
+    pub(crate) caller_quote_owner: Option<Arc<CallerQuoteOwner>>,
     pub(crate) source: Arc<crate::source::SourceFile>,
 }
 
@@ -258,12 +259,28 @@ pub(crate) struct SelectedSyntax {
     pub(crate) import_span: Span,
 }
 
+/// One staged caller and its immutable syntax selections for caller-owned quotes.
+#[derive(Debug)]
+pub(crate) struct CallerQuoteOwner {
+    pub(crate) module: ModuleId,
+    pub(crate) source: Arc<crate::source::SourceFile>,
+    pub(crate) selected: Arc<[SelectedSyntax]>,
+}
+
 /// The existing syntax imports visible from each issued introduction.
 #[derive(Clone, Debug)]
 pub(crate) struct SyntaxContexts {
     caller: Vec<SelectedSyntax>,
     owner_imports: Vec<Vec<SelectedSyntax>>,
-    owners: Vec<Option<usize>>,
+    owners: Vec<SyntaxContextOwner>,
+}
+
+#[derive(Clone, Debug)]
+enum SyntaxContextOwner {
+    Unowned,
+    Checked(usize),
+    CurrentCaller(Arc<CallerQuoteOwner>),
+    Invalid,
 }
 
 impl SyntaxContexts {
@@ -279,8 +296,17 @@ impl SyntaxContexts {
         self.owners.try_reserve_exact(1).map_err(|_| ())
     }
 
-    pub(crate) fn push_owner(&mut self, owner: Option<usize>) {
-        self.owners.push(owner);
+    pub(crate) fn push_owner(
+        &mut self,
+        owner: Option<usize>,
+        caller: Option<Arc<CallerQuoteOwner>>,
+    ) {
+        self.owners.push(match (owner, caller) {
+            (None, Some(caller)) => SyntaxContextOwner::CurrentCaller(caller),
+            (Some(owner), None) => SyntaxContextOwner::Checked(owner),
+            (None, None) => SyntaxContextOwner::Unowned,
+            (Some(_), Some(_)) => SyntaxContextOwner::Invalid,
+        });
     }
     pub(crate) fn new(
         caller: &[SelectedSyntax],
@@ -290,7 +316,13 @@ impl SyntaxContexts {
         Self {
             caller: caller.to_vec(),
             owner_imports: owner_imports.to_vec(),
-            owners: owners.to_vec(),
+            owners: owners
+                .iter()
+                .map(|owner| match owner {
+                    Some(owner) => SyntaxContextOwner::Checked(*owner),
+                    None => SyntaxContextOwner::Unowned,
+                })
+                .collect(),
         }
     }
 
@@ -308,8 +340,11 @@ impl SyntaxContexts {
         if introduction == 0 {
             Some(&self.caller)
         } else {
-            let owner = self.owners.get(introduction - 1)?.as_ref()?;
-            Some(self.owner_imports.get(*owner)?)
+            match self.owners.get(introduction - 1)? {
+                SyntaxContextOwner::Checked(owner) => Some(self.owner_imports.get(*owner)?),
+                SyntaxContextOwner::CurrentCaller(caller) => Some(&caller.selected),
+                SyntaxContextOwner::Unowned | SyntaxContextOwner::Invalid => None,
+            }
         }
     }
 
@@ -349,8 +384,13 @@ impl SyntaxContexts {
         for selection in caller.iter().chain(owner_imports.iter().flatten()) {
             charge_selected(selection, budget)?;
         }
-        let owners = owners.iter().map(|owner| owner.owner).collect::<Vec<_>>();
-        Ok(Self::new(caller, owner_imports, &owners))
+        charge_caller_owner_retains(owners, budget)?;
+        let owners = owners.iter().map(SyntaxOwner::context_owner).collect();
+        Ok(Self {
+            caller: caller.to_vec(),
+            owner_imports: owner_imports.to_vec(),
+            owners,
+        })
     }
 
     pub(crate) fn new_budgeted_expression(
@@ -370,8 +410,13 @@ impl SyntaxContexts {
         for selection in caller.iter().chain(owner_imports.iter().flatten()) {
             charge_selected_expression(selection, budget)?;
         }
-        let owners = owners.iter().map(|owner| owner.owner).collect::<Vec<_>>();
-        Ok(Self::new(caller, owner_imports, &owners))
+        charge_caller_owner_retains(owners, budget)?;
+        let owners = owners.iter().map(SyntaxOwner::context_owner).collect();
+        Ok(Self {
+            caller: caller.to_vec(),
+            owner_imports: owner_imports.to_vec(),
+            owners,
+        })
     }
 }
 
@@ -2266,11 +2311,36 @@ pub(crate) struct SyntaxNameUse {
     pub(crate) import_span: Span,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SyntaxOwner {
     pub(crate) owner: Option<usize>,
+    pub(crate) caller_quote_owner: Option<Arc<CallerQuoteOwner>>,
     pub(crate) declaration: Span,
     pub(crate) import_span: Span,
+}
+
+impl SyntaxOwner {
+    fn context_owner(&self) -> SyntaxContextOwner {
+        match (&self.caller_quote_owner, self.owner) {
+            (Some(caller), None) => SyntaxContextOwner::CurrentCaller(Arc::clone(caller)),
+            (None, Some(owner)) => SyntaxContextOwner::Checked(owner),
+            (None, None) => SyntaxContextOwner::Unowned,
+            (Some(_), Some(_)) => SyntaxContextOwner::Invalid,
+        }
+    }
+}
+
+pub(crate) fn charge_caller_owner_retains(
+    owners: &[SyntaxOwner],
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    budget.charge_units(owners.len())?;
+    for owner in owners {
+        if owner.caller_quote_owner.is_some() {
+            budget.charge()?;
+        }
+    }
+    Ok(())
 }
 
 /// Work performed by one checked invocation adapter. State stays in Ash
@@ -3911,11 +3981,10 @@ impl<'a> SyntaxExpansion<'a> {
         Ok(())
     }
 
-    pub(crate) fn owner(&self, introduction: usize) -> Option<SyntaxOwner> {
+    pub(crate) fn owner(&self, introduction: usize) -> Option<&SyntaxOwner> {
         introduction
             .checked_sub(1)
             .and_then(|index| self.owners.get(index))
-            .copied()
     }
 
     pub(crate) fn selected(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
@@ -3923,7 +3992,11 @@ impl<'a> SyntaxExpansion<'a> {
             self.selected
         } else {
             let owner = self.owner(name.introduction)?;
-            self.owner_imports.get(owner.owner?)?
+            match (&owner.caller_quote_owner, owner.owner) {
+                (Some(caller), None) => caller.selected.as_ref(),
+                (None, Some(owner)) => self.owner_imports.get(owner)?.as_slice(),
+                _ => return None,
+            }
         };
         imports.iter().find(|syntax| syntax.name == name.text)
     }
@@ -4011,6 +4084,7 @@ impl<'a> SyntaxExpansion<'a> {
         let anchor = name.introduced_at.unwrap_or(invocation);
         let selection = self.selected(name).cloned().ok_or(invocation)?;
         self.owners.push(SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(selection.owner),
             declaration: selection.declaration.span,
             import_span: selection.import_span,
@@ -4103,6 +4177,7 @@ impl<'a> SyntaxExpansion<'a> {
             )?,
         };
         self.owners.extend((0..fresh_count).map(|_| SyntaxOwner {
+            caller_quote_owner: None,
             owner: None,
             declaration: selection.declaration.span,
             import_span: selection.import_span,
@@ -4168,6 +4243,7 @@ impl<'a> SyntaxExpansion<'a> {
                 self.owners.reserve_exact(1);
             }
             self.owners.push(SyntaxOwner {
+                caller_quote_owner: None,
                 owner: Some(selection.owner),
                 declaration: definition,
                 import_span: selection.import_span,
@@ -4272,6 +4348,7 @@ impl<'a> SyntaxExpansion<'a> {
                 self.owners.reserve_exact(1);
             }
             self.owners.push(SyntaxOwner {
+                caller_quote_owner: None,
                 owner: Some(selection.owner),
                 declaration: definition,
                 import_span: selection.import_span,

@@ -2001,6 +2001,7 @@ fn resolve_module_names_with_budget<'a>(
     resolver.syntax_inputs = syntax;
     resolver.syntax_expansion = expansion;
     resolver.surface_quote_sites = loaded.quote_sites();
+    resolver.current_caller = Some(loaded);
     let result = (|| {
         resolver
             .constraint_work
@@ -2588,6 +2589,7 @@ struct Resolver<'state, 'inputs> {
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
     surface_quote_sites: &'state [crate::syntax::SurfaceQuoteSite],
+    current_caller: Option<&'state LoadedModule>,
     replacement_quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
     active_expansions: usize,
@@ -3087,6 +3089,7 @@ impl Resolver<'_, '_> {
             syntax_inputs: None,
             syntax_expansion: None,
             surface_quote_sites: &[],
+            current_caller: None,
             replacement_quote_sites: Vec::new(),
             quote_sites: Vec::new(),
             active_expansions: 0,
@@ -5938,6 +5941,42 @@ impl Resolver<'_, '_> {
         Ok(())
     }
 
+    fn is_current_caller_quote(&mut self, name: &SurfaceName) -> Result<bool, ResolveError> {
+        let Some(owner) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(false);
+        };
+        let Some(caller) = owner.caller_quote_owner.as_ref() else {
+            return Ok(false);
+        };
+        self.type_work.charge(3).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "caller quote owner authentication exceeded its work budget",
+            )
+        })?;
+        let valid = owner.owner.is_none()
+            && self.current_caller.is_some_and(|loaded| {
+                loaded.id() == caller.module
+                    && Arc::ptr_eq(loaded.retained_source(), &caller.source)
+                    && loaded
+                        .caller_quote_owner()
+                        .is_some_and(|completed| Arc::ptr_eq(completed, caller))
+            });
+        if !valid {
+            return Err(error(
+                ResolveReason::InternalState,
+                name.span,
+                "the caller quote lost its completed module owner",
+            ));
+        }
+        Ok(true)
+    }
+
     fn retain_syntax_reference(
         &mut self,
         reference: &SurfaceReference,
@@ -8459,6 +8498,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ImportedNominalName, ResolveError> {
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
@@ -8511,7 +8551,7 @@ impl Resolver<'_, '_> {
         )? {
             return Ok(ImportedNominalName { id });
         }
-        if name.introduction != 0 {
+        if name.introduction != 0 && !self.is_current_caller_quote(name)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
                 .syntax_nominals
@@ -8558,7 +8598,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Interface)?;
             let id = match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -8616,13 +8656,35 @@ impl Resolver<'_, '_> {
                 origin: Origin::Source(reference.span()),
             });
         }
-        if self.file_name_is_bound(&member.text)
-            || self
-                .type_scopes
-                .iter()
-                .rev()
-                .any(|scope| scope.contains_key(&member.text))
-        {
+        let bound_as_type = if self.file_name_is_bound(&member.text) {
+            true
+        } else if member.introduction == 0 {
+            self.contextual_type_variable(member).is_some()
+        } else {
+            let message = "caller quote interface type-scope lookup exceeded its type-work budget";
+            self.type_work
+                .charge(member.text.len())
+                .map_err(|()| error(ResolveReason::TypeResourceExhausted, member.span, message))?;
+            let key = (
+                try_clone_resolution_string(&member.text, member.span, message)?,
+                member.introduction,
+            );
+            let mut found = false;
+            for scope in self.syntax_type_scopes.iter().rev() {
+                // Pay for the reached hash, comparison, and scope visit first.
+                self.type_work
+                    .charge(member.text.len().saturating_mul(2).saturating_add(1))
+                    .map_err(|()| {
+                        error(ResolveReason::TypeResourceExhausted, member.span, message)
+                    })?;
+                if scope.contains_key(&key) {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if bound_as_type {
             return Err(interface_kind_error(member.span, &member.text)
                 .with_name(member, &self.diagnostic_frames));
         }
@@ -8643,7 +8705,7 @@ impl Resolver<'_, '_> {
     fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
             return match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -9206,6 +9268,7 @@ impl Resolver<'_, '_> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             let selected = self
@@ -9225,6 +9288,7 @@ impl Resolver<'_, '_> {
                 .with_name(member, &self.diagnostic_frames)
             });
         }
+        let mut checked_contextual_lexical = false;
         if matches!(reference, SurfaceReference::Unqualified(_)) && member.introduction != 0 {
             if let Some(id) = charged_lexical_scope_lookup(
                 &self.lexical_constructor_scopes,
@@ -9234,19 +9298,22 @@ impl Resolver<'_, '_> {
             )? {
                 return Ok(id);
             }
-            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
-            return self
-                .syntax_constructors
-                .get(&(member.text.clone(), member.introduction))
-                .copied()
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::UnknownConstructor,
-                        member.span,
-                        "this constructor is not declared in the syntax owner",
-                    )
-                    .with_name(member, &self.diagnostic_frames)
-                });
+            if !self.is_current_caller_quote(member)? {
+                self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
+                return self
+                    .syntax_constructors
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::UnknownConstructor,
+                            member.span,
+                            "this constructor is not declared in the syntax owner",
+                        )
+                        .with_name(member, &self.diagnostic_frames)
+                    });
+            }
+            checked_contextual_lexical = true;
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
@@ -9268,13 +9335,17 @@ impl Resolver<'_, '_> {
                     .with_name(reference.member(), &self.diagnostic_frames)
                 });
         }
-        if let Some(constructor) = charged_lexical_scope_lookup(
-            &self.lexical_constructor_scopes,
-            reference.member(),
-            &mut self.type_work,
-            "lexical constructor lookup exceeded its type-work budget",
-        )?
-        .or_else(|| {
+        let lexical = if checked_contextual_lexical {
+            None
+        } else {
+            charged_lexical_scope_lookup(
+                &self.lexical_constructor_scopes,
+                reference.member(),
+                &mut self.type_work,
+                "lexical constructor lookup exceeded its type-work budget",
+            )?
+        };
+        if let Some(constructor) = lexical.or_else(|| {
             self.constructor_names
                 .get(&reference.member().text)
                 .copied()
@@ -15643,7 +15714,7 @@ impl Resolver<'_, '_> {
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
                 let context = name.qualifier().unwrap_or(member);
                 let lexical_key = (member.text.clone(), member.introduction);
-                if context.introduction != 0
+                let needs_syntax = context.introduction != 0
                     && (is_qualified
                         || (!self
                             .scopes
@@ -15654,13 +15725,19 @@ impl Resolver<'_, '_> {
                                 .lexical_constructor_scopes
                                 .iter()
                                 .rev()
-                                .any(|scope| scope.contains_key(&lexical_key))))
-                {
+                                .any(|scope| scope.contains_key(&lexical_key))));
+                let current_caller = if needs_syntax {
+                    self.is_current_caller_quote(context)?
+                } else {
+                    false
+                };
+                if needs_syntax && !current_caller {
                     self.retain_syntax_reference(name, crate::syntax::SyntaxNameNamespace::Term)?;
                 }
                 let (qualified_binding, qualified_constructor, qualified_withheld) =
                     if let SurfaceReference::Qualified(qualified) = name
                         && qualified.qualifier.introduction != 0
+                        && !current_caller
                     {
                         (
                             self.syntax_qualified_terms
@@ -15696,6 +15773,22 @@ impl Resolver<'_, '_> {
                     } else {
                         (None, None, None)
                     };
+                let current_file_binding = if current_caller && !is_qualified {
+                    self.type_work
+                        .charge(member.text.len().saturating_mul(2).saturating_add(1))
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                member.span,
+                                "caller quote file lookup exceeded its work budget",
+                            )
+                        })?;
+                    self.scopes
+                        .first()
+                        .and_then(|scope| scope.get(&(member.text.clone(), 0)).copied())
+                } else {
+                    None
+                };
                 let binding = if is_qualified {
                     qualified_binding
                 } else {
@@ -15709,8 +15802,9 @@ impl Resolver<'_, '_> {
                                 .get(&(member.text.clone(), member.introduction))
                                 .copied()
                         })
+                        .or(current_file_binding)
                         .or_else(|| {
-                            (member.introduction == 0)
+                            (member.introduction == 0 || current_caller)
                                 .then(|| self.method_names.get(&member.text).copied())
                                 .flatten()
                         })
@@ -15723,7 +15817,7 @@ impl Resolver<'_, '_> {
                         "inline lexical constructor lookup exceeded its type-work budget",
                     )?
                     .or_else(|| {
-                        if member.introduction != 0 {
+                        if member.introduction != 0 && !current_caller {
                             self.syntax_constructors
                                 .get(&(member.text.clone(), member.introduction))
                                 .copied()
@@ -25415,6 +25509,7 @@ mod tests {
                 &[],
                 &[],
                 vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: if mode == 3 {
                         None
                     } else if mode == 4 {
@@ -25532,6 +25627,7 @@ mod tests {
                 &[],
                 &[],
                 vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: Some(selected_index),
                     declaration: selected.span(),
                     import_span: entry.surface().span,
@@ -25759,6 +25855,7 @@ mod tests {
                 &[],
                 &[],
                 vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: Some(if malformed {
                         checked.len()
                     } else {

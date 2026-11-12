@@ -419,9 +419,13 @@ impl<'inv> SyntaxHost<'inv> {
     fn issue_context_owner(
         &mut self,
         owner: Option<usize>,
+        caller_quote_owner: Option<Arc<crate::syntax::CallerQuoteOwner>>,
         declaration: crate::source::Span,
         import_span: crate::source::Span,
     ) -> Result<usize, RuntimeFailure> {
+        if owner.is_some() && caller_quote_owner.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let contexts = self
             .contexts
             .as_mut()
@@ -452,6 +456,7 @@ impl<'inv> SyntaxHost<'inv> {
             .charge_units(
                 contexts_growth
                     .saturating_add(staged_growth)
+                    .saturating_add(usize::from(caller_quote_owner.is_some()))
                     .saturating_add(2),
             )
             .map_err(syntax_failure)?;
@@ -465,9 +470,10 @@ impl<'inv> SyntaxHost<'inv> {
                 .try_reserve_exact(1)
                 .map_err(|_| RuntimeFailure::HeapCapacity)?;
         }
-        contexts.push_owner(owner);
+        contexts.push_owner(owner, caller_quote_owner.as_ref().map(Arc::clone));
         staged.push(crate::syntax::SyntaxOwner {
             owner,
+            caller_quote_owner,
             declaration,
             import_span,
         });
@@ -590,9 +596,13 @@ impl<'inv> SyntaxHost<'inv> {
             return Ok(None);
         };
         self.charge(2)?;
+        if self.quote_sites[index].caller_quote_owner.is_some() {
+            self.charge(1)?;
+        }
         let site = &self.quote_sites[index];
         let expected_constructor = site.nodes.constructor;
         let owner = site.owner;
+        let caller_quote_owner = site.caller_quote_owner.as_ref().map(Arc::clone);
         let template = Arc::clone(&site.nodes.template);
         let source = Arc::clone(&site.source);
         let (constructor, payload) = constructor_fields(value, heap)?;
@@ -635,8 +645,12 @@ impl<'inv> SyntaxHost<'inv> {
         if holes.len() != template.holes {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let introduction =
-            self.issue_context_owner(Some(owner), template.origin, template.origin)?;
+        let introduction = self.issue_context_owner(
+            caller_quote_owner.is_none().then_some(owner),
+            caller_quote_owner,
+            template.origin,
+            template.origin,
+        )?;
         let output = self.fill_quote_contents(&template, introduction, &holes)?;
         let capture = crate::parser::parse_macro_expression_fragment(
             &source,
@@ -1238,6 +1252,7 @@ impl<'inv> SyntaxHost<'inv> {
                             .ok_or(RuntimeFailure::HeapCapacity)?;
                         let introduction = if self.staged_owners.is_some() {
                             self.issue_context_owner(
+                                None,
                                 None,
                                 self.frame.definition,
                                 self.frame.invocation,

@@ -3198,6 +3198,7 @@ fn prepare_staged_output(
     // Reserve the owner and frame before retaining either one.
     budget.charge_units(2)?;
     staged_owners.push(crate::syntax::SyntaxOwner {
+        caller_quote_owner: None,
         owner: Some(invocation.selection.owner),
         declaration: invocation.selection.declaration.span,
         import_span: invocation.selection.import_span,
@@ -3259,6 +3260,7 @@ fn prepare_staged_output(
                 .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
                 budget.charge_units(fresh_count)?;
                 staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: None,
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
@@ -3357,6 +3359,7 @@ fn prepare_staged_output(
             .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
             budget.charge_units(fresh_count)?;
             staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                caller_quote_owner: None,
                 owner: None,
                 declaration: invocation.selection.declaration.span,
                 import_span: invocation.selection.import_span,
@@ -3481,9 +3484,10 @@ fn apply_generator_results(
                         crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
                     }
                     _ => {
-                        return Err(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                        );
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
                     }
                 }
                 budget.charge()?;
@@ -3663,6 +3667,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
     }
     let span = node_span(source, root, &source_tokens)?;
     budget.charge_units(owners.len())?;
+    crate::syntax::charge_caller_owner_retains(owners, budget)?;
     let mut staged_owners = owners.clone();
     let contexts = crate::syntax::SyntaxContexts::new_budgeted(
         selected,
@@ -3844,6 +3849,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
                         true,
                         Some(&current.contexts),
                         0,
+                        false,
                         budget,
                     )? {
                         return Err(ProjectionError::MalformedTree(
@@ -4020,6 +4026,7 @@ fn materialize_template_escapes(
                 .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
                 budget.charge_units(fresh_count)?;
                 owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: None,
                     declaration: selection.declaration.span,
                     import_span: selection.import_span,
@@ -4463,6 +4470,8 @@ fn charge_structured_items<'a>(
                                     false,
                                     false,
                                     repeat_depth,
+                                    false,
+                                    false,
                                     budget,
                                 )?;
                             }
@@ -4486,6 +4495,7 @@ fn charge_structured_items<'a>(
                                     false,
                                     None,
                                     repeat_depth,
+                                    false,
                                     budget,
                                 )? | charge_capture_contents_with_expression(
                                     value,
@@ -4494,6 +4504,8 @@ fn charge_structured_items<'a>(
                                     false,
                                     false,
                                     repeat_depth,
+                                    false,
+                                    false,
                                     budget,
                                 )?
                                 .0;
@@ -4878,6 +4890,7 @@ fn charge_declaration_invocation(
                     true,
                     Some(contexts),
                     1,
+                    generator_capture,
                     budget,
                 )?
             } else {
@@ -4885,7 +4898,15 @@ fn charge_declaration_invocation(
             };
             bridge |= if new_expression {
                 charge_capture_contents_with_expression(
-                    value, tokens, *kind, false, true, 1, budget,
+                    value,
+                    tokens,
+                    *kind,
+                    false,
+                    true,
+                    1,
+                    generator_capture,
+                    false,
+                    budget,
                 )?
                 .0
             } else {
@@ -4963,10 +4984,30 @@ fn charge_capture_contents_inner(
     new_type_scratch: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
-    charge_capture_contents_with_expression(root, tokens, kind, new_type_scratch, false, 0, budget)
-        .map(|(bridge, _)| bridge)
+    charge_capture_contents_with_expression(
+        root,
+        tokens,
+        kind,
+        new_type_scratch,
+        false,
+        0,
+        false,
+        false,
+        budget,
+    )
+    .map(|(bridge, _)| bridge)
 }
 
+// Quote contents are data; a quote escape's operand is evaluated normally.
+fn quote_data_at_node(in_quote_data: bool, kind: NodeKind) -> bool {
+    match kind {
+        NodeKind::SyntaxQuote => true,
+        NodeKind::SyntaxEscape if in_quote_data => false,
+        _ => in_quote_data,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn charge_capture_contents_with_expression(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -4974,6 +5015,8 @@ fn charge_capture_contents_with_expression(
     new_type_scratch: bool,
     new_expression: bool,
     owner_prefix: usize,
+    allow_quote_data: bool,
+    in_quote_data: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(bool, bool), DeclarationExpansionFailure> {
     let new_type_scratch = new_type_scratch || new_expression;
@@ -5005,12 +5048,24 @@ fn charge_capture_contents_with_expression(
         )
     );
     let contents_prefix = crate::syntax::type_depth(owner_prefix, usize::from(!reuses_contents))?;
-    let mut bridge =
-        kind == SurfaceSyntaxCaptureKind::Expression && root.kind == NodeKind::SyntaxInvocation;
+    if allow_quote_data {
+        budget.charge()?;
+    }
+    let in_quote_data = allow_quote_data && quote_data_at_node(in_quote_data, root.kind);
+    let mut bridge = kind == SurfaceSyntaxCaptureKind::Expression
+        && root.kind == NodeKind::SyntaxInvocation
+        && !in_quote_data;
     // Reserve this scan's pending elements and capture_contents' separate
     // pending elements before either worklist can grow.
     budget.charge_units(root.children.len())?;
     budget.charge_units(root.children.len())?;
+    let mut quote_states = if allow_quote_data {
+        budget.charge()?;
+        budget.charge_units(root.children.len())?;
+        Some(vec![in_quote_data; root.children.len()])
+    } else {
+        None
+    };
     let quoted_dollar = matches!(root.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
     let mut pending = if new_type_scratch {
         budget.charge_units(root.children.len())?;
@@ -5031,22 +5086,53 @@ fn charge_capture_contents_with_expression(
     };
     let mut groups = contents_prefix;
     while let Some((element, quoted_dollar)) = pending.pop() {
+        let in_quote_data = quote_states
+            .as_mut()
+            .map(|states| states.pop().expect("quote state follows capture work"))
+            .unwrap_or(false);
         budget.charge_units(2)?;
         match element {
             ConcreteElement::Node(node) => {
-                if kind != SurfaceSyntaxCaptureKind::Type && node.kind == NodeKind::SyntaxInvocation
+                if allow_quote_data {
+                    budget.charge()?;
+                }
+                let in_quote_data =
+                    allow_quote_data && quote_data_at_node(in_quote_data, node.kind);
+                if kind != SurfaceSyntaxCaptureKind::Type
+                    && node.kind == NodeKind::SyntaxInvocation
+                    && !in_quote_data
                 {
                     bridge = true;
                 }
                 budget.charge_units(node.children.len())?;
                 budget.charge_units(node.children.len())?;
+                let mut grow_pending = false;
                 if new_type_scratch {
                     let live = pending.len();
                     let requested = live.saturating_add(node.children.len());
                     if requested > pending.capacity() {
                         budget.charge_units(requested.saturating_add(live))?;
-                        pending.reserve_exact(node.children.len());
+                        grow_pending = true;
                     }
+                }
+                let mut grow_quote_states = false;
+                if let Some(states) = quote_states.as_ref() {
+                    budget.charge_units(node.children.len())?;
+                    let live = states.len();
+                    let requested = live.saturating_add(node.children.len());
+                    if requested > states.capacity() {
+                        budget.charge_units(requested.saturating_add(live))?;
+                        grow_quote_states = true;
+                    }
+                }
+                if grow_pending {
+                    pending.reserve_exact(node.children.len());
+                }
+                if let Some(states) = quote_states.as_mut() {
+                    if grow_quote_states {
+                        states.reserve_exact(node.children.len());
+                    }
+                    states.extend(std::iter::repeat_n(in_quote_data, node.children.len()));
                 }
                 let quoted_dollar =
                     matches!(node.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
@@ -5242,6 +5328,7 @@ fn charge_projection_preflight_selected(
         false,
         None,
         0,
+        false,
         budget,
     )
 }
@@ -5256,6 +5343,7 @@ fn charge_projection_preflight_with_expression(
     new_expression: bool,
     contexts: Option<&crate::syntax::SyntaxContexts>,
     owner_prefix: usize,
+    allow_quote_data: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
     let selected_scratch = new_pattern || new_expression;
@@ -5282,7 +5370,22 @@ fn charge_projection_preflight_with_expression(
     } else {
         vec![root]
     };
+    let mut quote_states = if allow_quote_data {
+        budget.charge_units(2)?;
+        Some(vec![false])
+    } else {
+        None
+    };
     while let Some(node) = pending.pop() {
+        let in_quote_data = if let Some(states) = quote_states.as_mut() {
+            budget.charge()?;
+            quote_data_at_node(
+                states.pop().expect("quote state follows projection work"),
+                node.kind,
+            )
+        } else {
+            false
+        };
         if node.kind == NodeKind::InterfaceDeclaration && tokens.construction.is_some() {
             // The determination clause proves each original token extent,
             // then reads its two side edges and the `where` token again.
@@ -5318,6 +5421,8 @@ fn charge_projection_preflight_with_expression(
                                     false,
                                     true,
                                     0,
+                                    allow_quote_data,
+                                    in_quote_data,
                                     budget,
                                 )?;
                             if argument_bridge {
@@ -5381,11 +5486,30 @@ fn charge_projection_preflight_with_expression(
         }
         for child in child_nodes(node) {
             budget.charge()?;
+            let mut grow_quote_states = false;
+            if let Some(states) = quote_states.as_ref() {
+                budget.charge()?;
+                if states.len() == states.capacity() {
+                    let live = states.len();
+                    budget.charge_units(live.saturating_add(1).saturating_add(live))?;
+                    grow_quote_states = true;
+                }
+            }
+            let mut grow_pending = false;
             if selected_scratch && pending.len() == pending.capacity() {
                 let live = pending.len();
                 let requested = live.saturating_add(1);
                 budget.charge_units(requested.saturating_add(live))?;
+                grow_pending = true;
+            }
+            if grow_pending {
                 pending.reserve_exact(1);
+            }
+            if let Some(states) = quote_states.as_mut() {
+                if grow_quote_states {
+                    states.reserve_exact(1);
+                }
+                states.push(in_quote_data);
             }
             pending.push(child);
         }
@@ -9265,6 +9389,7 @@ pub(super) fn project_macro_expression_budgeted(
         true,
         Some(contexts),
         owner_prefix,
+        false,
         budget,
     )? {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
@@ -20227,11 +20352,12 @@ mod tests {
         let first_tree = h1_tree(&first, &selected);
         let tree = h1_tree(&source, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut prefix_owners = vec![existing];
+        let mut prefix_owners = vec![existing.clone()];
         let mut prefix = SyntaxBudget::default();
         let first_module = project_declaration_expansions(
             &first,
@@ -20246,7 +20372,7 @@ mod tests {
         assert_eq!(first_module.definitions.len(), 1);
         drop(first_module);
 
-        let mut measured_owners = vec![existing];
+        let mut measured_owners = vec![existing.clone()];
         let mut measured = SyntaxBudget::default();
         let module = project_declaration_expansions(
             &source,
@@ -20293,7 +20419,7 @@ mod tests {
         let used = measured.consumed();
         assert!(prefix.consumed() < used - 1);
 
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         let mut short = SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
             project_declaration_expansions(
@@ -20315,7 +20441,7 @@ mod tests {
         assert_eq!(owners[0].declaration, existing.declaration);
         assert_eq!(owners[0].import_span, existing.import_span);
 
-        let mut retry_owners = vec![existing];
+        let mut retry_owners = vec![existing.clone()];
         let mut exact = SyntaxBudget::with_limit(used);
         let retried = project_declaration_expansions(
             &source,
@@ -20378,11 +20504,12 @@ mod tests {
             .unwrap();
             let tree = h1_tree(&caller, &selected);
             let existing = crate::syntax::SyntaxOwner {
+                caller_quote_owner: None,
                 owner: Some(9),
                 declaration: before.declaration.span,
                 import_span: before.import_span,
             };
-            let mut owners = vec![existing];
+            let mut owners = vec![existing.clone()];
             let result = project_declaration_expansions(
                 &caller,
                 &tree,
@@ -20429,11 +20556,12 @@ mod tests {
         let first_tree = h1_tree(&first, &selected);
         let tree = h1_tree(&source, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut prefix_owners = vec![existing];
+        let mut prefix_owners = vec![existing.clone()];
         let mut prefix = crate::syntax_resource::SyntaxBudget::default();
         let first_module = project_declaration_expansions(
             &first,
@@ -20447,7 +20575,7 @@ mod tests {
         .unwrap();
         assert_eq!(first_module.definitions.len(), 1);
         drop(first_module);
-        let mut measured_owners = vec![existing];
+        let mut measured_owners = vec![existing.clone()];
         let mut measured = crate::syntax_resource::SyntaxBudget::default();
         let module = project_declaration_expansions(
             &source,
@@ -20465,7 +20593,7 @@ mod tests {
         assert!(prefix.consumed() < used - 1);
         drop(module);
 
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
             project_declaration_expansions(
@@ -20486,7 +20614,7 @@ mod tests {
         assert_eq!(owners[0].owner, existing.owner);
         assert_eq!(owners[0].declaration, existing.declaration);
         assert_eq!(owners[0].import_span, existing.import_span);
-        let mut exact_owners = vec![existing];
+        let mut exact_owners = vec![existing.clone()];
         let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
         let module = project_declaration_expansions(
             &source,
@@ -20675,11 +20803,12 @@ mod tests {
         let caller = SourceFile::new("caller.ash", "make good\nmake Upper\n").unwrap();
         let tree = h1_tree(&caller, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         assert!(
             project_declaration_expansions(
                 &caller,
@@ -25183,6 +25312,8 @@ usage arena => resume arena
                 false,
                 true,
                 0,
+                false,
+                false,
                 budget,
             )
         };
@@ -25227,6 +25358,8 @@ usage arena => resume arena
                 false,
                 true,
                 0,
+                false,
+                false,
                 &mut SyntaxBudget::default(),
             ),
             Err(DeclarationExpansionFailure::Projection(
@@ -25246,6 +25379,96 @@ usage arena => resume arena
         assert!(
             matches!(contents.as_slice(), [MacroOutputNode::Splice(name)] if name.text == "part")
         );
+    }
+
+    #[test]
+    fn generator_quote_preflight_distinguishes_data_from_executing_operands() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        fn node(kind: NodeKind, children: Vec<ConcreteNode>) -> ConcreteNode {
+            ConcreteNode {
+                kind,
+                children: children.into_iter().map(ConcreteElement::Node).collect(),
+            }
+        }
+        fn nested_invocation() -> ConcreteNode {
+            node(
+                NodeKind::SyntaxInvocation,
+                vec![node(
+                    NodeKind::SyntaxArgument,
+                    vec![node(NodeKind::SyntaxInvocation, vec![])],
+                )],
+            )
+        }
+        let quoted = node(NodeKind::SyntaxQuote, vec![nested_invocation()]);
+        let executing = node(
+            NodeKind::SyntaxQuote,
+            vec![node(NodeKind::SyntaxEscape, vec![nested_invocation()])],
+        );
+        let nested_quote = node(
+            NodeKind::SyntaxQuote,
+            vec![node(
+                NodeKind::SyntaxEscape,
+                vec![node(NodeKind::SyntaxQuote, vec![nested_invocation()])],
+            )],
+        );
+        let tokens = ProjectionTokens::source(&[]);
+        let preflight = |root: &ConcreteNode, allow_quote_data, budget: &mut SyntaxBudget| {
+            charge_projection_preflight_with_expression(
+                root,
+                &tokens,
+                true,
+                false,
+                true,
+                None,
+                0,
+                allow_quote_data,
+                budget,
+            )
+        };
+        assert!(preflight(&quoted, false, &mut SyntaxBudget::default()).is_err());
+        assert!(!preflight(&quoted, true, &mut SyntaxBudget::default()).unwrap());
+        assert!(preflight(&executing, true, &mut SyntaxBudget::default()).is_err());
+        assert!(!preflight(&nested_quote, true, &mut SyntaxBudget::default()).unwrap());
+        assert!(preflight(&nested_invocation(), true, &mut SyntaxBudget::default()).is_err());
+
+        let root = nested_invocation();
+        for (parent_quote, expected_bridge) in [(false, true), (true, false)] {
+            let (bridge, _) = charge_capture_contents_with_expression(
+                &root,
+                &tokens,
+                SurfaceSyntaxCaptureKind::Expression,
+                false,
+                true,
+                0,
+                true,
+                parent_quote,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            assert_eq!(bridge, expected_bridge);
+        }
+        for prefix in [0, 17] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(prefix).unwrap();
+            preflight(&quoted, true, &mut measured).unwrap();
+            let used = measured.consumed();
+            let mut short = SyntaxBudget::with_limit(used - 1);
+            short.charge_units(prefix).unwrap();
+            assert!(matches!(
+                preflight(&quoted, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(used);
+                exact.charge_units(prefix).unwrap();
+                preflight(&quoted, true, &mut exact).unwrap();
+                assert_eq!(exact.consumed(), used);
+            }
+        }
     }
 
     #[test]

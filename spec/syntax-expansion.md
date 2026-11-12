@@ -135,8 +135,11 @@ may splice an expression capture available at the clause's repetition depth.
 Definition-written references use the checked defining environment. A captured
 expression keeps its caller context; its available compile-time environment
 includes checked imports, but not calling-module globals unavailable during
-expansion. Caller-written quoted seeds with surviving caller contexts still
-have an incomplete consumer, tracked in [#312](https://github.com/dikini/ash-lang/issues/312).
+expansion. When a caller-written quote survives expansion into the completed
+caller, its ordinary term, constructor, nominal type, interface, and effect
+references use the authenticated caller namespace. Existing exact-context
+lexical lookup takes precedence where applicable. Some later nested syntax
+invocation and quotation bridges remain incomplete.
 
 For an expression splice, the step is an ordinary function of type
 `State -> (State, Syntax.ExpressionFragment)`. It receives the current state
@@ -218,8 +221,8 @@ does not evaluate its body. Failures publish no partial expansion.
 A procedural expression transformer can return the token and group view of a
 quoted capture for reparsing, preserving contexts and origins. The supported
 protected quote round trip retains the original syntax boundary. The
-caller-owned quote consumer described above remains incomplete; these cases do
-not establish every nested syntax or name role.
+caller-owned quote path described above does not yet cover every nested syntax
+invocation or name role.
 
 ## Names and hygiene
 
