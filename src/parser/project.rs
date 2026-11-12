@@ -329,6 +329,13 @@ pub(crate) fn project_module_header(
     source: &SourceFile,
     checkpoint: &ParserCheckpoint,
 ) -> Result<Vec<SurfaceImport>, ProjectionError> {
+    project_module_header_with_syntax(source, checkpoint).map(|(imports, _)| imports)
+}
+
+pub(crate) fn project_module_header_with_syntax(
+    source: &SourceFile,
+    checkpoint: &ParserCheckpoint,
+) -> Result<(Vec<SurfaceImport>, bool), ProjectionError> {
     if let Some(failure) = checkpoint.resource_failure {
         return Err(ProjectionError::ResourceLimit(failure));
     }
@@ -357,15 +364,18 @@ pub(crate) fn project_module_header(
     require_kind(&root, NodeKind::Module)?;
     let mut shape = ShapeCursor::new(&root, &checkpoint.tokens);
     let mut imports = Vec::new();
+    let mut has_syntax_import = false;
     let projection_tokens = ProjectionTokens::source(&checkpoint.tokens);
     while let Some(node) = shape.peek_node() {
         validate_node_shape(node, &checkpoint.tokens)?;
-        imports.push(project_import(source, node, &projection_tokens)?);
+        let (import, has_syntax) = project_import(source, node, &projection_tokens)?;
+        has_syntax_import |= has_syntax;
+        imports.push(import);
         shape.node(NodeKind::ImportDeclaration)?;
         shape.token(&TokenKind::LineEnd)?;
     }
     shape.finish()?;
-    Ok(imports)
+    Ok((imports, has_syntax_import))
 }
 
 pub(crate) fn module_span_from_checkpoint(
@@ -2158,7 +2168,7 @@ impl ModuleProjection {
             definitions,
         } = self;
         match child.kind {
-            NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
+            NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?.0),
             NodeKind::SyntaxDeclaration => {
                 if extended_matcher(child).is_some() {
                     return malformed(InternalReason::UnexpectedShape);
@@ -7104,7 +7114,7 @@ fn project_import(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
-) -> Result<SurfaceImport, ProjectionError> {
+) -> Result<(SurfaceImport, bool), ProjectionError> {
     require_kind(node, NodeKind::ImportDeclaration)?;
     let path_node = only_child_of_kind(node, NodeKind::ModulePath)?;
     let mut path_names = direct_tokens(path_node, tokens)
@@ -7141,9 +7151,14 @@ fn project_import(
         SurfaceModulePath::Relative(path_names)
     };
 
+    let mut has_syntax_import = false;
     let items = child_nodes(node)
         .filter(|child| child.kind == NodeKind::ImportItem)
-        .map(|item| project_import_item(source, item, tokens))
+        .map(|item| {
+            let (item, syntax) = project_import_item(source, item, tokens)?;
+            has_syntax_import |= syntax;
+            Ok::<_, ProjectionError>(item)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
     let selection = if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::LeftParen) {
@@ -7161,19 +7176,22 @@ fn project_import(
             alias: surface_name(alias_token)?,
         }
     };
-    Ok(SurfaceImport {
-        public,
-        path,
-        selection,
-        span: node_span(source, node, tokens)?,
-    })
+    Ok((
+        SurfaceImport {
+            public,
+            path,
+            selection,
+            span: node_span(source, node, tokens)?,
+        },
+        has_syntax_import,
+    ))
 }
 
 fn project_import_item(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
-) -> Result<SurfaceImportItem, ProjectionError> {
+) -> Result<(SurfaceImportItem, bool), ProjectionError> {
     require_kind(node, NodeKind::ImportItem)?;
     if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Impl) {
         let interface = direct_tokens(node, tokens)
@@ -7181,10 +7199,13 @@ fn project_import_item(
             .ok_or(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape,
             ))?;
-        return Ok(SurfaceImportItem::Implementation {
-            interface: surface_name(interface)?,
-            span: node_span(source, node, tokens)?,
-        });
+        return Ok((
+            SurfaceImportItem::Implementation {
+                interface: surface_name(interface)?,
+                span: node_span(source, node, tokens)?,
+            },
+            false,
+        ));
     }
     let syntax = is_syntax_import_item(node, tokens);
     let mut names = direct_tokens(node, tokens).filter(|token| {
@@ -7201,11 +7222,14 @@ fn project_import_item(
         return malformed(InternalReason::UnexpectedShape);
     }
     let span = node_span(source, node, tokens)?;
-    Ok(if syntax {
-        SurfaceImportItem::Syntax { name, alias, span }
-    } else {
-        SurfaceImportItem::Name { name, alias, span }
-    })
+    Ok((
+        if syntax {
+            SurfaceImportItem::Syntax { name, alias, span }
+        } else {
+            SurfaceImportItem::Name { name, alias, span }
+        },
+        syntax,
+    ))
 }
 
 fn is_syntax_import_item<T: ProjectionTokenSource + ?Sized>(

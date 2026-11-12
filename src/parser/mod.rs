@@ -25,7 +25,6 @@ pub(crate) use project::project_declaration_expansions;
 pub(crate) use project::project_declaration_expansions_with_quotes;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
-pub(crate) use project::project_module_header;
 #[cfg(test)]
 pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
@@ -33,6 +32,7 @@ pub(crate) use project::{
     DeclarationExpansionFailure, QuoteProjection, project_declaration_expansions_with_resource,
 };
 pub use project::{ProjectionError, project_module};
+pub(crate) use project::{project_module_header, project_module_header_with_syntax};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},

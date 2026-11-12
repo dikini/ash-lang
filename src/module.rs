@@ -19,7 +19,8 @@ use crate::{
     parser::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
         finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
-        parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
+        parse_module_header, parse_with_budget_and_header, project_module,
+        project_module_header_with_syntax,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -3167,7 +3168,8 @@ fn parse_graph_module(
     }
     let (checkpoint, retained) = parse_module_header(tokens, lexical, syntax_budget.clone());
     *syntax_budget = retained;
-    let imports = match project_module_header(&source, &checkpoint) {
+    let (imports, has_syntax_import) = match project_module_header_with_syntax(&source, &checkpoint)
+    {
         Ok(imports) => imports,
         Err(error) => {
             if matches!(
@@ -3192,25 +3194,22 @@ fn parse_graph_module(
             });
         }
     };
-    let needs_quote_dependency = if needs_quote_dependency {
-        true
-    } else {
-        match syntax_import_needs_quote_dependency(&imports, syntax_budget) {
-            Ok(needs_quote_dependency) => needs_quote_dependency,
-            Err(resource) => {
-                // The checkpoint already owns these diagnostics; move them
-                // without copying after the continuing budget refuses work.
-                let (lexical, parser) = checkpoint.into_diagnostics();
-                return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
-                    lexical,
-                    parser,
-                    resource: Some(resource),
-                    source,
-                    import_span,
-                })));
-            }
-        }
-    };
+    if has_syntax_import
+        && !needs_quote_dependency
+        && let Err(resource) = syntax_budget.charge()
+    {
+        // The checkpoint already owns these diagnostics; move them without
+        // copying after the continuing budget refuses the new activation.
+        let (lexical, parser) = checkpoint.into_diagnostics();
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical,
+            parser,
+            resource: Some(resource),
+            source,
+            import_span,
+        })));
+    }
+    let needs_quote_dependency = needs_quote_dependency || has_syntax_import;
     let span = match module_span_from_checkpoint(&source, &checkpoint) {
         Ok(span) => span,
         Err(error) => {
@@ -3232,24 +3231,6 @@ fn parse_graph_module(
             needs_generator_dependency,
         },
     ))
-}
-
-fn syntax_import_needs_quote_dependency(
-    imports: &[SurfaceImport],
-    budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
-    for import in imports {
-        budget.charge()?;
-        if let SurfaceImportSelection::Targeted(items) = &import.selection {
-            for item in items {
-                budget.charge()?;
-                if matches!(item, SurfaceImportItem::Syntax { .. }) {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }
 
 // Source, syntax owners and the budget are separate projection inputs.
@@ -3633,7 +3614,7 @@ mod tests {
         let (tokens, diagnostics, _, resource) = lexed.into_parts();
         assert!(resource.is_none());
         let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
-        let imports = project_module_header(&source, &checkpoint).unwrap();
+        let imports = crate::parser::project_module_header(&source, &checkpoint).unwrap();
         let span = module_span_from_checkpoint(&source, &checkpoint).unwrap();
         let entry = ModuleId::new(0);
         let staged = StagedModule {

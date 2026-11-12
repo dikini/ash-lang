@@ -104,6 +104,92 @@ fn generator_definition_admits_canonical_builtin_before_source_census() {
 }
 
 #[test]
+fn targeted_syntax_imports_provision_only_one_real_quote_dependency() {
+    let tree = Tree::new();
+    tree.write("forms.ash", "pub syntax declaration: (make) => {}\n");
+    for (name, header, eligible, expected_private) in [
+        ("ordinary.ash", "import forms as Forms\n", false, None),
+        (
+            "implicit.ash",
+            "import forms (syntax make)\n",
+            true,
+            Some(true),
+        ),
+        (
+            "explicit.ash",
+            "import @builtin.compiler.syntax as Syntax\nimport forms (syntax make)\n",
+            true,
+            Some(false),
+        ),
+    ] {
+        let entry = tree.write(name, &format!("{header}main : Unit -> Int\nmain () = 42\n"));
+        let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        let staged = graph
+            .pending
+            .iter()
+            .find(|module| module.canonical_path == entry)
+            .unwrap();
+        assert!(
+            !crate::lexer::lex(&staged.source)
+                .unwrap()
+                .needs_quote_dependency(),
+            "{name} has no lexical quote"
+        );
+        assert_eq!(staged.surface.needs_quote_dependency, eligible, "{name}");
+        let edges = staged
+            .dependencies
+            .iter()
+            .filter(|edge| edge.target().is_builtin_compiler_syntax())
+            .collect::<Vec<_>>();
+        assert_eq!(edges.len(), usize::from(eligible), "{name}");
+        if let Some(expected_private) = expected_private {
+            assert_eq!(edges[0].is_compiler_private(), expected_private, "{name}");
+        }
+    }
+}
+
+#[test]
+fn targeted_syntax_quote_activation_pays_and_preserves_diagnostics() {
+    for trailing in ["", "\r"] {
+        let text =
+            format!("import forms (syntax make)\nmain : Unit -> Int\nmain () = 42\n{trailing}");
+        let run = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let result = parse_graph_module(
+                Path::new("selection.ash"),
+                text.clone(),
+                None,
+                &mut budget,
+                BodyMode::Header,
+            );
+            (result, budget.consumed())
+        };
+        let (measured, total) = run(SYNTAX_WORK_LIMIT);
+        assert!(measured.unwrap().1.needs_quote_dependency);
+        let (short, consumed) = run(total - 1);
+        let Err(LoadGraphError::Syntax(failure)) = short else {
+            panic!("the activation must refuse at the one-unit-short boundary");
+        };
+        assert_eq!(
+            failure.resource,
+            Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+        );
+        assert_eq!(consumed, total - 1);
+        assert_eq!(failure.lexical.len(), usize::from(!trailing.is_empty()));
+        if !trailing.is_empty() {
+            assert_eq!(failure.lexical[0].reason, LexReason::BareCarriageReturn);
+        }
+        assert!(failure.parser.is_empty());
+        for _ in 0..2 {
+            let (exact, consumed) = run(total);
+            assert!(exact.unwrap().1.needs_quote_dependency);
+            assert_eq!(consumed, total);
+        }
+    }
+}
+
+#[test]
 fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     use std::{cell::RefCell, sync::Arc};
 
