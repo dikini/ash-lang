@@ -1290,6 +1290,7 @@ impl ResolveError {
                 | ResolveContext::MissingLexicalScope
                 | ResolveContext::MissingNominalScope
                 | ResolveContext::MissingConstructorScope
+                | ResolveContext::ForeignContract(_)
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
@@ -16658,7 +16659,8 @@ fn lookup_error(
         | ResolveContext::MissingFileScope
         | ResolveContext::MissingLexicalScope
         | ResolveContext::MissingNominalScope
-        | ResolveContext::MissingConstructorScope => ResolveReason::InternalState,
+        | ResolveContext::MissingConstructorScope
+        | ResolveContext::ForeignContract(_) => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
