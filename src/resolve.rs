@@ -1686,6 +1686,31 @@ pub(crate) fn resolve_module_with_syntax<'a>(
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
     expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
+    resolve_generator_module_with_syntax(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        uses,
+        owners,
+        terms,
+        &[],
+        expansion,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_generator_module_with_syntax<'a>(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    uses: &'a [crate::syntax::SyntaxNameUse],
+    owners: &'a [Arc<crate::resolved::CheckedModule>],
+    terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
+) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
         loaded,
         dependencies,
@@ -1696,6 +1721,7 @@ pub(crate) fn resolve_module_with_syntax<'a>(
             uses,
             owners,
             terms,
+            advance_sites,
         }),
         expansion,
     )
@@ -1706,6 +1732,7 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1821,7 +1848,11 @@ fn finish_module_resolution(
         .map_err(ResolveModuleError::Representation)?;
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
-    let mut resolved = ResolvedModule::new_with_quote_sites(admission.parts, admission.quote_sites);
+    let mut resolved = ResolvedModule::new_with_sites(
+        admission.parts,
+        admission.quote_sites,
+        admission.advance_sites,
+    );
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1876,6 +1907,7 @@ struct ResolvedModuleAdmission {
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     effect_coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
 }
 
@@ -2034,6 +2066,54 @@ fn resolve_module_names_with_budget<'a>(
     resolver.surface_quote_sites = loaded.quote_sites();
     resolver.current_caller = Some(loaded);
     let result = (|| {
+        let advance_count = resolver
+            .syntax_inputs
+            .map_or(0, |inputs| inputs.advance_sites.len());
+        let storage = advance_count.checked_mul(3).ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver.type_work.charge(storage).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver
+            .advance_seen
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .pending_advance_bindings
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .advance_sites
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver.advance_seen.resize(advance_count, false);
         resolver
             .constraint_work
             .charge(dependencies.len())
@@ -2148,6 +2228,25 @@ fn resolve_module_names_with_budget<'a>(
                 })?;
             catalogue.extend(resolver.source_foreign_libraries.iter().map(Arc::clone));
         }
+        resolver
+            .type_work
+            .charge(resolver.advance_seen.len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site completion exceeded its work budget",
+                )
+            })?;
+        if resolver.advance_seen.iter().any(|seen| !seen)
+            || !resolver.pending_advance_bindings.is_empty()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "an issued advance binding did not resolve exactly once",
+            ));
+        }
         Ok(ResolvedModuleAdmission {
             parts: ResolvedModuleParts {
                 module,
@@ -2167,6 +2266,7 @@ fn resolve_module_names_with_budget<'a>(
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
             quote_sites: std::mem::take(&mut resolver.quote_sites),
+            advance_sites: std::mem::take(&mut resolver.advance_sites),
             effect_coordinates,
         })
     })();
@@ -2623,6 +2723,9 @@ struct Resolver<'state, 'inputs> {
     current_caller: Option<&'state LoadedModule>,
     replacement_quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_seen: Vec<bool>,
+    pending_advance_bindings: Vec<[BinderId; 2]>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -3181,6 +3284,9 @@ impl Resolver<'_, '_> {
             current_caller: None,
             replacement_quote_sites: Vec::new(),
             quote_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            pending_advance_bindings: Vec::new(),
+            advance_sites: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -10430,11 +10536,43 @@ impl Resolver<'_, '_> {
                                 self.resolve_pattern_vector(&equation.patterns)?;
                             let patterns = ResolvedPatternBuffer(patterns);
                             self.push_binder_scope_many(&binders);
+                            let advance_start = self.pending_advance_bindings.len();
                             let resolved_body = self
                                 .resolve_expr(&equation.body)
                                 .map(ResolvedExpressionOwner::new);
                             self.scopes.truncate(scope_checkpoint);
                             let resolved_body = resolved_body?;
+                            let count = self
+                                .pending_advance_bindings
+                                .len()
+                                .checked_sub(advance_start)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        definition.span,
+                                        "advance-site owner range is invalid",
+                                    )
+                                })?;
+                            let association_work = count.checked_mul(2).ok_or_else(|| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            self.type_work.charge(association_work).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            for binders in self.pending_advance_bindings.drain(advance_start..) {
+                                self.advance_sites.push(crate::syntax::ResolvedAdvanceSite {
+                                    owner: global.id,
+                                    binders,
+                                });
+                            }
                             equations.0.push(ResolvedEquation {
                                 name: crate::resolved::ResolvedEquationHead {
                                     binder: global.id,
@@ -14668,6 +14806,75 @@ impl Resolver<'_, '_> {
                         problem: "missing",
                     })
                 })?;
+                let mut matched = None;
+                if let Some(inputs) = self.syntax_inputs {
+                    for (index, site) in inputs.advance_sites.iter().enumerate() {
+                        self.type_work.charge(2).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                binding.span,
+                                "advance-site matching exceeded its work budget",
+                            )
+                        })?;
+                        if site.binding == std::ptr::from_ref(binding) as usize {
+                            if matched.replace(index).is_some() {
+                                return Err(error(
+                                    ResolveReason::InternalState,
+                                    binding.span,
+                                    "an advance binding was issued more than once",
+                                ));
+                            }
+                        }
+                    }
+                }
+                if let Some(index) = matched {
+                    self.type_work.charge(3).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site tuple inspection exceeded its work budget",
+                        )
+                    })?;
+                    let ResolvedPatternKind::Tuple(elements) = &pattern.kind else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple pattern",
+                        ));
+                    };
+                    let [first, second] = elements.as_slice() else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding has the wrong tuple arity",
+                        ));
+                    };
+                    let (ResolvedPatternKind::Binder(first), ResolvedPatternKind::Binder(second)) =
+                        (&first.kind, &second.kind)
+                    else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple binders",
+                        ));
+                    };
+                    if first.id == second.id || self.advance_seen[index] {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding was duplicated",
+                        ));
+                    }
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site retention exceeded its work budget",
+                        )
+                    })?;
+                    self.advance_seen[index] = true;
+                    self.pending_advance_bindings.push([first.id, second.id]);
+                }
                 let pattern = ResolvedPatternOwner::new(pattern);
                 let annotation = binding
                     .annotation
@@ -26135,6 +26342,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &views,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let name = SurfaceName {
@@ -26250,6 +26458,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &views,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let name = SurfaceName {
@@ -26490,6 +26699,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &terms,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let ty = annotation(name);

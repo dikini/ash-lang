@@ -570,8 +570,40 @@ impl fmt::Display for RuntimeFailure {
 
 impl Error for RuntimeFailure {}
 
+// One heap-backed variant replaces exactly one existing continuation frame.
+#[derive(Debug)]
+enum AdvanceFrame {
+    Match {
+        arms: Box<[CoreMatchArm]>,
+        environment: Environment,
+        guard: syntax::AdvanceGuard,
+    },
+    ApplyFunction {
+        argument: NodeId,
+        caller_environment: Environment,
+        observation: syntax::AdvanceReference,
+    },
+    ApplyArgument {
+        function: Value,
+        observation: syntax::AdvanceReference,
+    },
+}
+
+fn boxed_advance_frame(frame: AdvanceFrame) -> Result<Box<[AdvanceFrame]>, RuntimeFailure> {
+    #[cfg(test)]
+    if machine_test_hooks::FAIL_ADVANCE_BOX.replace(false) {
+        return Err(RuntimeFailure::HeapCapacity);
+    }
+    let mut slot = Vec::new();
+    slot.try_reserve_exact(1)
+        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+    slot.push(frame);
+    Ok(slot.into_boxed_slice())
+}
+
 #[derive(Debug)]
 enum Frame {
+    GeneratorAdvance(Box<[AdvanceFrame]>),
     NetworkCapacity {
         node: NodeId,
         environment: Environment,
@@ -850,6 +882,43 @@ struct RetainedStore {
     api: crate::resolved::StoreApi,
     slots: Vec<RetainedSlot>,
     active_roots: usize,
+}
+
+// The experiment observes the same nested owners that continuation teardown visits.
+#[cfg(test)]
+fn experiment_advance_guards(frames: &[Frame]) -> usize {
+    let mut pending = vec![frames];
+    let mut guards = 0;
+    while let Some(frames) = pending.pop() {
+        for frame in frames {
+            match frame {
+                Frame::GeneratorAdvance(advance)
+                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }]) =>
+                {
+                    guards += 1;
+                }
+                Frame::RegionAllocated { segment, .. } => pending.push(&segment.frames),
+                Frame::ClauseBoundary {
+                    continuation: Some(segment),
+                    ..
+                } => {
+                    pending.push(&segment.frames);
+                }
+                Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } => {
+                    for slot in &store.slots {
+                        if let Some(segment) = &slot.continuation {
+                            pending.push(&segment.frames);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    guards
 }
 
 struct RestorePreparation {
@@ -1974,8 +2043,50 @@ impl<'runtime> Machine<'runtime> {
                             RuntimePhase::Evaluation,
                         )?;
                     }
-                    let transition =
+                    let mut transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    let advance = if let Some(host) = &mut self.syntax_host {
+                        host.advance_entry(node)?
+                    } else {
+                        None
+                    };
+                    if let Some(advance) = advance {
+                        let host = self
+                            .syntax_host
+                            .as_mut()
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        host.pay_advance_box()?;
+                        let frame = match (advance, transition.frame.take()) {
+                            (
+                                syntax::AdvanceEntry::Completion(site),
+                                Some(Frame::Match { arms, environment }),
+                            ) => {
+                                let guard = host.begin_advance(site)?;
+                                AdvanceFrame::Match {
+                                    arms,
+                                    environment,
+                                    guard,
+                                }
+                            }
+                            (
+                                syntax::AdvanceEntry::Application(site),
+                                Some(Frame::ApplyFunction {
+                                    argument,
+                                    caller_environment,
+                                }),
+                            ) => {
+                                let observation = host.application_advance(site)?;
+                                AdvanceFrame::ApplyFunction {
+                                    argument,
+                                    caller_environment,
+                                    observation,
+                                }
+                            }
+                            _ => return Err(RuntimeFailure::InvalidControlState),
+                        };
+                        transition.frame =
+                            Some(Frame::GeneratorAdvance(boxed_advance_frame(frame)?));
+                    }
                     if matches!(
                         &transition.frame,
                         Some(Frame::NativeInterpretBoundary { .. })
@@ -3008,8 +3119,110 @@ impl<'runtime> Machine<'runtime> {
         value: Value,
         preflighted: bool,
     ) -> Result<(), RuntimeFailure> {
-        disposal::check()?;
+        if let Err(failure) = disposal::check() {
+            if let Frame::GeneratorAdvance(frames) = &frame
+                && let [AdvanceFrame::Match { guard, .. }] = frames.as_ref()
+                && let Some(host) = &mut self.syntax_host
+            {
+                host.snapshot_advance_guard(guard);
+            }
+            return Err(failure);
+        }
         match frame {
+            Frame::GeneratorAdvance(frames) => {
+                let mut frames = frames.into_vec();
+                if frames.len() != 1 {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                match frames.pop().ok_or(RuntimeFailure::InvalidControlState)? {
+                    AdvanceFrame::Match {
+                        arms,
+                        environment,
+                        guard,
+                    } => {
+                        let result = (|| {
+                            self.syntax_host
+                                .as_mut()
+                                .ok_or(RuntimeFailure::InvalidControlState)?
+                                .verify_advance_guard(&guard)?;
+                            return_match(arms, environment, value, &self.heap)
+                        })();
+                        if result.is_err() {
+                            if let Some(host) = &mut self.syntax_host {
+                                host.snapshot_advance_guard(&guard);
+                            }
+                        }
+                        drop(guard);
+                        self.apply(result?);
+                    }
+                    AdvanceFrame::ApplyFunction {
+                        argument,
+                        caller_environment,
+                        observation,
+                    } => {
+                        self.syntax_host
+                            .as_mut()
+                            .ok_or(RuntimeFailure::InvalidControlState)?
+                            .verify_advance(&observation)?;
+                        let function =
+                            if matches!(value, Value::RegionFunction(_) | Value::Location(_)) {
+                                Value::Function(self.read_callable(&value)?)
+                            } else {
+                                value
+                            };
+                        let mut transition =
+                            return_application_function(argument, caller_environment, function)?;
+                        let Some(Frame::ApplyArgument { function }) = transition.frame.take()
+                        else {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        };
+                        self.syntax_host
+                            .as_mut()
+                            .ok_or(RuntimeFailure::InvalidControlState)?
+                            .pay_advance_box()?;
+                        transition.frame = Some(Frame::GeneratorAdvance(boxed_advance_frame(
+                            AdvanceFrame::ApplyArgument {
+                                function,
+                                observation,
+                            },
+                        )?));
+                        self.apply(transition);
+                    }
+                    AdvanceFrame::ApplyArgument {
+                        function,
+                        observation,
+                    } => {
+                        #[cfg(test)]
+                        if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+                            let direct = self.frames.iter().filter(|frame| matches!(frame,
+                                Frame::GeneratorAdvance(advance)
+                                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
+                            )).count();
+                            observe("call", experiment_advance_guards(&self.frames), direct, 0);
+                        }
+                        let host = self
+                            .syntax_host
+                            .as_mut()
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        host.verify_advance(&observation)?;
+                        if let Value::Function(closure) = &function {
+                            #[cfg(test)]
+                            if let Some(observe) =
+                                machine_test_hooks::ADVANCE_CALLABLE_OBSERVER.get()
+                            {
+                                observe(&closure.origin);
+                            }
+                            host.observe_advance(&observation, &closure.origin)?;
+                        }
+                        // The ordinary dispatch owns every callable case and unchanged reason.
+                        self.return_from_preflighted(
+                            Frame::ApplyArgument { function },
+                            value,
+                            preflighted,
+                        )?;
+                    }
+                }
+            }
             Frame::NetworkCapacity { node, environment } => {
                 let capacity = read_integer(&value, &self.heap, &mut self.instantiation_work)?
                     .to_usize()
@@ -3414,7 +3627,18 @@ impl<'runtime> Machine<'runtime> {
                     .captured_cells
                     .checked_sub(segment.frames.len())
                     .ok_or(RuntimeFailure::InvalidControlState)?;
+                #[cfg(test)]
+                let restored_guards = machine_test_hooks::ADVANCE_TRACE_OBSERVER
+                    .get()
+                    .map(|_| experiment_advance_guards(&segment.frames));
                 self.frames.append(&mut segment.frames);
+                #[cfg(test)]
+                if let Some(guards) = restored_guards
+                    && guards != 0
+                    && let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get()
+                {
+                    observe("restore", guards, 0, self.frames.len());
+                }
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ApplyArgument {
@@ -4783,7 +5007,52 @@ impl<'runtime> Machine<'runtime> {
         if let Some(trace) = &mut self.effect_trace {
             reserve_control(trace, 3, RuntimeResource::EffectTrace, false)?;
         }
+        #[cfg(test)]
+        let capture_observation = if machine_test_hooks::CAPTURE_RANGE_OBSERVER.get().is_some() {
+            let first_direct_guard = self.frames.iter().position(|frame| {
+                matches!(frame,
+                    Frame::GeneratorAdvance(advance)
+                        if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
+                )
+            });
+            let handler_effect = match &self.frames[selected] {
+                Frame::HandlerBoundary { node, .. } => {
+                    self.handler(*node).map(|handler| handler.effect().effect())
+                }
+                _ => None,
+            };
+            let canonical_default = handler_effect.is_some_and(|effect| {
+                crate::resolved::RegionApi::for_module(effect.module())
+                    .is_some_and(|api| api.default_alloc() == effect)
+            });
+            Some(machine_test_hooks::AdvanceCaptureObservation {
+                selected,
+                depth: self.frames.len(),
+                first_direct_guard,
+                live_guards: experiment_advance_guards(&self.frames),
+                captured_guards: experiment_advance_guards(&self.frames[selected..]),
+                handler_effect,
+                operation,
+                canonical_default,
+            })
+        } else {
+            None
+        };
         let continuation = self.capture_from(selected)?;
+        #[cfg(test)]
+        {
+            if let Some(observation) = capture_observation
+                && let Some(observe) = machine_test_hooks::CAPTURE_RANGE_OBSERVER.get()
+            {
+                observe(observation);
+            }
+            if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+                let guards = experiment_advance_guards(&continuation.frames);
+                if guards != 0 {
+                    observe("capture", guards, 0, selected);
+                }
+            }
+        }
         if let Some((index, pending)) = registration_owner
             && let Frame::RegistrationBoundary {
                 handler_active,
@@ -5336,7 +5605,18 @@ impl<'runtime> Machine<'runtime> {
             };
             *completion_count = merged_count;
         }
+        #[cfg(test)]
+        let resumed_guards = machine_test_hooks::ADVANCE_TRACE_OBSERVER
+            .get()
+            .map(|_| experiment_advance_guards(&continuation.frames));
         self.frames.append(&mut continuation.frames);
+        #[cfg(test)]
+        if let Some(guards) = resumed_guards
+            && guards != 0
+            && let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get()
+        {
+            observe("resume", guards, 0, self.frames.len());
+        }
         if let Some(index) = registration_owner
             && let Frame::RegistrationBoundary { handler_active, .. } = &mut self.frames[index]
         {
@@ -6958,6 +7238,37 @@ pub(crate) fn evaluate_transformer_with_owners<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_generator_transformer<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: Arc<crate::syntax::SyntaxContexts>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+    capsule: &crate::driver::GeneratorDiagnosticCapsule<'_>,
+    failure: &mut Option<crate::syntax::AdvanceLocations>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    *failure = None;
+    let mut contexts = Some(contexts);
+    evaluate_transformer_inner(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        &mut contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+        Some(capsule),
+        Some(failure),
+    )
+}
+
 // The quote-input route recovers the same context allocation after the host has
 // finished, before the ordinary machine teardown.
 #[allow(clippy::too_many_arguments)]
@@ -6971,6 +7282,35 @@ pub(crate) fn evaluate_transformer_with_context_slot<'a>(
     frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
     syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
     staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    evaluate_transformer_inner(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_transformer_inner<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: &mut Option<Arc<crate::syntax::SyntaxContexts>>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+    capsule: Option<&crate::driver::GeneratorDiagnosticCapsule<'_>>,
+    mut failure: Option<&mut Option<crate::syntax::AdvanceLocations>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
@@ -6986,12 +7326,30 @@ pub(crate) fn evaluate_transformer_with_context_slot<'a>(
             syntax_work,
             staged_owners,
         )?);
+        if let Some(capsule) = capsule {
+            machine
+                .syntax_host
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .install_advance(capsule, entry)?;
+        }
         #[cfg(test)]
         {
             machine.transformer_drop_observer = Some(TransformerDropObserver);
         }
         let mut transferred = (|| {
-            let evaluation = machine.run_loop()?;
+            let evaluation = match machine.run_loop() {
+                Ok(evaluation) => evaluation,
+                Err(cause) => {
+                    if let Some(destination) = failure.as_deref_mut() {
+                        *destination = machine
+                            .syntax_host
+                            .as_ref()
+                            .and_then(syntax::SyntaxHost::advance_failure);
+                    }
+                    return Err(cause);
+                }
+            };
             #[cfg(test)]
             if let Some(observe) = machine_test_hooks::TRANSFORMER_EVALUATION_OBSERVER.get() {
                 observe(entry, &evaluation);

@@ -59,6 +59,26 @@ pub(crate) struct SurfaceQuoteSite {
     pub(crate) template: Arc<QuoteTemplate>,
 }
 
+/// The selected callable's paid, scalar causal location projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AdvanceLocations {
+    pub(crate) primary: crate::source::Span,
+    pub(crate) definition: Option<crate::source::Span>,
+}
+
+/// Exact compiler-issued Advance binding while its adapter is borrowed.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceAdvanceSite {
+    pub(crate) binding: usize,
+}
+
+/// The issued binding's actual declaring owner and ordered tuple binders.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedAdvanceSite {
+    pub(crate) owner: crate::resolved::BinderId,
+    pub(crate) binders: [crate::resolved::BinderId; 2],
+}
+
 /// Immutable compiler-owned data shared by the successive checked stages.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct QuoteTemplate {
@@ -2712,6 +2732,7 @@ pub(crate) fn generator_adapter_definition(
         crate::surface::SurfaceDefinition,
         Vec<SyntaxNameUse>,
         Vec<SurfaceQuoteSite>,
+        Vec<SurfaceAdvanceSite>,
     ),
     crate::parser::MacroParseFailure,
 > {
@@ -3326,6 +3347,17 @@ pub(crate) fn generator_adapter_definition(
         }
     }
     let mut quote_sites = Vec::new();
+    budget.charge_units(plan.actions.len()).map_err(resource)?;
+    let advance_count = plan
+        .actions
+        .iter()
+        .filter(|action| matches!(action, GeneratorAction::Advance { .. }))
+        .count();
+    budget.charge_units(advance_count).map_err(resource)?;
+    let mut advance_sites = Vec::new();
+    advance_sites
+        .try_reserve_exact(advance_count)
+        .map_err(|_| MacroParseFailure::Invalid)?;
     let mut declarations = Vec::with_capacity(
         plan.actions
             .len()
@@ -3531,7 +3563,15 @@ pub(crate) fn generator_adapter_definition(
                     span,
                     diagnostic: step_pattern_location(generator, frame, budget)?,
                 };
-                declarations.push(local(pattern, application, span));
+                let issued = local(pattern, application, span);
+                let SurfaceLocalDeclaration::Binding(binding) = &issued else {
+                    return Err(MacroParseFailure::Invalid);
+                };
+                budget.charge().map_err(resource)?;
+                advance_sites.push(SurfaceAdvanceSite {
+                    binding: std::ptr::from_ref(binding.as_ref()) as usize,
+                });
+                declarations.push(issued);
                 let origin = invoke(
                     "invocation_origin",
                     builtin_introduction,
@@ -3867,7 +3907,7 @@ pub(crate) fn generator_adapter_definition(
             record("invocation_origin", builtin_introduction)?;
         }
     }
-    Ok((definition, uses, quote_sites))
+    Ok((definition, uses, quote_sites, advance_sites))
 }
 
 pub(crate) enum DeclarationAdapter<'a> {
@@ -8299,7 +8339,8 @@ mod tests {
         };
         let mut measured = SyntaxBudget::default();
         measured.charge_units(17).unwrap();
-        let (definition, uses, sites) = run(&mut measured).unwrap();
+        let (definition, uses, sites, advances) = run(&mut measured).unwrap();
+        assert_eq!(advances.len(), 1);
         assert!(uses.is_empty());
         assert!(sites.is_empty());
         let used = measured.consumed();
@@ -8472,7 +8513,8 @@ mod tests {
         for _ in 0..2 {
             let mut exact = SyntaxBudget::with_limit(used);
             exact.charge_units(17).unwrap();
-            let (definition, _, _) = run(&mut exact).unwrap();
+            let (definition, _, _, advances) = run(&mut exact).unwrap();
+            assert_eq!(advances.len(), 1);
             assert_eq!(exact.consumed(), used);
             drop(definition);
             assert_eq!(

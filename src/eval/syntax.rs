@@ -1,6 +1,13 @@
 //! Compiler syntax services for one checked Ash transformer invocation.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+use triomphe::Arc as FallibleArc;
 
 use super::{
     HeapCell, RuntimeFailure, Value, allocate_heap, borrowed_bytes, read_integer, resolve_location,
@@ -138,12 +145,50 @@ fn check_declaration_contents_at(
 }
 
 #[derive(Debug)]
+struct AdvanceObservation {
+    live: AtomicBool,
+    locations: OnceLock<crate::syntax::AdvanceLocations>,
+}
+
+/// The only owner that can retire a completion observation.
+#[derive(Debug)]
+pub(super) struct AdvanceGuard {
+    observation: FallibleArc<AdvanceObservation>,
+}
+
+impl Drop for AdvanceGuard {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_GUARD_DROPS
+            .set(super::machine_test_hooks::ADVANCE_GUARD_DROPS.get() + 1);
+        self.observation.live.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+struct AdvanceRuntime {
+    sites: Vec<crate::elaborate::CheckedAdvanceSite>,
+    current: Option<(NodeId, FallibleArc<AdvanceObservation>)>,
+    failure: Option<crate::syntax::AdvanceLocations>,
+}
+
+#[derive(Debug)]
+pub(super) struct AdvanceReference(FallibleArc<AdvanceObservation>);
+
+#[derive(Clone, Copy)]
+pub(super) enum AdvanceEntry {
+    Completion(crate::elaborate::CheckedAdvanceSite),
+    Application(crate::elaborate::CheckedAdvanceSite),
+}
+
+#[derive(Debug)]
 pub(super) struct SyntaxHost<'inv> {
     pub(super) occurrence: NodeId,
     pub(super) binder: BinderId,
     pub(super) ops: EffectId,
     pub(super) started: bool,
     pub(super) steps_left: usize,
+    advance: Option<AdvanceRuntime>,
     invocation: Arc<()>,
     frame: Arc<ExpansionFrame>,
     source: SourceFile,
@@ -172,6 +217,17 @@ pub(super) struct SyntaxHost<'inv> {
 }
 
 impl<'inv> SyntaxHost<'inv> {
+    #[cfg(test)]
+    fn experiment_cut(&mut self, phase: super::machine_test_hooks::AdvanceCutPoint) {
+        use super::machine_test_hooks as hooks;
+        if let Some((selected, requested)) = hooks::ADVANCE_CUT.get()
+            && selected == phase
+        {
+            hooks::ADVANCE_CUT.set(None);
+            hooks::ADVANCE_CUT_BEFORE.set(Some(self.steps_left));
+            self.steps_left = self.steps_left.min(requested);
+        }
+    }
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -375,6 +431,7 @@ impl<'inv> SyntaxHost<'inv> {
             ops: entry.ops,
             started: false,
             steps_left: 1_000_000,
+            advance: None,
             invocation: Arc::new(()),
             frame,
             source: source.clone(),
@@ -397,6 +454,328 @@ impl<'inv> SyntaxHost<'inv> {
             tokens: Vec::new(),
             constructors,
             operations,
+        })
+    }
+
+    fn charge_advance(&mut self, units: usize) -> Result<(), RuntimeFailure> {
+        self.steps_left = self
+            .steps_left
+            .checked_sub(units)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        Ok(())
+    }
+
+    pub(super) fn install_advance(
+        &mut self,
+        capsule: &crate::driver::GeneratorDiagnosticCapsule<'_>,
+        entry: &ValidatedMacroEntry,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::Install);
+        self.charge_advance(1)?;
+        if !capsule.matches_entry(entry) || self.advance.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let sites = capsule.sites();
+        self.charge_advance(
+            sites
+                .len()
+                .checked_mul(4)
+                .ok_or(RuntimeFailure::ResourceCapacity)?,
+        )?;
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(sites.len())
+            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        owned.extend_from_slice(sites);
+        self.advance = Some(AdvanceRuntime {
+            sites: owned,
+            current: None,
+            failure: None,
+        });
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_INSTALLED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn advance_entry(
+        &mut self,
+        node: NodeId,
+    ) -> Result<Option<AdvanceEntry>, RuntimeFailure> {
+        #[cfg(test)]
+        if self
+            .advance
+            .as_ref()
+            .is_some_and(|state| state.sites.iter().any(|site| site.completion == node))
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::CompletionLookup);
+        }
+        #[cfg(test)]
+        if self
+            .advance
+            .as_ref()
+            .is_some_and(|state| state.sites.iter().any(|site| site.application == node))
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ApplicationLookup);
+        }
+        let Some(count) = self.advance.as_ref().map(|state| state.sites.len()) else {
+            return Ok(None);
+        };
+        for index in 0..count {
+            // Prepay all three copied IDs and both node comparisons.
+            self.charge_advance(5)?;
+            let site = self
+                .advance
+                .as_ref()
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .sites[index];
+            if site.completion == node {
+                #[cfg(test)]
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_LOOKED_UP,
+                );
+                return Ok(Some(AdvanceEntry::Completion(site)));
+            }
+            if site.application == node {
+                #[cfg(test)]
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                );
+                return Ok(Some(AdvanceEntry::Application(site)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn begin_advance(
+        &mut self,
+        site: crate::elaborate::CheckedAdvanceSite,
+    ) -> Result<AdvanceGuard, RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::GuardCreation);
+        self.charge_advance(2)?;
+        if self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .is_some_and(|(_, current)| current.live.load(Ordering::Acquire))
+        {
+            // This is the explicit single-slot experiment counterexample stop.
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        // Allocation, Arc retain, retirement and the bounded final failure copy
+        // are all prepaid here, before any later zero-step error edge.
+        self.charge_advance(10)?;
+        #[cfg(test)]
+        if super::machine_test_hooks::FAIL_ADVANCE_ARC.replace(false) {
+            return Err(RuntimeFailure::HeapCapacity);
+        }
+        let observation = FallibleArc::try_new(AdvanceObservation {
+            live: AtomicBool::new(true),
+            locations: OnceLock::new(),
+        })
+        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        let guard = AdvanceGuard {
+            observation: FallibleArc::clone(&observation),
+        };
+        self.advance
+            .as_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .current = Some((site.completion, observation));
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_GUARD_CREATED,
+        );
+        Ok(guard)
+    }
+
+    pub(super) fn application_advance(
+        &mut self,
+        site: crate::elaborate::CheckedAdvanceSite,
+    ) -> Result<AdvanceReference, RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ReferenceCreation);
+        // Account for completion association, liveness and the passive retain.
+        self.charge_advance(3)?;
+        let (completion, current) = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if *completion != site.completion || !current.live.load(Ordering::Acquire) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        {
+            let reference = AdvanceReference(FallibleArc::clone(current));
+            super::machine_test_hooks::ADVANCE_STAGES.set(
+                super::machine_test_hooks::ADVANCE_STAGES.get()
+                    | super::machine_test_hooks::ADVANCE_REFERENCE_CREATED,
+            );
+            Ok(reference)
+        }
+        #[cfg(not(test))]
+        {
+            Ok(AdvanceReference(FallibleArc::clone(current)))
+        }
+    }
+
+    pub(super) fn verify_advance(
+        &mut self,
+        reference: &AdvanceReference,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ReferenceVerification);
+        self.charge_advance(2)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &reference.0) || !current.live.load(Ordering::Acquire) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_REFERENCE_VERIFIED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn verify_advance_guard(
+        &mut self,
+        guard: &AdvanceGuard,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::GuardReturn);
+        self.charge_advance(2)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &guard.observation)
+            || !current.live.load(Ordering::Acquire)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_GUARD_VERIFIED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn pay_advance_box(&mut self) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::FramePayment);
+            let result = self.charge_advance(3);
+            if result.is_ok() {
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_FRAME_PAID,
+                );
+            }
+            result
+        }
+        #[cfg(not(test))]
+        {
+            self.charge_advance(3)
+        }
+    }
+
+    pub(super) fn observe_advance(
+        &mut self,
+        reference: &AdvanceReference,
+        origin: &crate::source::Origin,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::OriginProjection);
+        self.charge_advance(3)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &reference.0)
+            || !current.live.load(Ordering::Acquire)
+            || current.locations.get().is_some()
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let mut current_origin = origin;
+        let locations = loop {
+            self.charge_advance(1)?;
+            match current_origin {
+                crate::source::Origin::Source(span) => {
+                    self.charge_advance(1)?;
+                    break crate::syntax::AdvanceLocations {
+                        primary: *span,
+                        definition: None,
+                    };
+                }
+                crate::source::Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    self.charge_advance(2)?;
+                    break crate::syntax::AdvanceLocations {
+                        primary: *invocation,
+                        definition: Some(*definition),
+                    };
+                }
+                crate::source::Origin::Generated { cause, .. } => current_origin = cause,
+                crate::source::Origin::Related { primary, .. } => current_origin = primary,
+            }
+        };
+        // No partial projection is published if the final publication is unpaid.
+        self.charge_advance(2)?;
+        reference
+            .0
+            .locations
+            .set(locations)
+            .map_err(|_| RuntimeFailure::InvalidControlState)?;
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_ORIGIN_PUBLISHED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn snapshot_advance_guard(&mut self, guard: &AdvanceGuard) {
+        // This copy and live-state check were reserved when this guard was admitted.
+        let value = if guard.observation.live.load(Ordering::Acquire) {
+            guard.observation.locations.get().copied()
+        } else {
+            None
+        };
+        if let Some(state) = &mut self.advance {
+            state.failure = value;
+        }
+    }
+
+    pub(super) fn advance_failure(&self) -> Option<crate::syntax::AdvanceLocations> {
+        let state = self.advance.as_ref()?;
+        state.failure.or_else(|| {
+            let (_, observation) = state.current.as_ref()?;
+            if observation.live.load(Ordering::Acquire) {
+                observation.locations.get().copied()
+            } else {
+                None
+            }
         })
     }
 
@@ -1650,6 +2029,16 @@ impl<'inv> SyntaxHost<'inv> {
         heap: &[HeapCell],
         work: &mut TypeWorkBudget,
     ) -> Result<TransformerOutput, RuntimeFailure> {
+        #[cfg(test)]
+        if self.advance.is_some() {
+            super::machine_test_hooks::ADVANCE_STAGES.set(
+                super::machine_test_hooks::ADVANCE_STAGES.get()
+                    | super::machine_test_hooks::ADVANCE_TRANSFER_REACHED,
+            );
+            if super::machine_test_hooks::FAIL_ADVANCE_TRANSFER.replace(false) {
+                return Err(RuntimeFailure::HeapCapacity);
+            }
+        }
         let (tag, syntax) = constructor_fields(result, heap)?;
         if tag == self.constructor("Expanded")? {
             let type_accounting = self.type_accounting
@@ -2819,6 +3208,7 @@ mod tests {
             ops: EffectId::new(ModuleId::new(0), 0),
             started: false,
             steps_left: 100,
+            advance: None,
             invocation: Arc::new(()),
             frame: Arc::new(ExpansionFrame {
                 invocation: span,
@@ -8706,6 +9096,7 @@ mod tests {
                     ops,
                     started: false,
                     steps_left: 100,
+                    advance: None,
                     invocation: Arc::new(()),
                     frame,
                     source,
@@ -8850,6 +9241,7 @@ mod tests {
             ops,
             started: false,
             steps_left: 100,
+            advance: None,
             invocation: Arc::new(()),
             frame: Arc::new(ExpansionFrame {
                 invocation: span,

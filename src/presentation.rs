@@ -1647,6 +1647,20 @@ fn compile_syntax_runtime_failure<'a>(
             value: FactValue::Text(cause),
         }],
     };
+    if let Some(step) = failure.step {
+        diagnostic.related.push(label(
+            step.primary,
+            "generator_step_origin",
+            Message::syntax_generator_step_origin(),
+        )?);
+        if let Some(definition) = step.definition {
+            diagnostic.related.push(label(
+                definition,
+                "generator_step_definition",
+                Message::syntax_generator_step_definition(),
+            )?);
+        }
+    }
     let teardown = match failure.cause() {
         crate::eval::RuntimeFailure::Report(report) => report.teardown.or_else(|| {
             report

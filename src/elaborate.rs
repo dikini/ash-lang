@@ -3304,6 +3304,9 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     global_capture_uses: Vec<CheckedGlobalUse>,
     quote_sites: Vec<QuoteSynthesisSite>,
     checked_quote_sites: Vec<CheckedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
+    advance_seen: Vec<bool>,
+    checked_advance_sites: Vec<CheckedAdvanceSite>,
     quote_syntax_work: Option<crate::syntax_resource::SyntaxBudget>,
     quote_resource_failure: Option<crate::syntax_resource::ResourceFailure>,
     escape_result_requests: Vec<BinderId>,
@@ -3341,6 +3344,14 @@ pub(crate) struct CheckedQuoteSite {
     pub(crate) constructor_body: NodeId,
     pub(crate) constructor_result: NodeId,
     pub(crate) closure: NodeId,
+}
+
+/// The direct checked Apply and its enclosing tuple completion Match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CheckedAdvanceSite {
+    pub(crate) owner: BinderId,
+    pub(crate) application: NodeId,
+    pub(crate) completion: NodeId,
 }
 
 /// Pure Core elaboration with its uninhabited operation family.
@@ -3754,6 +3765,86 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(crate) fn take_checked_quote_sites(&mut self) -> Vec<CheckedQuoteSite> {
         std::mem::take(&mut self.checked_quote_sites)
     }
+    pub(crate) fn take_checked_advance_sites(&mut self) -> Vec<CheckedAdvanceSite> {
+        std::mem::take(&mut self.checked_advance_sites)
+    }
+
+    fn install_advance_sites(
+        &mut self,
+        sites: &[crate::syntax::ResolvedAdvanceSite],
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(sites.len().checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        self.advance_sites
+            .try_reserve_exact(sites.len())
+            .map_err(|_| type_resource())?;
+        self.advance_seen
+            .try_reserve_exact(sites.len())
+            .map_err(|_| type_resource())?;
+        self.advance_sites.extend_from_slice(sites);
+        self.advance_seen.resize(sites.len(), false);
+        Ok(())
+    }
+
+    fn advance_site_for_binding(
+        &mut self,
+        binding: &crate::resolved::ResolvedBinding,
+    ) -> Result<Option<usize>, TypeError> {
+        if self.advance_sites.is_empty() {
+            return Ok(None);
+        }
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        let Some((MethodEvidenceOwner::Global(owner), actual_owner)) = self.checked_body_owner
+        else {
+            return Ok(None);
+        };
+        if owner != actual_owner {
+            return Err(invalid_state());
+        }
+        let crate::resolved::ResolvedPatternKind::Tuple(elements) = &binding.pattern.kind else {
+            return Ok(None);
+        };
+        let [first, second] = elements.as_slice() else {
+            return Ok(None);
+        };
+        let (
+            crate::resolved::ResolvedPatternKind::Binder(first),
+            crate::resolved::ResolvedPatternKind::Binder(second),
+        ) = (&first.kind, &second.kind)
+        else {
+            return Ok(None);
+        };
+        let binders = [first.id, second.id];
+        let mut result = None;
+        for (index, site) in self.advance_sites.iter().enumerate() {
+            self.type_work.charge(4).map_err(|()| type_resource())?;
+            if site.owner == owner && site.binders == binders && result.replace(index).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        Ok(result)
+    }
+
+    fn push_checked_advance_site(&mut self, site: CheckedAdvanceSite) -> Result<(), TypeError> {
+        let live = self.checked_advance_sites.len();
+        let work = if live == self.checked_advance_sites.capacity() {
+            live.checked_mul(2)
+                .and_then(|value| value.checked_add(2))
+                .ok_or_else(type_resource)?
+        } else {
+            1
+        };
+        self.type_work.charge(work).map_err(|()| type_resource())?;
+        if live == self.checked_advance_sites.capacity() {
+            self.checked_advance_sites
+                .try_reserve_exact(1)
+                .map_err(|_| type_resource())?;
+        }
+        self.checked_advance_sites.push(site);
+        Ok(())
+    }
+
     fn charge_quote_work(&mut self, units: usize) -> Result<(), TypeError> {
         let work = self.quote_syntax_work.as_mut().ok_or_else(invalid_state)?;
         if let Err(failure) = work.charge_units(units) {
@@ -4027,6 +4118,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             fragment_catalog_offsets: HashMap::new(),
             quote_sites: Vec::new(),
             checked_quote_sites: Vec::new(),
+            advance_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            checked_advance_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
             escape_result_requests: Vec::new(),
@@ -4185,6 +4279,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             fragment_catalog_offsets: HashMap::new(),
             quote_sites: Vec::new(),
             checked_quote_sites: Vec::new(),
+            advance_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            checked_advance_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
             escape_result_requests: Vec::new(),
@@ -4556,6 +4653,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             fragment_catalog_offsets: HashMap::new(),
             quote_sites: Vec::new(),
             checked_quote_sites: Vec::new(),
+            advance_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            checked_advance_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
             escape_result_requests: Vec::new(),
@@ -5470,6 +5570,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             fragment_catalog_offsets: HashMap::new(),
             quote_sites: Vec::new(),
             checked_quote_sites: Vec::new(),
+            advance_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            checked_advance_sites: Vec::new(),
             quote_syntax_work: None,
             quote_resource_failure: None,
             escape_result_requests: Vec::new(),
@@ -6069,6 +6172,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             scoped_owners: std::mem::take(&mut self.checked_scoped_owners),
             global_uses: std::mem::take(&mut self.global_capture_uses),
             quote_sites: std::mem::take(&mut self.checked_quote_sites),
+            advance_sites: std::mem::take(&mut self.checked_advance_sites),
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             imported_type_origins: HashMap::new(),
             next_generated_type_variable: u32::MAX,
@@ -11791,6 +11895,40 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         fragment: &CheckedTypedFragment<S>,
         transfer: &crate::core::transform::FragmentNodeMap<'_>,
     ) -> Result<(), TypeError> {
+        for site in &fragment.advance_sites {
+            self.type_work.charge(3).map_err(|()| type_resource())?;
+            fragment
+                .builder
+                .checked_fragment_node(site.application, &mut self.type_work)?;
+            fragment
+                .builder
+                .checked_fragment_node(site.completion, &mut self.type_work)?;
+            let application = transfer.mapped(site.application);
+            let completion = transfer.mapped(site.completion);
+            match (application, completion) {
+                (Err(_), Err(_)) => continue,
+                (Ok(application), Ok(completion)) => {
+                    let node = self
+                        .builder
+                        .checked_fragment_node(completion, &mut self.type_work)?;
+                    let Some(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::Match(matched),
+                    )) = F::pure(node.kind)
+                    else {
+                        return Err(invalid_state());
+                    };
+                    if matched.scrutinee() != application {
+                        return Err(invalid_state());
+                    }
+                    self.push_checked_advance_site(CheckedAdvanceSite {
+                        owner: site.owner,
+                        application,
+                        completion,
+                    })?;
+                }
+                _ => return Err(invalid_state()),
+            }
+        }
         for site in &fragment.quote_sites {
             self.charge_quote_work(1)?;
             // Validate the recorded source ID even when this root does not reach it.
@@ -19406,7 +19544,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } else {
                 None
             };
-            match &source_declarations[retained_declarations.len()] {
+            let source_declaration = &source_declarations[retained_declarations.len()];
+            let advance_site = match source_declaration {
+                ResolvedLocalDeclaration::Binding(binding) => {
+                    self.advance_site_for_binding(binding)?
+                }
+                _ => None,
+            };
+            match source_declaration {
                 ResolvedLocalDeclaration::Evidence(_) => {}
                 ResolvedLocalDeclaration::Binding(binding) => {
                     let mut ids = Vec::new();
@@ -19506,18 +19651,54 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     pattern_count,
                 } => {
                     let effect_span = origin.primary_span();
-                    (
-                        self.lower_match_expression(
-                            initializer,
-                            vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
-                            core_body_type,
-                            origin,
-                            contains_newtype,
-                            pattern_count,
-                        )?,
-                        effects,
-                        effect_span,
-                    )
+                    if advance_site.is_some() {
+                        self.type_work.charge(2).map_err(|()| type_resource())?;
+                        if contains_newtype {
+                            return Err(invalid_state());
+                        }
+                        let checked = self
+                            .builder
+                            .checked_fragment_node(initializer, &mut self.type_work)?;
+                        if !matches!(
+                            F::pure(checked.kind),
+                            Some(crate::core::PureExprKind::Computation(
+                                crate::core::PureComputation::Apply(_)
+                            ))
+                        ) {
+                            return Err(invalid_state());
+                        }
+                    }
+                    let completion = self.lower_match_expression(
+                        initializer,
+                        vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
+                        core_body_type,
+                        origin,
+                        contains_newtype,
+                        pattern_count,
+                    )?;
+                    if let Some(index) = advance_site {
+                        self.type_work.charge(3).map_err(|()| type_resource())?;
+                        let checked = self
+                            .builder
+                            .checked_fragment_node(completion, &mut self.type_work)?;
+                        let Some(crate::core::PureExprKind::Computation(
+                            crate::core::PureComputation::Match(matched),
+                        )) = F::pure(checked.kind)
+                        else {
+                            return Err(invalid_state());
+                        };
+                        if matched.scrutinee() != initializer || self.advance_seen[index] {
+                            return Err(invalid_state());
+                        }
+                        let owner = self.advance_sites[index].owner;
+                        self.push_checked_advance_site(CheckedAdvanceSite {
+                            owner,
+                            application: initializer,
+                            completion,
+                        })?;
+                        self.advance_seen[index] = true;
+                    }
+                    (completion, effects, effect_span)
                 }
                 ElaboratedDeclaration::Recursive {
                     members,
@@ -25648,6 +25829,7 @@ fn check_module_with_budget_family<
                 .extend_from_slice(requested);
         }
         elaborator.install_quote_sites(resolved.module(), resolved.quote_sites())?;
+        elaborator.install_advance_sites(resolved.advance_sites())?;
         let interface_facts = checked_interface_facts(
             &resolved,
             &checked_interfaces,
@@ -25777,6 +25959,23 @@ fn check_module_with_budget_family<
         })();
         std::mem::swap(&mut elaborator.constraint_work, constraint_work);
         let (globals, physical_bindings) = finalization?;
+        if !elaborator.advance_sites.is_empty() {
+            elaborator
+                .type_work
+                .charge(
+                    elaborator
+                        .advance_seen
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            if elaborator.advance_seen.iter().any(|seen| !seen)
+                || elaborator.checked_advance_sites.len() != elaborator.advance_sites.len()
+            {
+                return Err(invalid_state());
+            }
+        }
         let mut exports = ExportSummary::freeze(
             &resolved,
             &schemes,
@@ -25872,6 +26071,7 @@ fn check_module_with_budget_family<
         scoped_owners: elaborator.checked_scoped_owners,
         global_uses: elaborator.global_capture_uses,
         quote_sites: elaborator.checked_quote_sites,
+        advance_sites: elaborator.checked_advance_sites,
         generated_type_variables: elaborator.generated_type_variables,
         imported_type_origins: elaborator.imported_type_origins,
         next_generated_type_variable: elaborator.next_generated_type_variable,
@@ -26852,6 +27052,7 @@ pub(crate) struct CheckedTypedFragment<F: CoreOperationFamily> {
     scoped_owners: Vec<CheckedScopedOwner>,
     global_uses: Vec<CheckedGlobalUse>,
     quote_sites: Vec<CheckedQuoteSite>,
+    advance_sites: Vec<CheckedAdvanceSite>,
     generated_type_variables: GeneratedTypeVariableRegistry,
     imported_type_origins: HashMap<TypeVariableId, GeneratedTypeOrigin>,
     next_generated_type_variable: u32,

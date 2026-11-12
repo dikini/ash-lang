@@ -1154,6 +1154,14 @@ impl Machine<'_> {
             .try_reserve(2)
             .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
         segment.extend(self.frames.drain(index + 1..));
+        #[cfg(test)]
+        if let Some(observe) = super::machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+            let guards = super::experiment_advance_guards(&segment);
+            if guards != 0 {
+                let host = matches!(&allocate, Value::RegionHostFunction { release: false, .. });
+                observe("allocate", guards, usize::from(host), self.frames.len());
+            }
+        }
         self.captured_cells = retained;
         self.frames.push(Frame::RegionAllocated {
             segment: CapturedContinuation { frames: segment },

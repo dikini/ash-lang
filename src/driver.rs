@@ -578,6 +578,7 @@ pub struct SyntaxRuntimeFailure {
     pub(crate) cause: RuntimeFailure,
     pub(crate) invocation: Span,
     pub(crate) definition: Span,
+    pub(crate) step: Option<crate::syntax::AdvanceLocations>,
 }
 
 impl SyntaxRuntimeFailure {
@@ -2833,33 +2834,34 @@ fn evaluate_generator_transformer(
         crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
             .map_err(quote_resource_failure)?;
     let quote_projection = staged.quote_projection();
-    let (definition, uses, quote_sites) = crate::syntax::generator_adapter_definition(
-        plan,
-        &escape_categories,
-        &selection.declaration.matcher,
-        captures,
-        source,
-        &contexts,
-        quote_projection,
-        introduction,
-        builtin_introduction,
-        owners,
-        &frame,
-        budget,
-    )
-    .map_err(|error| match error {
-        crate::parser::MacroParseFailure::Syntax {
-            diagnostics,
-            resource,
-        } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
-            diagnostics,
-            resource,
-            invocation: frame.invocation,
-            definition: selection.declaration.span,
-            teardown: None,
-        })),
-        crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
-    })?;
+    let (definition, uses, quote_sites, advance_sites) =
+        crate::syntax::generator_adapter_definition(
+            plan,
+            &escape_categories,
+            &selection.declaration.matcher,
+            captures,
+            source,
+            &contexts,
+            quote_projection,
+            introduction,
+            builtin_introduction,
+            owners,
+            &frame,
+            budget,
+        )
+        .map_err(|error| match error {
+            crate::parser::MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                diagnostics,
+                resource,
+                invocation: frame.invocation,
+                definition: selection.declaration.span,
+                teardown: None,
+            })),
+            crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+        })?;
     let caller_quote_owner = if quote_sites.is_empty() {
         None
     } else {
@@ -2920,7 +2922,7 @@ fn evaluate_generator_transformer(
         None,
         &mut nested,
     );
-    let resolved = crate::resolve::resolve_module_with_syntax(
+    let resolved = crate::resolve::resolve_generator_module_with_syntax(
         &module,
         &dependencies,
         resolution_work,
@@ -2928,6 +2930,7 @@ fn evaluate_generator_transformer(
         &uses,
         checked,
         checked_terms,
+        &advance_sites,
         Some(&mut expansion),
     );
     let parse_failure = expansion.take_parse_failure();
@@ -2977,6 +2980,7 @@ fn evaluate_generator_transformer(
     let mut local = Vec::with_capacity(checked.len().saturating_add(1));
     local.extend(checked.iter().cloned());
     local.push(Arc::clone(&checked_module));
+    let mut linked_advance_sites = Vec::new();
     let entry = prepare_transformer_entry(
         &checked_module,
         binder,
@@ -2986,11 +2990,21 @@ fn evaluate_generator_transformer(
         caller_quote_owner
             .as_ref()
             .map(|owner| (owner, module.quote_sites())),
+        Some(&mut linked_advance_sites),
     )?;
+    budget.charge().map_err(quote_resource_failure)?;
+    if linked_advance_sites.len() != advance_sites.len() {
+        return Err(internal_file_failure());
+    }
+    let capsule = GeneratorDiagnosticCapsule {
+        entry: &entry,
+        sites: linked_advance_sites,
+    };
+    let mut step = None;
     budget.charge().map_err(quote_resource_failure)?;
     #[cfg(test)]
     let lifecycle_before = generator_lifecycle_counters();
-    let evaluated = crate::eval::evaluate_transformer_with_owners(
+    let evaluated = crate::eval::evaluate_generator_transformer(
         &entry,
         // Only selected scalar leaves are exposed through the existing host.
         &plan.captures,
@@ -3001,6 +3015,8 @@ fn evaluate_generator_transformer(
         Arc::clone(&frame),
         Some(&mut *budget),
         Some(owners),
+        &capsule,
+        &mut step,
     );
     #[cfg(test)]
     if let Some(observe) = GENERATOR_LIFECYCLE_OBSERVER.get() {
@@ -3011,6 +3027,7 @@ fn evaluate_generator_transformer(
             cause,
             invocation: frame.invocation,
             definition: selection.declaration.span,
+            step,
         }))
     })
 }
@@ -3057,6 +3074,7 @@ fn evaluate_selected_transformer(
                 constraint_work,
                 syntax_work.as_deref_mut(),
                 None,
+                None,
             )?)
         }
     };
@@ -3098,6 +3116,7 @@ fn evaluate_selected_transformer(
             cause,
             invocation,
             definition: selection.declaration.span,
+            step: None,
         }))
     })
 }
@@ -3159,6 +3178,23 @@ fn is_caller_quote_site(
     Ok(false)
 }
 
+/// Generator-only evaluator metadata borrowed from this exact validated entry.
+/// Its fields can only be assembled in this module after the independent check.
+pub(crate) struct GeneratorDiagnosticCapsule<'entry> {
+    entry: &'entry crate::core::validate::ValidatedMacroEntry,
+    sites: Vec<crate::elaborate::CheckedAdvanceSite>,
+}
+
+impl GeneratorDiagnosticCapsule<'_> {
+    pub(crate) fn matches_entry(&self, entry: &crate::core::validate::ValidatedMacroEntry) -> bool {
+        std::ptr::eq(self.entry, entry)
+    }
+
+    pub(crate) fn sites(&self) -> &[crate::elaborate::CheckedAdvanceSite] {
+        &self.sites
+    }
+}
+
 fn prepare_transformer_entry(
     owner: &crate::resolved::CheckedModule,
     binder: crate::resolved::BinderId,
@@ -3169,6 +3205,7 @@ fn prepare_transformer_entry(
         &Arc<crate::syntax::CallerQuoteOwner>,
         &[crate::syntax::SurfaceQuoteSite],
     )>,
+    advance_output: Option<&mut Vec<crate::elaborate::CheckedAdvanceSite>>,
 ) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
     #[cfg(test)]
     TRANSFORMER_ENTRY_PREPARATIONS.set(TRANSFORMER_ENTRY_PREPARATIONS.get() + 1);
@@ -3245,6 +3282,7 @@ fn prepare_transformer_entry(
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
     let quote_sites = elaborator.take_checked_quote_sites();
+    let advance_sites = elaborator.take_checked_advance_sites();
     let _ty = IterativeTypeOwner::new(typed.ty);
     let program = elaborator
         .finish(typed.node)
@@ -3264,8 +3302,61 @@ fn prepare_transformer_entry(
     )
     .map_err(PipelineFailure::Validation)
     .map_err(FileFailure::from)?;
+    if let Some(output) = advance_output {
+        let budget = syntax_work
+            .as_deref_mut()
+            .ok_or_else(internal_file_failure)?;
+        budget
+            .charge_units(advance_sites.len())
+            .map_err(quote_resource_failure)?;
+        output
+            .try_reserve_exact(advance_sites.len())
+            .map_err(|_| internal_file_failure())?;
+        for site in advance_sites {
+            // Charge owner, arena, node-kind and direct parent comparisons first.
+            budget.charge_units(6).map_err(quote_resource_failure)?;
+            let application = entry
+                .program
+                .node(site.application)
+                .ok_or_else(internal_file_failure)?;
+            let completion = entry
+                .program
+                .node(site.completion)
+                .ok_or_else(internal_file_failure)?;
+            if site.owner != binder
+                || !matches!(
+                    &application.kind,
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::Apply(_)
+                    ))
+                )
+            {
+                return Err(internal_file_failure());
+            }
+            let crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                crate::core::PureComputation::Match(matched),
+            )) = &completion.kind
+            else {
+                return Err(internal_file_failure());
+            };
+            if matched.scrutinee() != site.application {
+                return Err(internal_file_failure());
+            }
+            for previous in output.iter() {
+                budget.charge_units(2).map_err(quote_resource_failure)?;
+                if previous.application == site.application
+                    || previous.completion == site.completion
+                {
+                    return Err(internal_file_failure());
+                }
+            }
+            output.push(site);
+        }
+    }
     if !quote_sites.is_empty() {
-        let budget = syntax_work.ok_or_else(internal_file_failure)?;
+        let budget = syntax_work
+            .as_deref_mut()
+            .ok_or_else(internal_file_failure)?;
         budget
             .charge_units(quote_sites.len())
             .map_err(quote_resource_failure)?;
@@ -5718,6 +5809,10 @@ mod tests {
         static FAILURE_OUTPUTS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
+        static ADVANCE_SELECTED_ORIGIN: RefCell<Option<Origin>> = const { RefCell::new(None) };
+        static ADVANCE_SELECTED_COUNT: Cell<usize> = const { Cell::new(0) };
+        static ADVANCE_CAPTURE_RANGES: RefCell<Vec<crate::eval::machine_test_hooks::AdvanceCaptureObservation>> = const { RefCell::new(Vec::new()) };
+        static ADVANCE_TRACE: RefCell<Vec<(&'static str, usize, usize, usize)>> = const { RefCell::new(Vec::new()) };
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
         static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
     }
@@ -6896,14 +6991,20 @@ main () = one(()) + two(())
                 );
                 FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1);
             }
-            "abort" => FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1),
+            "abort" | "diverging" | "capture_step" => {
+                FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1)
+            }
             _ => {}
         }
     }
 
     fn observe_failure_staged_module(source: &SourceFile, _module: &crate::surface::SurfaceModule) {
         if source.display_path().ends_with("atomic.ash")
+            || source.display_path().ends_with("diverging.ash")
             || source.display_path().ends_with("wrong_category.ash")
+            || source
+                .display_path()
+                .ends_with("generator-advance-experiment/entry.ash")
         {
             FAILURE_STAGED_CALLERS.set(FAILURE_STAGED_CALLERS.get() + 1);
         }
@@ -6970,11 +7071,109 @@ main () = one(()) + two(())
             matches!(failure.pipeline_failure(), Some(PipelineFailure::SyntaxRuntime(cause))
             if cause.cause().reason_code() == "runtime.resource-capacity")
         );
+        eprintln!(
+            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+            hooks::ACTIVE_ROOT_RECORDS.get()
+        );
+        assert_eq!(FAILURE_OUTPUTS.get(), 0);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    fn observe_actual_advance_callable(origin: &Origin) {
+        ADVANCE_SELECTED_ORIGIN.with(|record| *record.borrow_mut() = Some(origin.clone()));
+        ADVANCE_SELECTED_COUNT.set(ADVANCE_SELECTED_COUNT.get() + 1);
+    }
+
+    fn observe_advance_capture_range(
+        observation: crate::eval::machine_test_hooks::AdvanceCaptureObservation,
+    ) {
+        ADVANCE_CAPTURE_RANGES.with(|events| events.borrow_mut().push(observation));
+    }
+
+    fn observe_advance_trace(event: &'static str, guards: usize, host: usize, depth: usize) {
+        ADVANCE_TRACE.with(|events| events.borrow_mut().push((event, guards, host, depth)));
+    }
+
+    #[test]
+    fn original_diverging_step_observes_callable_and_failure_cleanup() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        assert_failure_stage_observer_is_active();
+        hooks::reset();
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/generators/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the original diverging step exceeds the existing execution bound");
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the original transformer must retain its ordinary runtime failure: {failure:?}")
+        };
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        let actual_origin = ADVANCE_SELECTED_ORIGIN
+            .with(|origin| origin.borrow_mut().take())
+            .expect("the selected callable was observed");
+        eprintln!("actual selected callable origin: {actual_origin:?}");
+        let Origin::Generated {
+            cause,
+            reason: crate::source::GeneratedReason::FunctionLowering,
+        } = &actual_origin
+        else {
+            panic!("the original callable keeps its actual function-lowering origin")
+        };
+        let Origin::Related { primary, .. } = cause.as_ref() else {
+            panic!("the lowered callable keeps its actual related primary")
+        };
+        let Origin::Source(actual) = primary.as_ref() else {
+            panic!("the original callable's primary is its actual source span")
+        };
+        let actual = *actual;
+        let projected = runtime
+            .step
+            .expect("the selected callable's paid location was copied");
+        assert_eq!(projected.primary, actual);
+        assert_eq!(projected.definition, None);
+        assert_eq!(actual.range(), ByteRange::new(97, 135).unwrap());
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == actual.source())
+            .unwrap();
+        assert!(source.display_path().ends_with("diverging_forms.ash"));
+        assert_eq!(
+            &source.text()[97..135],
+            "next_number state = next_number(state)"
+        );
         assert_eq!(FAILURE_OUTPUTS.get(), 0);
         assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
         assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
         eprintln!(
-            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            "actual selected Source span {:?}; outputs={} caller stages={} transfer attempts={} root closes={} transformer drops={} active root drops={} active root records={}",
+            actual,
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get(),
             hooks::ROOT_CLOSES.get(),
             hooks::TRANSFORMER_DROPS.get(),
             hooks::ACTIVE_ROOT_DROPS.get(),
@@ -6983,6 +7182,621 @@ main () = one(()) + two(())
         assert_eq!(hooks::ROOT_CLOSES.get(), 0);
         assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
         assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn step_local_resume_reports_actual_capture_interval() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        ADVANCE_CAPTURE_RANGES.with(|events| events.borrow_mut().clear());
+        ADVANCE_TRACE.with(|events| events.borrow_mut().clear());
+        hooks::CAPTURE_RANGE_OBSERVER.set(Some(observe_advance_capture_range));
+        hooks::ADVANCE_TRACE_OBSERVER.set(Some(observe_advance_trace));
+        let compiled = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the real source step-local handler and resumes are admitted");
+        hooks::CAPTURE_RANGE_OBSERVER.set(None);
+        hooks::ADVANCE_TRACE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "84");
+        assert_generator_cleanup(1);
+        let events = ADVANCE_CAPTURE_RANGES.with(|events| events.borrow().clone());
+        eprintln!("actual selected handlers and capture ranges: {events:?}");
+        let active: Vec<_> = events
+            .iter()
+            .filter(|event| event.live_guards != 0)
+            .collect();
+        let local: Vec<_> = active
+            .iter()
+            .filter(|event| !event.canonical_default)
+            .collect();
+        assert_eq!(local.len(), 2, "{events:?}");
+        assert_eq!(
+            local[0].handler_effect, local[1].handler_effect,
+            "{events:?}"
+        );
+        for event in &active {
+            assert_eq!(event.live_guards, 1, "{events:?}");
+            assert_eq!(
+                event.handler_effect,
+                Some(event.operation.owner()),
+                "{events:?}"
+            );
+            assert!(event.selected < event.depth, "{events:?}");
+            if event.captured_guards != 0 {
+                assert!(event.canonical_default, "{events:?}");
+            }
+        }
+        for event in local {
+            assert!(
+                event
+                    .first_direct_guard
+                    .is_some_and(|guard| guard < event.selected),
+                "{events:?}"
+            );
+            assert_eq!(event.captured_guards, 0, "{events:?}");
+        }
+        assert!(
+            active
+                .iter()
+                .any(|event| event.canonical_default && event.captured_guards != 0),
+            "{events:?}"
+        );
+        let trace = ADVANCE_TRACE.with(|events| events.borrow().clone());
+        eprintln!("advance, capture/resume and default allocation trace: {trace:?}");
+        let mut captured = 0_usize;
+        let mut allocated = 0_usize;
+        let mut allocations = 0;
+        let mut calls = 0;
+        for (event, guards, metadata, _) in &trace {
+            match *event {
+                "call" => {
+                    assert_eq!(captured, 0, "{trace:?}");
+                    assert_eq!(allocated, 0, "{trace:?}");
+                    assert_eq!(*guards, 1, "{trace:?}");
+                    assert_eq!(*metadata, 1, "{trace:?}");
+                    calls += 1;
+                }
+                "capture" => captured += guards,
+                "resume" => {
+                    captured = captured
+                        .checked_sub(*guards)
+                        .expect("resumed guard was captured")
+                }
+                "allocate" => {
+                    assert_eq!(*metadata, 1, "{trace:?}");
+                    allocated += guards;
+                    allocations += 1;
+                }
+                "restore" => {
+                    allocated = allocated
+                        .checked_sub(*guards)
+                        .expect("restored guard was allocated")
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(captured, 0, "{trace:?}");
+        assert_eq!(allocated, 0, "{trace:?}");
+        assert_eq!(calls, 2, "{trace:?}");
+        assert!(allocations > 0, "{trace:?}");
+        hooks::reset();
+    }
+
+    #[test]
+    fn actual_generator_work_cutoffs_and_prepaid_failure_copy() {
+        use crate::eval::machine_test_hooks::{self as hooks, AdvanceCutPoint as Cut};
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        // Each row starts a fresh real source compilation. The one-shot hook
+        // only reduces the current host remainder at the reached phase.
+        let cases = [
+            (Cut::Install, 0, hooks::ADVANCE_INSTALLED, false, false),
+            (Cut::Install, 4, hooks::ADVANCE_INSTALLED, false, false),
+            (Cut::Install, 5, hooks::ADVANCE_INSTALLED, true, false),
+            (
+                Cut::CompletionLookup,
+                0,
+                hooks::ADVANCE_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::CompletionLookup,
+                4,
+                hooks::ADVANCE_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::CompletionLookup,
+                5,
+                hooks::ADVANCE_LOOKED_UP,
+                true,
+                false,
+            ),
+            (
+                Cut::FramePayment,
+                2,
+                hooks::ADVANCE_FRAME_PAID,
+                false,
+                false,
+            ),
+            (Cut::FramePayment, 3, hooks::ADVANCE_FRAME_PAID, true, false),
+            (
+                Cut::GuardCreation,
+                11,
+                hooks::ADVANCE_GUARD_CREATED,
+                false,
+                false,
+            ),
+            (
+                Cut::GuardCreation,
+                12,
+                hooks::ADVANCE_GUARD_CREATED,
+                true,
+                false,
+            ),
+            (
+                Cut::ApplicationLookup,
+                4,
+                hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::ApplicationLookup,
+                5,
+                hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                true,
+                false,
+            ),
+            (
+                Cut::ReferenceCreation,
+                2,
+                hooks::ADVANCE_REFERENCE_CREATED,
+                false,
+                false,
+            ),
+            (
+                Cut::ReferenceCreation,
+                3,
+                hooks::ADVANCE_REFERENCE_CREATED,
+                true,
+                false,
+            ),
+            (
+                Cut::ReferenceVerification,
+                1,
+                hooks::ADVANCE_REFERENCE_VERIFIED,
+                false,
+                false,
+            ),
+            (
+                Cut::ReferenceVerification,
+                2,
+                hooks::ADVANCE_REFERENCE_VERIFIED,
+                true,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                0,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                false,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                8,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                false,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                9,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                true,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                0,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                false,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                1,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                false,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                2,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                true,
+                false,
+            ),
+        ];
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut observations = Vec::new();
+        for (phase, remaining, bit, completed, has_step) in cases {
+            hooks::reset();
+            FAILURE_OUTPUTS.set(0);
+            FAILURE_STAGED_CALLERS.set(0);
+            hooks::ADVANCE_CUT.set(Some((phase, remaining)));
+            STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+            TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+            let entry = if phase == Cut::GuardReturn {
+                fixtures.join("tests/fixtures/generator-advance-experiment/entry.ash")
+            } else {
+                fixtures.join("docs/design/macros/fixtures/generators/diverging.ash")
+            };
+            let result = compile_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            STAGED_MODULE_OBSERVER.set(None);
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let (reason, step) = match &result {
+                Err(failure) => match failure.pipeline_failure() {
+                    Some(PipelineFailure::SyntaxRuntime(runtime)) => {
+                        (runtime.cause().reason_code().to_owned(), runtime.step)
+                    }
+                    _ => (failure.reason_code(), None),
+                },
+                Ok(_) => ("unexpected-success".to_owned(), None),
+            };
+            observations.push((
+                phase,
+                remaining,
+                bit,
+                completed,
+                has_step,
+                hooks::ADVANCE_CUT_BEFORE.get(),
+                hooks::ADVANCE_STAGES.get(),
+                reason,
+                step,
+                (
+                    FAILURE_OUTPUTS.get(),
+                    FAILURE_STAGED_CALLERS.get(),
+                    hooks::TRANSFER_ATTEMPTS.get(),
+                ),
+                (
+                    hooks::ROOT_CLOSES.get(),
+                    hooks::TRANSFORMER_DROPS.get(),
+                    hooks::ACTIVE_ROOT_DROPS.get(),
+                    hooks::ADVANCE_GUARD_DROPS.get(),
+                ),
+            ));
+        }
+        eprintln!("actual generator one-shot work cutoffs: {observations:#?}");
+        for (
+            phase,
+            remaining,
+            bit,
+            completed,
+            has_step,
+            before,
+            stages,
+            reason,
+            step,
+            (outputs, callers, transfers),
+            (closes, drops, active_drops, guard_drops),
+        ) in observations
+        {
+            let before = before.expect("the actual installed-capsule phase was reached");
+            assert!(before >= remaining, "{phase:?}, {remaining}, {before}");
+            if phase != Cut::Install {
+                assert!(before < 1_000_000, "{phase:?}, {before}");
+            }
+            assert_eq!(
+                stages & bit != 0,
+                completed,
+                "{phase:?}, {remaining}, stages={stages}"
+            );
+            assert_eq!(
+                reason, "runtime.resource-capacity",
+                "{phase:?}, {remaining}"
+            );
+            assert_eq!(step.is_some(), has_step, "{phase:?}, {remaining}");
+            if phase == Cut::OriginProjection && has_step {
+                assert_eq!(
+                    step.unwrap().primary.range(),
+                    ByteRange::new(97, 135).unwrap()
+                );
+            }
+            if phase == Cut::GuardReturn {
+                assert_eq!(guard_drops, 1);
+            }
+            let expected_cleanup = match (phase, completed) {
+                (Cut::Install, false) => (0, 0, 0),
+                (Cut::Install, true) => (0, 1, 0),
+                _ => (0, 1, 1),
+            };
+            assert_eq!(
+                (closes, drops, active_drops),
+                expected_cleanup,
+                "{phase:?}, {remaining}"
+            );
+            assert_eq!(
+                (outputs, callers, transfers),
+                (0, 0, 0),
+                "{phase:?}, {remaining}"
+            );
+        }
+        hooks::reset();
+    }
+
+    #[test]
+    fn injected_generator_allocation_and_transfer_refusals_do_not_publish() {
+        use crate::eval::machine_test_hooks as hooks;
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut observations = Vec::new();
+        for kind in ["arc", "box", "transfer"] {
+            hooks::reset();
+            FAILURE_OUTPUTS.set(0);
+            FAILURE_STAGED_CALLERS.set(0);
+            match kind {
+                "arc" => hooks::FAIL_ADVANCE_ARC.set(true),
+                "box" => hooks::FAIL_ADVANCE_BOX.set(true),
+                "transfer" => hooks::FAIL_ADVANCE_TRANSFER.set(true),
+                _ => unreachable!(),
+            }
+            STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+            TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+            let entry = if kind == "transfer" {
+                root.join("tests/fixtures/generator-advance-experiment/entry.ash")
+            } else {
+                root.join("docs/design/macros/fixtures/generators/diverging.ash")
+            };
+            let result = compile_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            STAGED_MODULE_OBSERVER.set(None);
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let (reason, step) = match &result {
+                Err(failure) => match failure.pipeline_failure() {
+                    Some(PipelineFailure::SyntaxRuntime(runtime)) => {
+                        (runtime.cause().reason_code().to_owned(), runtime.step)
+                    }
+                    _ => (failure.reason_code(), None),
+                },
+                Ok(_) => ("unexpected-success".to_owned(), None),
+            };
+            observations.push((
+                kind,
+                reason,
+                step,
+                hooks::ADVANCE_STAGES.get(),
+                (
+                    hooks::FAIL_ADVANCE_ARC.get(),
+                    hooks::FAIL_ADVANCE_BOX.get(),
+                    hooks::FAIL_ADVANCE_TRANSFER.get(),
+                ),
+                (
+                    FAILURE_OUTPUTS.get(),
+                    FAILURE_STAGED_CALLERS.get(),
+                    hooks::TRANSFER_ATTEMPTS.get(),
+                    hooks::TRANSFER_FAILURES.get(),
+                ),
+                (
+                    hooks::ROOT_CLOSES.get(),
+                    hooks::TRANSFORMER_DROPS.get(),
+                    hooks::ACTIVE_ROOT_DROPS.get(),
+                    hooks::ADVANCE_GUARD_DROPS.get(),
+                ),
+            ));
+        }
+        eprintln!("injected generator refusal observations: {observations:#?}");
+        for (
+            kind,
+            reason,
+            step,
+            stages,
+            (arc, boxed, transfer),
+            (outputs, callers, attempts, transfer_failures),
+            (closes, drops, active_drops, guard_drops),
+        ) in observations
+        {
+            assert_eq!(reason, "runtime.heap-capacity", "{kind}");
+            assert!(step.is_none(), "{kind}: {step:?}");
+            assert_eq!((outputs, callers), (0, 0), "{kind}");
+            match kind {
+                "arc" => {
+                    assert!(!arc);
+                    assert_eq!(stages & hooks::ADVANCE_GUARD_CREATED, 0);
+                    assert_eq!(guard_drops, 0);
+                }
+                "box" => {
+                    assert!(!boxed);
+                    assert_ne!(stages & hooks::ADVANCE_GUARD_CREATED, 0);
+                    assert_eq!(guard_drops, 1);
+                }
+                "transfer" => {
+                    assert!(!transfer);
+                    assert_ne!(stages & hooks::ADVANCE_TRANSFER_REACHED, 0);
+                    assert_eq!((attempts, transfer_failures), (1, 1));
+                    assert_eq!(guard_drops, 2);
+                }
+                _ => unreachable!(),
+            }
+            if kind != "transfer" {
+                assert_eq!((attempts, transfer_failures), (0, 0));
+            }
+            let expected_cleanup = if kind == "transfer" {
+                (1, 1, 0)
+            } else {
+                (0, 1, 1)
+            };
+            assert_eq!((closes, drops, active_drops), expected_cleanup, "{kind}");
+        }
+        hooks::reset();
+    }
+
+    fn observe_later_escape_plan(
+        _owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        GENERATOR_PLAN.with(|record| {
+            *record.borrow_mut() = plan
+                .actions
+                .iter()
+                .map(|action| {
+                    let kind = match action {
+                        crate::syntax::GeneratorAction::Enter { .. } => "enter",
+                        crate::syntax::GeneratorAction::Advance { .. } => "step",
+                        crate::syntax::GeneratorAction::Escape { .. } => "escape",
+                    };
+                    (kind.to_owned(), String::new())
+                })
+                .collect();
+        });
+    }
+
+    #[test]
+    fn completed_generator_step_does_not_label_a_later_escape_failure() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        GENERATOR_PLAN.with(|plan| plan.borrow_mut().clear());
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_later_escape_plan));
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/later-escape/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the later escape diverges");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+
+        let plan = GENERATOR_PLAN.with(|plan| plan.borrow().clone());
+        let origin = ADVANCE_SELECTED_ORIGIN.with(|origin| origin.borrow_mut().take());
+        eprintln!(
+            "later failure plan={plan:?}; selected={origin:?}; calls={}; outputs={} callers={} transfers={} guard drops={}",
+            ADVANCE_SELECTED_COUNT.get(),
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get(),
+            hooks::ADVANCE_GUARD_DROPS.get()
+        );
+        assert_eq!(
+            plan.iter()
+                .map(|(kind, _)| kind.as_str())
+                .collect::<Vec<_>>(),
+            ["enter", "step", "escape"]
+        );
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        assert!(origin.is_some());
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the later escape keeps its ordinary runtime failure")
+        };
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        assert!(runtime.step.is_none());
+        assert_eq!(
+            (
+                FAILURE_OUTPUTS.get(),
+                FAILURE_STAGED_CALLERS.get(),
+                hooks::TRANSFER_ATTEMPTS.get()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(hooks::ADVANCE_GUARD_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn generated_step_uses_its_actual_callable_origin_spine() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/generated-step/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the generated step diverges");
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let origin = ADVANCE_SELECTED_ORIGIN
+            .with(|origin| origin.borrow_mut().take())
+            .expect("the actual generated callable was selected");
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the generated step retains its ordinary runtime failure")
+        };
+        eprintln!(
+            "actual generated callable origin={origin:?}, projected={:?}, outputs={}, caller stages={}, transfers={}",
+            runtime.step,
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get()
+        );
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        let mut current = &origin;
+        let (primary, definition) = loop {
+            match current {
+                Origin::Generated { cause, .. } => current = cause,
+                Origin::Related { primary, .. } => current = primary,
+                Origin::Source(span) => break (*span, None),
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => break (*invocation, Some(*definition)),
+            }
+        };
+        let projected = runtime
+            .step
+            .expect("the real callable origin was paid and copied");
+        assert_eq!(
+            (projected.primary, projected.definition),
+            (primary, definition)
+        );
+        assert_eq!(primary.range(), ByteRange::new(33, 54).unwrap());
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == primary.source())
+            .unwrap();
+        assert!(
+            source
+                .display_path()
+                .ends_with("generated-step/stepdefs.ash")
+        );
+        assert_eq!(&source.text()[33..54], "make_step actual_step");
+        assert_eq!(
+            (FAILURE_OUTPUTS.get(), FAILURE_STAGED_CALLERS.get()),
+            (0, 0)
+        );
         hooks::reset();
     }
 
