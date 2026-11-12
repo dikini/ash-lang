@@ -11,7 +11,7 @@ use std::{
 };
 
 mod catalog_relocation;
-pub(super) mod checked_owner_anchors;
+pub(crate) mod checked_owner_anchors;
 mod zonk;
 
 pub(super) use checked_owner_anchors::PreparationError as OwnerAnchorPreparationError;
@@ -2153,6 +2153,11 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
 
     pub(super) fn generated_parameter_anchors(&self) -> &Arc<GeneratedParameterAnchors> {
         &self.0.generated_parameter_anchors
+    }
+
+    /// Borrows only the original checked rows retained by this validated program.
+    pub(crate) fn checked_owner_modules(&self) -> &[checked_owner_anchors::OriginalModuleOwners] {
+        self.0.generated_parameter_anchors.checked_owners.modules()
     }
 
     pub(crate) fn checked_original_nominal_pairs(

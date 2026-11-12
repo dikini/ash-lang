@@ -444,7 +444,108 @@ impl CheckedOwnerOrders {
         })
     }
 
+    /// Consumes only rows decoded from the image whose expectation was compared.
+    /// Reverse slots are rebuilt from those rows and are never image inputs.
+    fn restore_image(
+        mut modules: Vec<OriginalModuleOwners>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, PreparationError> {
+        for module in &mut modules {
+            charge(work, 1)?;
+            let rows = sorted_unique(
+                std::mem::take(&mut module.rows).into_vec(),
+                |row| row.owner,
+                work,
+            )?;
+            let mut slot_count = 0usize;
+            for row in &rows {
+                charge(work, 1)?;
+                slot_count = add(slot_count, row.parameters.len())?;
+                if let OriginalOwner::Method(method) = row.owner {
+                    // Binary search examines at most this many flat owner keys.
+                    charge(
+                        work,
+                        (usize::BITS - rows.len().leading_zeros()) as usize + 1,
+                    )?;
+                    if rows
+                        .binary_search_by_key(
+                            &OriginalOwner::Interface(method.interface()),
+                            |candidate| candidate.owner,
+                        )
+                        .is_err()
+                    {
+                        return Err(PreparationError::Invalid);
+                    }
+                }
+            }
+            charge(work, slot_count)?;
+            let mut slots = Vec::new();
+            slots
+                .try_reserve_exact(slot_count)
+                .map_err(|_| PreparationError::Resource)?;
+            for (row_index, row) in rows.iter().enumerate() {
+                for (slot_index, parameter) in row.parameters.iter().enumerate() {
+                    charge(work, 1)?;
+                    slots.push(OriginalDeclaringSlot {
+                        parameter: parameter.parameter,
+                        row: u32::try_from(row_index).map_err(|_| PreparationError::Resource)?,
+                        slot: u32::try_from(slot_index).map_err(|_| PreparationError::Resource)?,
+                    });
+                }
+            }
+            module.rows = rows.into_boxed_slice();
+            module.slots = sorted_unique(slots, |slot| slot.parameter, work)?.into_boxed_slice();
+        }
+        modules = sorted_unique(modules, |module| module.module, work)?;
+        Ok(Self {
+            modules: modules.into_boxed_slice(),
+        })
+    }
+
     pub(crate) fn modules(&self) -> &[OriginalModuleOwners] {
         &self.modules
+    }
+}
+
+impl super::UnvalidatedCoreProgram<crate::core::effect::EffectOperationFamily> {
+    /// Consumes the fresh program and rows issued by one checked image restore.
+    pub(crate) fn from_checked_image(
+        admitted: crate::build::AdmittedImageEffectProgram,
+        work: &mut TypeWorkBudget,
+    ) -> Result<
+        super::ValidatedCoreProgram<crate::core::effect::EffectOperationFamily>,
+        super::BuildError,
+    > {
+        let (mut program, modules, nominal_pairs) = admitted.into_parts();
+        if !program.generated_parameter_anchors.orders.is_empty()
+            || !program
+                .generated_parameter_anchors
+                .checked_owners
+                .modules()
+                .is_empty()
+            || !program.generated_parameter_anchors.nominal_pairs.is_empty()
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let checked_owners =
+            CheckedOwnerOrders::restore_image(modules, work).map_err(|error| match error {
+                PreparationError::Invalid => super::BuildError::InvalidPayload,
+                PreparationError::Resource => super::BuildError::TypeWorkExceeded,
+            })?;
+        let nominal_pairs = sorted_unique(nominal_pairs, |pair| pair.current, work).map_err(
+            |error| match error {
+                PreparationError::Invalid => super::BuildError::InvalidPayload,
+                PreparationError::Resource => super::BuildError::TypeWorkExceeded,
+            },
+        )?;
+        work.charge(1)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        program.generated_parameter_anchors =
+            std::sync::Arc::new(super::GeneratedParameterAnchors {
+                orders: crate::resolved::GeneratedParameterOrders::default(),
+                checked_owners,
+                nominal_pairs: nominal_pairs.into_boxed_slice(),
+            });
+        program.into_compiler_image(work)
     }
 }

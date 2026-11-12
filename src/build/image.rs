@@ -525,6 +525,52 @@ struct ConstructorRecord {
     origin: u32,
 }
 
+// These original rows hold source coordinates only. The reverse declaring-slot
+// index is derived after checked image admission.
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerModuleRecord {
+    module: u32,
+    source: u32,
+    rows: Slice,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OriginalOwnerIdentity {
+    Interface {
+        module: u32,
+        local: u32,
+    },
+    Method {
+        module: u32,
+        interface: u32,
+        local: u32,
+    },
+    Global(BinderIdentity),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerRowRecord {
+    owner: OriginalOwnerIdentity,
+    parameters: Slice,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerParameterRecord {
+    parameter: TypeVariableIdentity,
+    expansion_primary: Option<SpanRecord>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalNominalPairRecord {
+    module: u32,
+    source: u32,
+    previous: NominalId,
+    previous_source: SpanRecord,
+    current: NominalId,
+    invocation: SpanRecord,
+    definition: SpanRecord,
+}
+
 /// Append-only shared-table extents sealed before executable graph encoding.
 /// These copied counts select the original declaration facts for expectations;
 /// they grant no registry or execution authority.
@@ -542,6 +588,10 @@ struct NativeFactPrefixes {
     source_methods: u32,
     method_variables: u32,
     inherited_parameters: u32,
+    original_owner_modules: u32,
+    original_owner_rows: u32,
+    original_owner_parameters: u32,
+    original_nominal_pairs: u32,
 }
 
 impl NativeFactPrefixes {
@@ -559,6 +609,10 @@ impl NativeFactPrefixes {
             source_methods: index(image.source_methods.len())?,
             method_variables: index(image.method_variables.len())?,
             inherited_parameters: index(image.inherited_parameters.len())?,
+            original_owner_modules: index(image.original_owner_modules.len())?,
+            original_owner_rows: index(image.original_owner_rows.len())?,
+            original_owner_parameters: index(image.original_owner_parameters.len())?,
+            original_nominal_pairs: index(image.original_nominal_pairs.len())?,
         })
     }
 
@@ -576,6 +630,11 @@ impl NativeFactPrefixes {
             || self.source_methods > available.source_methods
             || self.method_variables > available.method_variables
             || self.inherited_parameters > available.inherited_parameters
+            // There is no executable owner-record suffix.
+            || self.original_owner_modules != available.original_owner_modules
+            || self.original_owner_rows != available.original_owner_rows
+            || self.original_owner_parameters != available.original_owner_parameters
+            || self.original_nominal_pairs != available.original_nominal_pairs
         {
             return Err(ImageFailure::InvalidRecord);
         }
@@ -625,6 +684,10 @@ pub(crate) struct PureImage {
     inherited_parameters: Vec<InheritedParameterRecord>,
     method_arguments: Vec<u32>,
     method_variables: Vec<TypeVariableIdentity>,
+    original_owner_modules: Vec<OriginalOwnerModuleRecord>,
+    original_owner_rows: Vec<OriginalOwnerRowRecord>,
+    original_owner_parameters: Vec<OriginalOwnerParameterRecord>,
+    original_nominal_pairs: Vec<OriginalNominalPairRecord>,
 
     main_method_catalog: Option<u32>,
     source_method_evidence: Vec<u8>,
@@ -902,7 +965,9 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         encoder.image.main_method_catalog = Some(encoder.encode_method_catalog(catalog)?);
     }
     prepare_originals(&mut encoder)?;
-    charge(encoder.work, 13)?;
+    encoder.encode_original_owner_rows(program.checked_owner_modules())?;
+    encoder.encode_original_nominal_pairs(program.checked_original_nominal_pairs())?;
+    charge(encoder.work, 17)?;
     encoder.image.native_fact_prefixes = Some(NativeFactPrefixes::seal(&encoder.image)?);
     charge(encoder.work, program.node_count())?;
     encoder
@@ -1992,7 +2057,24 @@ wire_struct!(
     source_methods,
     method_variables,
     inherited_parameters,
+    original_owner_modules,
+    original_owner_rows,
+    original_owner_parameters,
+    original_nominal_pairs,
 );
+wire_struct!(
+    OriginalNominalPairRecord,
+    module,
+    source,
+    previous,
+    previous_source,
+    current,
+    invocation,
+    definition
+);
+wire_struct!(OriginalOwnerModuleRecord, module, source, rows);
+wire_struct!(OriginalOwnerRowRecord, owner, parameters);
+wire_struct!(OriginalOwnerParameterRecord, parameter, expansion_primary);
 wire_struct!(SourceRecord, role, path, text);
 wire_struct!(ProvenanceViewRecord, nodes, children, root);
 wire_struct!(SpanRecord, source, start, end);
@@ -2106,6 +2188,48 @@ impl Wire for OriginRecord {
                 invocation: Wire::read(reader)?,
                 definition: Wire::read(reader)?,
             },
+            _ => return Err(ImageFailure::InvalidEncoding),
+        })
+    }
+}
+
+impl Wire for OriginalOwnerIdentity {
+    const MINIMUM: usize = 1 + BinderIdentity::MINIMUM;
+    fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
+        match self {
+            Self::Interface { module, local } => {
+                0u8.write(writer)?;
+                module.write(writer)?;
+                local.write(writer)
+            }
+            Self::Method {
+                module,
+                interface,
+                local,
+            } => {
+                1u8.write(writer)?;
+                module.write(writer)?;
+                interface.write(writer)?;
+                local.write(writer)
+            }
+            Self::Global(binder) => {
+                2u8.write(writer)?;
+                binder.write(writer)
+            }
+        }
+    }
+    fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
+        Ok(match u8::read(reader)? {
+            0 => Self::Interface {
+                module: Wire::read(reader)?,
+                local: Wire::read(reader)?,
+            },
+            1 => Self::Method {
+                module: Wire::read(reader)?,
+                interface: Wire::read(reader)?,
+                local: Wire::read(reader)?,
+            },
+            2 => Self::Global(Wire::read(reader)?),
             _ => return Err(ImageFailure::InvalidEncoding),
         })
     }
@@ -2906,6 +3030,26 @@ impl PureImage {
             executable,
         )?)?;
         writer.table(&self.method_arguments)?;
+        writer.table(native_fact_table(
+            &self.original_owner_modules,
+            prefixes.original_owner_modules,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_owner_rows,
+            prefixes.original_owner_rows,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_owner_parameters,
+            prefixes.original_owner_parameters,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_nominal_pairs,
+            prefixes.original_nominal_pairs,
+            executable,
+        )?)?;
         self.main_method_catalog.write(writer)?;
         writer.table(if executable {
             &self.source_method_evidence
@@ -2990,6 +3134,10 @@ impl PureImage {
             method_variables: reader.table()?,
             inherited_parameters: reader.table()?,
             method_arguments: reader.table()?,
+            original_owner_modules: reader.table()?,
+            original_owner_rows: reader.table()?,
+            original_owner_parameters: reader.table()?,
+            original_nominal_pairs: reader.table()?,
             main_method_catalog: Wire::read(&mut reader)?,
             source_method_evidence: reader.byte_table()?,
             source_method_anchors: Wire::read(&mut reader)?,
@@ -3003,7 +3151,7 @@ impl PureImage {
         if reader.offset != bytes.len() {
             return Err(ImageFailure::InvalidEncoding);
         }
-        charge(reader.work, 13)?;
+        charge(reader.work, 17)?;
         image
             .native_fact_prefixes
             .ok_or(ImageFailure::InvalidRecord)?
@@ -4568,6 +4716,387 @@ mod tests {
     use super::*;
 
     #[test]
+    fn checked_image_retains_original_owners_and_refuses_fixed_fact_changes() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n\
+                 pub $name<A, B> : A -> B -> A\n\
+                 $name first _ = first\n\
+             }\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\
+             emit choose\n\
+             main : Unit -> Int\n\
+             main () = choose 42 true\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let image = &build.image;
+        assert!(image.original_owner_rows.len() >= 2);
+        assert!(
+            image
+                .original_owner_parameters
+                .iter()
+                .filter(|parameter| parameter.expansion_primary.is_some())
+                .count()
+                >= 2
+        );
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let mut measured = TypeWorkBudget::unbounded();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut measured)
+            .unwrap();
+        let cost = measured.used();
+        assert!(!restored.program.checked_owner_modules().is_empty());
+        let source_refs = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &source_refs, &module_sources)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                image
+                    .restore_effect_checked(&expected, &[], &mut short)
+                    .is_err()
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                image
+                    .restore_effect_checked(&expected, &[], &mut exact)
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+
+        // Ignoring the old unit comparison cannot turn raw restoration into authority.
+        image
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let raw = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(raw.program.checked_owner_modules().is_empty());
+
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut changed = decode();
+        changed.original_owner_rows.swap(0, 1);
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut changed = decode();
+        changed
+            .original_owner_parameters
+            .iter_mut()
+            .find(|parameter| parameter.expansion_primary.is_some())
+            .unwrap()
+            .expansion_primary = None;
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut missing = decode();
+        missing.original_owner_rows.pop();
+        assert!(
+            missing
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut duplicate = decode();
+        duplicate.original_owner_rows[1] = duplicate.original_owner_rows[0];
+        assert!(
+            duplicate
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut suffix = decode();
+        suffix
+            .original_owner_rows
+            .push(suffix.original_owner_rows[0]);
+        assert!(
+            suffix
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(PureImage::decode_bytes(&truncated, &mut TypeWorkBudget::default()).is_err());
+
+        // A second genuine compiler image contributes only its owner tables;
+        // the original image's canonical facts and fixed expectation stay put.
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n\
+                 pub $name<A, B> : A -> B -> A\n\
+                 $name first _ = first\n\
+             }\n",
+        );
+        donor_tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\
+             another : Unit -> Int\n\
+             another () = 0\n\
+             emit choose\n\
+             main : Unit -> Int\n\
+             main () = choose 42 true\n",
+        );
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let mut changed = decode();
+        changed.original_owner_modules = donor.original_owner_modules.clone();
+        changed.original_owner_rows = donor.original_owner_rows.clone();
+        changed.original_owner_parameters = donor.original_owner_parameters.clone();
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checked_image_preserves_nested_nominal_pair_and_fixed_expectation() {
+        let tree = SourceTree::new();
+        for (name, source) in [
+            (
+                "entry.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/nested.ash"),
+            ),
+            (
+                "spawn_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/spawn_forms.ash"),
+            ),
+            (
+                "forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/forms.ash"),
+            ),
+            (
+                "api.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/api.ash"),
+            ),
+        ] {
+            tree.write(name, source);
+        }
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let pair = build
+            .image
+            .original_nominal_pairs
+            .iter()
+            .find(|pair| pair.invocation.start == 70 && pair.invocation.end == 75)
+            .unwrap();
+        assert!(
+            pair.previous_source.start <= 69 && pair.invocation.end <= pair.previous_source.end
+        );
+        assert_ne!(pair.invocation.source, pair.definition.source);
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(!restored.program.checked_original_nominal_pairs().is_empty());
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &sources, &module_sources)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+        let raw = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(raw.program.checked_original_nominal_pairs().is_empty());
+
+        // The changed start remains contained; only the original pair table
+        // changes here, while the canonical image and EXPECTED_FACTS stay fixed.
+        let mut changed = decode();
+        changed
+            .original_nominal_pairs
+            .iter_mut()
+            .find(|pair| pair.invocation.start == 70 && pair.invocation.end == 75)
+            .unwrap()
+            .invocation
+            .start = 69;
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut missing = decode();
+        missing.original_nominal_pairs.clear();
+        assert!(
+            missing
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let mut suffix = decode();
+        suffix
+            .original_nominal_pairs
+            .push(suffix.original_nominal_pairs[0]);
+        assert!(
+            suffix
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        // The donor is compiled separately with a different genuine invocation
+        // span. Copy only its pair facts into the fixed original image.
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "entry.ash",
+            &include_str!("../../docs/design/macros/fixtures/derives/nested.ash")
+                .replace("\ntype Source", "\n\ntype Source"),
+        );
+        for (name, source) in [
+            (
+                "spawn_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/spawn_forms.ash"),
+            ),
+            (
+                "forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/forms.ash"),
+            ),
+            (
+                "api.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/api.ash"),
+            ),
+        ] {
+            donor_tree.write(name, source);
+        }
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        assert!(
+            donor
+                .original_nominal_pairs
+                .iter()
+                .any(|pair| pair.invocation.start == 71 && pair.invocation.end == 76)
+        );
+        let mut changed = decode();
+        changed.original_nominal_pairs = donor.original_nominal_pairs.clone();
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
     fn generic_cell_private_image_reconstructs_and_executes() {
         let (donor, sources, relation) =
             crate::core::validate::generic_cell_source_fixture_for_test(
@@ -4619,10 +5148,9 @@ mod tests {
         drop(sources);
         let mut work = TypeWorkBudget::default();
         let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
-        decoded
-            .admit_expected_native_facts(&expected, &mut work)
+        let restored = decoded
+            .restore_effect_checked(&expected, &[], &mut work)
             .unwrap();
-        let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
             restored.program.method_evidence_anchors().len(),
             anchor_count
@@ -5102,7 +5630,7 @@ mod tests {
             ));
         }
         assert_eq!(Slice::MINIMUM, 2);
-        assert_eq!(NativeFactPrefixes::MINIMUM, 12);
+        assert_eq!(NativeFactPrefixes::MINIMUM, 16);
     }
     use crate::driver::{RunConfiguration, compile_path};
     use crate::module::ModuleRoots;
@@ -6832,6 +7360,164 @@ fn structural_child_depth(tag: TypeTag, child: usize, depth: usize) -> usize {
 }
 
 impl Encoder<'_> {
+    fn encode_original_owner_rows(
+        &mut self,
+        modules: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
+    ) -> Result<(), ImageFailure> {
+        use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+        if !self.image.original_owner_modules.is_empty()
+            || !self.image.original_owner_rows.is_empty()
+            || !self.image.original_owner_parameters.is_empty()
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        let mut row_count = 0usize;
+        let mut parameter_count = 0usize;
+        charge(self.work, modules.len())?;
+        for module in modules {
+            charge(self.work, 1)?;
+            row_count = row_count
+                .checked_add(module.rows.len())
+                .ok_or(ImageFailure::Resource)?;
+            for row in module.rows.iter() {
+                charge(self.work, 1)?;
+                parameter_count = parameter_count
+                    .checked_add(row.parameters.len())
+                    .ok_or(ImageFailure::Resource)?;
+            }
+        }
+        let cells = modules
+            .len()
+            .checked_add(row_count)
+            .and_then(|count| count.checked_add(parameter_count))
+            .ok_or(ImageFailure::Resource)?;
+        charge(self.work, cells)?;
+        self.image
+            .original_owner_modules
+            .try_reserve_exact(modules.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        self.image
+            .original_owner_rows
+            .try_reserve_exact(row_count)
+            .map_err(|_| ImageFailure::Resource)?;
+        self.image
+            .original_owner_parameters
+            .try_reserve_exact(parameter_count)
+            .map_err(|_| ImageFailure::Resource)?;
+        for module in modules {
+            charge(self.work, 1)?;
+            let module_slot = self.module(module.module)?;
+            charge(self.work, 1)?;
+            let source_slot = *self
+                .sources
+                .get(&module.source)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            if module_slot != source_slot {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let row_start = self.image.original_owner_rows.len();
+            for row in module.rows.iter() {
+                charge(self.work, 1)?;
+                let parameter_start = self.image.original_owner_parameters.len();
+                for parameter in row.parameters.iter() {
+                    let id = self.type_variable(parameter.parameter)?;
+                    let primary = parameter
+                        .expansion_primary
+                        .map(|span| self.span(span))
+                        .transpose()?;
+                    push(
+                        &mut self.image.original_owner_parameters,
+                        OriginalOwnerParameterRecord {
+                            parameter: id,
+                            expansion_primary: primary,
+                        },
+                        self.work,
+                    )?;
+                }
+                let parameters = Slice::of(&self.image.original_owner_parameters, parameter_start)?;
+                let owner = match row.owner {
+                    OriginalOwner::Interface(id) => OriginalOwnerIdentity::Interface {
+                        module: self.module(id.module())?,
+                        local: id.declaration(),
+                    },
+                    OriginalOwner::Method(id) => OriginalOwnerIdentity::Method {
+                        module: self.module(id.interface().module())?,
+                        interface: id.interface().declaration(),
+                        local: id.declaration(),
+                    },
+                    OriginalOwner::Global(id) => OriginalOwnerIdentity::Global(self.binder_id(id)?),
+                };
+                push(
+                    &mut self.image.original_owner_rows,
+                    OriginalOwnerRowRecord { owner, parameters },
+                    self.work,
+                )?;
+            }
+            let rows = Slice::of(&self.image.original_owner_rows, row_start)?;
+            push(
+                &mut self.image.original_owner_modules,
+                OriginalOwnerModuleRecord {
+                    module: module_slot,
+                    source: source_slot,
+                    rows,
+                },
+                self.work,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn encode_original_nominal_pairs(
+        &mut self,
+        pairs: &[crate::core::dialect::checked_owner_anchors::OriginalNominalPair],
+    ) -> Result<(), ImageFailure> {
+        if !self.image.original_nominal_pairs.is_empty() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        charge(self.work, pairs.len())?;
+        self.image
+            .original_nominal_pairs
+            .try_reserve_exact(pairs.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for pair in pairs {
+            charge(self.work, 1)?;
+            let module = self.module(pair.module)?;
+            charge(self.work, 1)?;
+            let source = *self
+                .sources
+                .get(&pair.source)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            if module != source
+                || pair.previous.module() != pair.module
+                || pair.current.module() != pair.module
+                || pair.previous.declaration().checked_add(1) != Some(pair.current.declaration())
+                || pair.previous_source.source() != pair.source
+                || pair.invocation.source() != pair.source
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let previous = self.nominal(pair.previous)?;
+            let previous_source = self.span(pair.previous_source)?;
+            let current = self.nominal(pair.current)?;
+            let invocation = self.span(pair.invocation)?;
+            let definition = self.span(pair.definition)?;
+            push(
+                &mut self.image.original_nominal_pairs,
+                OriginalNominalPairRecord {
+                    module,
+                    source,
+                    previous,
+                    previous_source,
+                    current,
+                    invocation,
+                    definition,
+                },
+                self.work,
+            )?;
+        }
+        Ok(())
+    }
+
     fn type_variable(
         &mut self,
         id: crate::types::TypeVariableId,
@@ -9060,18 +9746,245 @@ pub(crate) struct RestoredEffectImage {
     modules: Vec<ModuleId>,
 }
 
+// This value can only be created by the checked restoration below. It owns
+// the fresh Core and rows decoded in that same coordinate arena.
+pub(crate) struct AdmittedImageEffectProgram {
+    program: crate::core::UnvalidatedEffectProgram,
+    modules: Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+    nominal_pairs: Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+}
+impl AdmittedImageEffectProgram {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        crate::core::UnvalidatedEffectProgram,
+        Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+        Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+    ) {
+        (self.program, self.modules, self.nominal_pairs)
+    }
+}
+
+// Minted only after comparing this exact immutable image with the fixed facts.
+struct CheckedImage<'a> {
+    image: &'a PureImage,
+}
+
+impl CheckedImage<'_> {
+    fn decode_owners(
+        self,
+        decoder: &mut Decoder<'_>,
+        registry: &ResolvedRegistry,
+    ) -> Result<
+        (
+            Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+            Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+        ),
+        ImageFailure,
+    > {
+        use crate::core::dialect::checked_owner_anchors::{
+            OriginalModuleOwners, OriginalNominalPair, OriginalOwner, OriginalOwnerRow,
+            OriginalParameter,
+        };
+        charge(decoder.work, 1)?;
+        if !std::ptr::eq(self.image, decoder.image) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        // No record in these tables can refer to an executable suffix.
+        charge(decoder.work, 17)?;
+        self.image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?
+            .validate(self.image)?;
+        charge(decoder.work, self.image.original_owner_modules.len())?;
+        let mut modules = Vec::new();
+        modules
+            .try_reserve_exact(self.image.original_owner_modules.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        let mut next_row = 0u32;
+        let mut next_parameter = 0u32;
+        for module_record in &self.image.original_owner_modules {
+            charge(decoder.work, 4)?;
+            if module_record.module != module_record.source || module_record.rows.start != next_row
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            next_row = next_row
+                .checked_add(module_record.rows.len)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            let module = *get(&decoder.modules, module_record.module)?;
+            let source = get(&decoder.sources, module_record.source)?.id();
+            // Ordinary source modules restore to the existing source-derived
+            // DirectCoreSource identity, not the loader's admitted namespace.
+            if get(&self.image.sources, module_record.source)?.role != ModuleRoleRecord::Ordinary
+                || module != ModuleId::from(source)
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let image_rows = module_record.rows.get(&self.image.original_owner_rows)?;
+            charge(decoder.work, image_rows.len())?;
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(image_rows.len())
+                .map_err(|_| ImageFailure::Resource)?;
+            for row in image_rows {
+                charge(decoder.work, 3)?;
+                if row.parameters.start != next_parameter {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                next_parameter = next_parameter
+                    .checked_add(row.parameters.len)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let owner = match row.owner {
+                    OriginalOwnerIdentity::Interface { module, local } => OriginalOwner::Interface(
+                        crate::interface::InterfaceId::new(*get(&decoder.modules, module)?, local),
+                    ),
+                    OriginalOwnerIdentity::Method {
+                        module,
+                        interface,
+                        local,
+                    } => OriginalOwner::Method(crate::interface::MethodId::new(
+                        crate::interface::InterfaceId::new(
+                            *get(&decoder.modules, module)?,
+                            interface,
+                        ),
+                        local,
+                    )),
+                    OriginalOwnerIdentity::Global(binder) => {
+                        OriginalOwner::Global(decoder.binder_id(binder)?)
+                    }
+                };
+                let owner_module = match owner {
+                    OriginalOwner::Interface(id) => Some(id.module()),
+                    OriginalOwner::Method(id) => Some(id.interface().module()),
+                    OriginalOwner::Global(id) => id.module(),
+                };
+                if owner_module != Some(module) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let image_parameters = row.parameters.get(&self.image.original_owner_parameters)?;
+                charge(decoder.work, image_parameters.len())?;
+                let mut parameters = Vec::new();
+                parameters
+                    .try_reserve_exact(image_parameters.len())
+                    .map_err(|_| ImageFailure::Resource)?;
+                for parameter in image_parameters {
+                    charge(decoder.work, 1)?;
+                    let id = decoder.type_variable(parameter.parameter)?;
+                    let expansion_primary = parameter
+                        .expansion_primary
+                        .map(|span| decoder.span(span))
+                        .transpose()?;
+                    charge(decoder.work, 1)?;
+                    let canonical = registry
+                        .type_variable(id)
+                        .ok_or(ImageFailure::InvalidRecord)?;
+                    let canonical_primary = match &canonical.origin {
+                        Origin::Expansion { invocation, .. } => Some(*invocation),
+                        _ => None,
+                    };
+                    if id.module() != Some(module)
+                        || canonical.id != id
+                        || expansion_primary != canonical_primary
+                        || expansion_primary.is_some_and(|span| span.source() != source)
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    parameters.push(OriginalParameter {
+                        parameter: id,
+                        expansion_primary,
+                    });
+                }
+                rows.push(OriginalOwnerRow {
+                    owner,
+                    parameters: parameters.into_boxed_slice(),
+                });
+            }
+            modules.push(OriginalModuleOwners {
+                module,
+                source,
+                rows: rows.into_boxed_slice(),
+                slots: Box::default(),
+            });
+        }
+        if usize::try_from(next_row).map_err(|_| ImageFailure::InvalidRecord)?
+            != self.image.original_owner_rows.len()
+            || usize::try_from(next_parameter).map_err(|_| ImageFailure::InvalidRecord)?
+                != self.image.original_owner_parameters.len()
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        charge(decoder.work, self.image.original_nominal_pairs.len())?;
+        let mut nominal_pairs = Vec::new();
+        nominal_pairs
+            .try_reserve_exact(self.image.original_nominal_pairs.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for pair in &self.image.original_nominal_pairs {
+            charge(decoder.work, 4)?;
+            if pair.module != pair.source
+                || pair.previous.module != pair.module
+                || pair.current.module != pair.module
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let module = *get(&decoder.modules, pair.module)?;
+            let source = get(&decoder.sources, pair.source)?.id();
+            if get(&self.image.sources, pair.source)?.role != ModuleRoleRecord::Ordinary
+                || module != ModuleId::from(source)
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let previous = decoder.nominal(pair.previous)?;
+            let previous_source = decoder.span(pair.previous_source)?;
+            let current = decoder.nominal(pair.current)?;
+            let invocation = decoder.span(pair.invocation)?;
+            // Definitions may be in a different admitted source.
+            let definition = decoder.span(pair.definition)?;
+            if previous.declaration().checked_add(1) != Some(current.declaration())
+                || previous_source.source() != source
+                || invocation.source() != source
+                || invocation.range().start() >= invocation.range().end()
+                || previous_source.range().start() > invocation.range().start()
+                || invocation.range().end() > previous_source.range().end()
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            nominal_pairs.push(OriginalNominalPair {
+                module,
+                source,
+                previous,
+                previous_source,
+                current,
+                invocation,
+                definition,
+            });
+        }
+        Ok((modules, nominal_pairs))
+    }
+}
+
 impl PureImage {
     #[cfg(test)]
     pub(crate) fn restore_effect(
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<RestoredEffectImage, ImageFailure> {
-        self.restore_effect_with_quote_guards(&[], work)
+        self.restore_effect_inner(&[], None, work)
     }
 
-    pub(crate) fn restore_effect_with_quote_guards(
+    pub(crate) fn restore_effect_checked(
+        &self,
+        expected: &[u8],
+        guard_coordinates: &[u32],
+        work: &mut TypeWorkBudget,
+    ) -> Result<RestoredEffectImage, ImageFailure> {
+        self.compare_native_expectations(expected, work)?;
+        self.restore_effect_inner(guard_coordinates, Some(CheckedImage { image: self }), work)
+    }
+
+    fn restore_effect_inner(
         &self,
         guard_coordinates: &[u32],
+        checked: Option<CheckedImage<'_>>,
         work: &mut TypeWorkBudget,
     ) -> Result<RestoredEffectImage, ImageFailure> {
         charge(work, 1)?;
@@ -9216,6 +10129,9 @@ impl PureImage {
             decoded_rows,
             work,
         };
+        let owner_rows = checked
+            .map(|admission| admission.decode_owners(&mut decoder, &registry))
+            .transpose()?;
         let catalog = decoder.method_catalog(
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
@@ -9258,9 +10174,20 @@ impl PureImage {
             self.source_method_anchors
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
-        let program = builder
-            .finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?
-            .into_compiler_image(decoder.work)?;
+        let program = builder.finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?;
+        let program = match owner_rows {
+            Some((modules, nominal_pairs)) => {
+                crate::core::UnvalidatedEffectProgram::from_checked_image(
+                    AdmittedImageEffectProgram {
+                        program,
+                        modules,
+                        nominal_pairs,
+                    },
+                    decoder.work,
+                )?
+            }
+            None => program.into_compiler_image(decoder.work)?,
+        };
         // The emitted coordinates select only nodes mapped by this restore.
         // Pay both the temporary vector and the final shared slice before
         // retaining the authenticated program-local identities.
@@ -10027,6 +10954,7 @@ impl RestoredEffectImage {
 }
 
 impl PureImage {
+    #[cfg(test)]
     pub(crate) fn admit_expected_native_facts(
         &self,
         expected: &[u8],
