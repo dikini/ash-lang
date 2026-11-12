@@ -25,9 +25,10 @@ use super::{
         CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
         GeneratedParameterAnchors, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
         MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
-        PureComputation, PureExprKind, PureOperationFamily, PureProgram, PureValue, StoredNode,
-        TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram, ValidatedCoreProgram,
-        ValidatedProgram, method_evidence_producer_matches, origin_depth_within_limit,
+        OwnerAnchorPreparationError, PureComputation, PureExprKind, PureOperationFamily,
+        PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram,
+        ValidatedCoreProgram, ValidatedProgram, method_evidence_producer_matches,
+        origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -3199,6 +3200,26 @@ fn validate_effect_modules_internal(
     ),
     ValidationError,
 > {
+    let prepared_anchors = if let Some(linked) = linked {
+        match GeneratedParameterAnchors::prepare_from_linked(linked, sources, module_sources, work)
+            .and_then(|anchors| {
+                work.charge(1)
+                    .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+                Ok(Arc::new(anchors))
+            }) {
+            Ok(anchors) => Some(anchors),
+            Err(error) => {
+                program.discard_iteratively();
+                let reason = match error {
+                    OwnerAnchorPreparationError::Invalid => ValidationReason::Registry,
+                    OwnerAnchorPreparationError::Resource => ValidationReason::Resource,
+                };
+                return Err(ValidationError::new(reason, None));
+            }
+        }
+    } else {
+        None
+    };
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3227,9 +3248,7 @@ fn validate_effect_modules_internal(
     drop(validator);
     let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
         program.into_parts();
-    let parameter_anchors = linked.map_or(parameter_anchors, |linked| {
-        Arc::new(GeneratedParameterAnchors::from_linked(linked))
-    });
+    let parameter_anchors = prepared_anchors.unwrap_or(parameter_anchors);
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;

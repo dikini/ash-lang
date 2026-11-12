@@ -11,7 +11,10 @@ use std::{
 };
 
 mod catalog_relocation;
+mod checked_owner_anchors;
 mod zonk;
+
+pub(super) use checked_owner_anchors::PreparationError as OwnerAnchorPreparationError;
 
 pub(crate) use catalog_relocation::{
     CompletedCatalogOffsets, compose_completed_catalogs, relocate_completed_anchor,
@@ -1776,24 +1779,54 @@ pub(crate) struct CheckedFragmentNode<'a, F: CoreOperationFamily> {
 // These original parser records are independent of the mutable registry rows.
 // Only a successfully validated linked program may create a nonempty set.
 #[derive(Debug, Default)]
-pub(super) struct GeneratedParameterAnchors(crate::resolved::GeneratedParameterOrders);
+pub(super) struct GeneratedParameterAnchors {
+    orders: crate::resolved::GeneratedParameterOrders,
+    checked_owners: checked_owner_anchors::CheckedOwnerOrders,
+}
 
 impl GeneratedParameterAnchors {
-    pub(super) fn from_linked(
+    pub(super) fn prepare_from_linked(
         linked: &crate::evidence_validation::ValidatedInterfaceProgram,
-    ) -> Self {
-        Self(
-            linked
-                .groups()
-                .iter()
-                .flat_map(|group| group.generated_parameter_orders())
-                .map(|(owner, order)| (*owner, Arc::clone(order)))
-                .collect(),
-        )
+        sources: &[&crate::source::SourceFile],
+        module_sources: &[(ModuleId, crate::source::SourceId)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, OwnerAnchorPreparationError> {
+        let checked_owners = checked_owner_anchors::CheckedOwnerOrders::prepare(
+            linked,
+            sources,
+            module_sources,
+            work,
+        )?;
+        let mut orders = crate::resolved::GeneratedParameterOrders::default();
+        for group in linked.groups() {
+            work.charge(1)
+                .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+            for (owner, order) in group.generated_parameter_orders() {
+                // Pay the lookup, possible growth and retained Arc before publication.
+                work.charge(3)
+                    .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+                orders
+                    .try_reserve(1)
+                    .map_err(|_| OwnerAnchorPreparationError::Resource)?;
+                if owner.module() != group.module()
+                    || orders.insert(*owner, Arc::clone(order)).is_some()
+                {
+                    return Err(OwnerAnchorPreparationError::Invalid);
+                }
+            }
+        }
+        Ok(Self {
+            orders,
+            checked_owners,
+        })
     }
 
     pub(super) fn orders(&self) -> &crate::resolved::GeneratedParameterOrders {
-        &self.0
+        &self.orders
+    }
+
+    pub(super) fn checked_owners(&self) -> &checked_owner_anchors::CheckedOwnerOrders {
+        &self.checked_owners
     }
 }
 
