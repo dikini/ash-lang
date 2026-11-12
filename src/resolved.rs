@@ -17580,6 +17580,112 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn swap_tied_parameter_owners_for_core_test(
+        &mut self,
+        left: TypeVariableId,
+        right: TypeVariableId,
+    ) -> bool {
+        let (Some(left_record), Some(right_record)) = (
+            self.type_variable(left).cloned(),
+            self.type_variable(right).cloned(),
+        ) else {
+            return false;
+        };
+        if left == right || left.module() != right.module() {
+            return false;
+        }
+        let swap = |id: &mut TypeVariableId| {
+            if *id == left {
+                *id = right;
+            } else if *id == right {
+                *id = left;
+            }
+        };
+        for definition in &mut self.owner_definitions {
+            if definition
+                .parameters
+                .iter()
+                .any(|parameter| parameter.id == left || parameter.id == right)
+            {
+                for parameter in definition.parameters.make_mut_for_test() {
+                    if parameter.id == left {
+                        *parameter = right_record.clone();
+                    } else if parameter.id == right {
+                        *parameter = left_record.clone();
+                    }
+                }
+            }
+        }
+        for signature in self
+            .owner_signatures
+            .effects
+            .iter_mut()
+            .chain(&mut self.owner_signatures.interfaces)
+            .chain(
+                self.owner_signatures
+                    .resources
+                    .iter_mut()
+                    .map(|(_, signature)| signature),
+            )
+        {
+            for id in &mut signature.parameters {
+                swap(id);
+            }
+        }
+        for row in &mut self.global_parameter_rows {
+            for id in &mut row.parameters {
+                swap(id);
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_nominal_invocation_for_core_test(
+        &mut self,
+        id: NominalTypeId,
+        original: Span,
+        replacement: Span,
+    ) -> bool {
+        let Some(position) = self.nominal_positions.get(&id).copied() else {
+            return false;
+        };
+        let Some(nominal) = self.nominals.get(position) else {
+            return false;
+        };
+        if nominal.id != id
+            || !matches!(nominal.origin, Origin::Expansion { invocation, .. } if invocation == original)
+            || nominal.constructors.is_empty()
+            || self.constructors.iter().filter(|constructor| constructor.owner == id).count()
+                != nominal.constructors.len()
+            || self
+                .constructors
+                .iter()
+                .filter(|constructor| constructor.owner == id)
+                .any(|constructor| {
+                    !matches!(constructor.origin, Origin::Expansion { invocation, .. } if invocation == original)
+                })
+        {
+            return false;
+        }
+        let Origin::Expansion { invocation, .. } = &mut self.nominals[position].origin else {
+            unreachable!()
+        };
+        *invocation = replacement;
+        for constructor in self
+            .constructors
+            .iter_mut()
+            .filter(|constructor| constructor.owner == id)
+        {
+            let Origin::Expansion { invocation, .. } = &mut constructor.origin else {
+                unreachable!()
+            };
+            *invocation = replacement;
+        }
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
         let Some(nominal) = self.lexical_nominals.first_mut() else {
             return false;

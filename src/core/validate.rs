@@ -6,6 +6,7 @@ mod declaration_closure_tests;
 mod effect_signature_borrow_tests;
 mod network;
 
+mod checked_owner_anchors;
 mod source_declarations;
 
 static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
@@ -25,9 +26,10 @@ use super::{
         CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
         GeneratedParameterAnchors, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
         MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
-        PureComputation, PureExprKind, PureOperationFamily, PureProgram, PureValue, StoredNode,
-        TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram, ValidatedCoreProgram,
-        ValidatedProgram, method_evidence_producer_matches, origin_depth_within_limit,
+        OwnerAnchorPreparationError, PureComputation, PureExprKind, PureOperationFamily,
+        PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram,
+        ValidatedCoreProgram, ValidatedProgram, method_evidence_producer_matches,
+        origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -3199,6 +3201,26 @@ fn validate_effect_modules_internal(
     ),
     ValidationError,
 > {
+    let prepared_anchors = if let Some(linked) = linked {
+        match GeneratedParameterAnchors::prepare_from_linked(linked, sources, module_sources, work)
+            .and_then(|anchors| {
+                work.charge(1)
+                    .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+                Ok(Arc::new(anchors))
+            }) {
+            Ok(anchors) => Some(anchors),
+            Err(error) => {
+                program.discard_iteratively();
+                let reason = match error {
+                    OwnerAnchorPreparationError::Invalid => ValidationReason::Registry,
+                    OwnerAnchorPreparationError::Resource => ValidationReason::Resource,
+                };
+                return Err(ValidationError::new(reason, None));
+            }
+        }
+    } else {
+        None
+    };
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3208,6 +3230,7 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
+    validator.prepared_owner_anchors = prepared_anchors.as_deref();
     let result = validator.run_effect().and_then(|()| {
         macro_entry
             .map(|contract| validator.check_macro_entry(contract))
@@ -3227,9 +3250,7 @@ fn validate_effect_modules_internal(
     drop(validator);
     let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
         program.into_parts();
-    let parameter_anchors = linked.map_or(parameter_anchors, |linked| {
-        Arc::new(GeneratedParameterAnchors::from_linked(linked))
-    });
+    let parameter_anchors = prepared_anchors.unwrap_or(parameter_anchors);
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3529,6 +3550,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     linked: Option<&'program crate::evidence_validation::ValidatedInterfaceProgram>,
+    prepared_owner_anchors: Option<&'program GeneratedParameterAnchors>,
+    checked_owner_anchors_authenticated: Cell<bool>,
     network_api: Option<crate::resolved::NetworkApi>,
     authenticated_network_requests: Cell<[Option<NodeId>; 9]>,
     network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
@@ -3546,6 +3569,9 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     newtype_conversion_parameter_work: Cell<usize>,
     #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
+    #[cfg(test)]
+    nominal_overlap_refusal:
+        Cell<Option<(crate::types::NominalTypeId, crate::types::NominalTypeId)>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -3771,6 +3797,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .collect(),
             module_sources: None,
             linked: None,
+            prepared_owner_anchors: None,
+            checked_owner_anchors_authenticated: Cell::new(false),
             network_api: None,
             authenticated_network_requests: Cell::new([None; 9]),
             network_admissions: std::cell::RefCell::new(Vec::new()),
@@ -3785,6 +3813,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             newtype_conversion_parameter_work: Cell::new(0),
             #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
+            #[cfg(test)]
+            nominal_overlap_refusal: Cell::new(None),
         }
     }
 
@@ -7465,7 +7495,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let type_variable_count = u32::try_from(registry.type_variable_count())
             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
-        let mut previous_type_variable_start = None;
+        let mut previous_type_variable: Option<(&ResolvedTypeVariable, Span)> = None;
         let resolved_type_variables = registry_module.is_some_and(|module| {
             registry
                 .type_variable(crate::types::TypeVariableId::resolved(module, 0))
@@ -7486,27 +7516,34 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
+            let non_increasing = previous_type_variable
+                .is_some_and(|(_, previous)| parameter_range.start() <= previous.range().start());
             let mut contextual = self.is_lexical_source_parameter(parameter.id)?;
-            if !contextual
-                && previous_type_variable_start
-                    .is_some_and(|previous| parameter_range.start() <= previous)
-            {
+            if !contextual && non_increasing {
                 contextual = self.is_structural_store_identity(parameter.id)?
                     || self.is_structural_region_identity(parameter.id)?;
             }
+            let original_tie = if !contextual && non_increasing {
+                self.allows_original_expansion_tie(
+                    previous_type_variable
+                        .expect("a non-increasing position has a predecessor")
+                        .0,
+                    parameter,
+                )?
+            } else {
+                false
+            };
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || !contextual
-                    && previous_type_variable_start
-                        .is_some_and(|previous| parameter_range.start() <= previous)
+                || !contextual && non_increasing && !original_tie
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             if !contextual {
-                previous_type_variable_start = Some(parameter_range.start());
+                previous_type_variable = Some((parameter, parameter_span));
             }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
@@ -7793,7 +7830,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
-        let mut previous_nominal = HashMap::<ModuleId, Span>::new();
+        let mut previous_nominal = HashMap::<ModuleId, (&ResolvedNominalType, Span)>::new();
 
         let source_original = original.is_some();
         let nominals = registry_source_order(
@@ -7879,16 +7916,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal.get(&module).is_some_and(|previous| {
-                    nominal_range.start() < previous.range().end() && nominal_span != *previous
-                })
             {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            if let Some((previous, previous_span)) = previous_nominal.get(&module).copied()
+                && nominal_range.start() < previous_span.range().end()
+                && nominal_span != previous_span
+                && !self.allows_original_nominal_overlap(previous, nominal, source)?
+            {
+                #[cfg(test)]
+                self.nominal_overlap_refusal
+                    .set(Some((previous.id, nominal.id)));
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_nominal.insert(module, nominal_span);
+            previous_nominal.insert(module, (nominal, nominal_span));
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
 
@@ -7902,7 +7946,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         });
         {
             let mut next_type_variable = HashMap::<ModuleId, u32>::new();
-            let mut previous_type_variable_start = HashMap::new();
+            let mut previous_type_variable: HashMap<ModuleId, (&ResolvedTypeVariable, Span)> =
+                HashMap::new();
             for parameter in &type_variables {
                 let Some(module) = parameter.id.module() else {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -7914,6 +7959,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
+                let previous = previous_type_variable.get(&module).copied();
                 let mut contextual = self.is_lexical_source_parameter(parameter.id)?
                     || generatives.is_some_and(|original| original.contains(&parameter.id));
                 if parameter.id.local() != *expected
@@ -7925,13 +7971,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
                 if !contextual
-                    && previous_type_variable_start
-                        .get(&module)
-                        .is_some_and(|previous| parameter_range.start() <= *previous)
+                    && previous.is_some_and(|(_, previous)| {
+                        parameter_range.start() <= previous.range().start()
+                    })
                 {
                     contextual = self.is_structural_store_identity(parameter.id)?
                         || self.is_structural_region_identity(parameter.id)?;
-                    if !contextual {
+                    if !contextual
+                        && !self.allows_original_expansion_tie(
+                            previous
+                                .expect("a non-increasing position has a predecessor")
+                                .0,
+                            parameter,
+                        )?
+                    {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
                 }
@@ -7939,7 +7992,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .checked_add(1)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
                 if !contextual {
-                    previous_type_variable_start.insert(module, parameter_range.start());
+                    if previous.is_none() {
+                        let growth =
+                            if previous_type_variable.len() == previous_type_variable.capacity() {
+                                previous_type_variable
+                                    .capacity()
+                                    .saturating_mul(2)
+                                    .saturating_add(previous_type_variable.len())
+                                    .saturating_add(1)
+                            } else {
+                                1
+                            };
+                        self.charge_type_work(growth)?;
+                        previous_type_variable
+                            .try_reserve(1)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    }
+                    previous_type_variable.insert(module, (parameter, parameter_span));
                 }
                 self.validate_origin(&parameter.origin, self.program.root)?;
             }
@@ -17612,6 +17681,13 @@ pub(crate) fn generic_cell_source_fixture_for_test(
 
 #[cfg(test)]
 pub(super) use tests::{registration_proof_check, registration_proof_program};
+
+#[cfg(test)]
+pub(crate) use tests::{
+    exercise_foreign_wrong_source_for_image_test, exercise_restored_global_swap_for_image_test,
+    exercise_restored_nominal_pair_mutation_for_image_test,
+    exercise_restored_owner_swap_for_image_test,
+};
 
 #[cfg(test)]
 mod tests {
@@ -32933,6 +33009,1305 @@ mod tests {
                 )) => {}
             }
         }
+    }
+
+    fn swap_application_type_variables_for_owner_swap_test(
+        application: &mut crate::interface::InterfaceApplication,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        for argument in application.arguments_mut_for_summary_test() {
+            let replacement = crate::types::map_kinded_argument_types_with_budget(
+                argument,
+                &mut |ty, work: &mut TypeWorkBudget| {
+                    let mut copy = clone_type_with_budget(ty, work)?;
+                    swap_type_variable_identities(&mut copy, left, right);
+                    Ok::<Type, ()>(copy)
+                },
+                &mut TypeWorkBudget::unbounded(),
+                &mut |_| (),
+            )
+            .expect("test application arguments remain representable");
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                argument,
+                replacement,
+            ));
+        }
+    }
+
+    fn swap_method_catalog_type_variables_for_owner_swap_test(
+        program: &mut UnvalidatedEffectProgram,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        let catalog = Arc::make_mut(&mut program.method_evidence);
+        assert!(catalog.lexical_owners().is_empty());
+        for method in catalog.methods_mut_for_core_test() {
+            for id in &mut method.interface_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for role in &mut method.inherited_parameters {
+                swap_type_variable_identity(&mut role.binder, left, right);
+            }
+            for (id, _) in &mut method.parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_type_variable_identities(&mut method.value_type, left, right);
+        }
+        for owner in catalog.implementation_owners_mut_for_core_test() {
+            for (id, _) in &mut owner.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut owner.application,
+                left,
+                right,
+            );
+        }
+        for domain in catalog.domains_mut_for_core_test() {
+            for (id, _) in &mut domain.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut domain.application,
+                left,
+                right,
+            );
+        }
+        for occurrence in catalog.occurrences_mut_for_core_test() {
+            // Keep the actual checked selection plan fixed. This concrete
+            // fixture must not hide the swapped variables inside that anchor.
+            for argument in occurrence.selection.arguments() {
+                let mapped = crate::types::map_kinded_argument_types_with_budget(
+                    argument,
+                    &mut |ty, work: &mut TypeWorkBudget| {
+                        let mut copy = clone_type_with_budget(ty, work)?;
+                        swap_type_variable_identities(&mut copy, left, right);
+                        Ok::<Type, ()>(copy)
+                    },
+                    &mut TypeWorkBudget::unbounded(),
+                    &mut |_| (),
+                )
+                .expect("checked argument copy");
+                assert_eq!(&mapped, argument, "checked selection remains fixed");
+                crate::types::discard_kinded_argument_iteratively(mapped);
+            }
+            for index in 0..occurrence.selection.node_count() {
+                let node = occurrence
+                    .selection
+                    .node(crate::interface::EvidenceNodeId::new(index))
+                    .expect("checked selection node");
+                if let crate::interface::EvidenceNode::Implementation { substitution, .. } = node {
+                    for item in substitution {
+                        assert_ne!(item.parameter(), left);
+                        assert_ne!(item.parameter(), right);
+                        let mut argument = item.argument().clone();
+                        swap_type_variable_identities(&mut argument, left, right);
+                        assert_eq!(&argument, item.argument());
+                    }
+                }
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut occurrence.checked_application,
+                left,
+                right,
+            );
+            for ty in &mut occurrence.method_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            if let Some(ty) = &mut occurrence.checked_value_type {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for adapter in catalog.adapters_mut_for_core_test() {
+            for id in &mut adapter.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for ty in &mut adapter.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            for edge in &mut adapter.prerequisites {
+                swap_application_type_variables_for_owner_swap_test(
+                    &mut edge.application,
+                    left,
+                    right,
+                );
+                for id in &mut edge.interface_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                for (id, _) in &mut edge.method_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                swap_type_variable_identities(&mut edge.value_type, left, right);
+            }
+        }
+        for source in catalog.concrete_sources_mut_for_core_test() {
+            for ty in &mut source.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for anchor in &mut program.method_evidence_anchors {
+            swap_application_type_variables_for_owner_swap_test(
+                &mut anchor.application,
+                left,
+                right,
+            );
+        }
+    }
+
+    #[test]
+    fn core_rejects_coordinated_tied_parameter_owner_swap() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original introduced method graph must compile");
+        let (original, provenance) = compiled.effect_build_input().expect("actual effect Core");
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the original checked method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("the original interface owns one parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("the original method owns one Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("canonical A");
+        let b = registry.type_variable(right).expect("canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert_eq!((&a.kind, &b.kind), (&Kind::Type, &Kind::Type));
+        assert!(left.local() < right.local());
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        assert!(
+            registry
+                .nominal_parameter_entries()
+                .all(|(_, parameters)| parameters.iter().all(|p| p.id != left && p.id != right))
+        );
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        assert_eq!(
+            registry.defining_owner_parameters(owner).unwrap()[0].id,
+            left
+        );
+        eprintln!(
+            "original tied A={left:?} B={right:?} span={:?} interface={interface:?}",
+            a.origin.primary_span()
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuild = |folded| {
+            if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+        };
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let untouched = rebuild(folded).expect("rebuild the genuine Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &module_sources)
+                .expect("the untouched transform independently validates");
+            let mut tampered = rebuild(folded).expect("rebuild actual Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &tampered.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut tampered.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut tampered, left, right);
+            coherently_swap_core_type_variables(&mut tampered, left, right);
+
+            let changed = &tampered.registry;
+            assert_eq!(changed.type_variable(left), Some(a));
+            assert_eq!(changed.type_variable(right), Some(b));
+            assert_eq!(
+                changed.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.defining_owner_parameters(owner).unwrap()[0].id,
+                right
+            );
+            assert_eq!(&changed.defining_owner_parameters(owner).unwrap()[0], b);
+            let method = tampered
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            for row in registry.global_parameter_rows() {
+                let expected = row
+                    .parameters()
+                    .iter()
+                    .map(|id| {
+                        let mut id = *id;
+                        swap_type_variable_identity(&mut id, left, right);
+                        id
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed
+                        .global_parameter_row(row.owner())
+                        .unwrap()
+                        .parameters(),
+                    expected
+                );
+                assert_eq!(
+                    changed.global_parameter_position_for_core_test(row.owner()),
+                    registry.global_parameter_position_for_core_test(row.owner())
+                );
+            }
+            assert_eq!(registry.type_variable(left).unwrap().spelling, "A");
+            assert_eq!(registry.type_variable(right).unwrap().spelling, "B");
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!(
+                "canonical A/B records remain fixed; B is now interface-owned and A method-local; roles, rows and actual Core uses are coordinated"
+            );
+
+            let validator = Validator::new_modules(&tampered, &sources, &module_sources)
+                .expect("the fixed-original mutation retains the module relation");
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("the original-owner comparison must reject the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry,
+            );
+            drop(validator);
+            match validate_effect_modules(tampered, &sources, &module_sources) {
+                Ok(_) => panic!("COUNTEREXAMPLE: coordinated wrong parameter ownership validated"),
+                Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
+            }
+            eprintln!("{name} preserved originals and rejected the owner swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_global_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let registry = original.registry();
+        let find = |name: &str| {
+            registry
+                .global_parameter_rows()
+                .iter()
+                .find_map(|row| {
+                    let [id] = row.parameters() else { return None };
+                    let parameter = registry.type_variable(*id)?;
+                    (parameter.spelling == name).then_some((row.owner(), *id, parameter))
+                })
+                .unwrap_or_else(|| panic!("the original global {name} exists"))
+        };
+        let (first, left, a) = find("A");
+        let (second, right, b) = find("B");
+        assert_ne!(first, second);
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild original global image");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored global Core validates");
+            let mut changed = rebuild().expect("rebuild global Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(first)
+                    .unwrap()
+                    .parameters(),
+                &[right]
+            );
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(second)
+                    .unwrap()
+                    .parameters(),
+                &[left]
+            );
+            for (owner, expected) in [(first, right), (second, left)] {
+                let id = linked_global_abstraction(&changed, owner);
+                let node = &changed.nodes[id.index().unwrap()];
+                let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(abstraction),
+                )) = &node.kind
+                else {
+                    panic!("the actual global initializer remains a type abstraction")
+                };
+                assert_eq!(abstraction.parameters()[0].0, expected);
+                let Type::Forall(parameters, _) = &node.ty else {
+                    panic!("the actual abstraction retains its scheme")
+                };
+                assert_eq!(parameters[0].0, expected);
+            }
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original globals refuse the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.global_parameter_row(first).unwrap().parameters(),
+                &[left]
+            );
+            assert_eq!(
+                registry.global_parameter_row(second).unwrap().parameters(),
+                &[right]
+            );
+            eprintln!(
+                "restored {name}: fixed original global owners reject the coordinated active swap"
+            );
+        }
+    }
+
+    pub(crate) fn exercise_foreign_wrong_source_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let original_registry = original.registry();
+        let original_effect = original_registry
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Other")
+            .expect("the actual second foreign symbol is retained");
+        let operation = &original_effect.operations[0];
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = operation.origin
+        else {
+            panic!("the literal foreign symbol must carry its expansion")
+        };
+        assert_ne!(invocation.source(), definition.source());
+        let contract = original_registry.native_symbol(operation.id).unwrap();
+        assert!(
+            contract
+                .same_source_provenance(original_effect, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        let relation = module_sources.iter().copied().collect::<HashMap<_, _>>();
+        for folded in [false, true] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original).unwrap()
+            } else {
+                identity_effect_traversal(original).unwrap()
+            };
+            let mut effects = changed.registry.effects().to_vec();
+            let effect = effects
+                .iter_mut()
+                .find(|effect| effect.id == original_effect.id)
+                .unwrap();
+            effect.operations[0].origin = Origin::Source(definition);
+            assert_eq!(effect.operations[0].id, operation.id);
+            assert_eq!(effect.operations[0].span, operation.span);
+            assert_eq!(effect.operations[0].annotation, operation.annotation);
+            assert!(
+                contract
+                    .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                    .unwrap()
+            );
+            changed.registry = Arc::new(
+                changed
+                    .registry
+                    .as_ref()
+                    .clone()
+                    .replace_effects_for_core_test(effects),
+            );
+            assert!(Arc::ptr_eq(
+                contract,
+                changed.registry.native_symbol(operation.id).unwrap()
+            ));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .validate_effect_registry(Some(&relation), &mut HashMap::new())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+        }
+    }
+
+    pub(crate) fn exercise_restored_owner_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the restored original method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("one original interface parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("one original method-local Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("fixed canonical A");
+        let b = registry.type_variable(right).expect("fixed canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild restored original");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored Core validates");
+            let mut changed = rebuild().expect("rebuild restored Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut changed, left, right);
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .owner_signature(owner)
+                    .unwrap()
+                    .parameters
+                    .as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.registry.defining_owner_parameters(owner).unwrap()[0],
+                *b
+            );
+            let method = changed
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original owner comparison refuses the swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!("restored {name}: fixed original owners reject the coordinated active swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_nominal_pair_mutation_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the restored original nested pair");
+        assert_eq!(
+            pair.previous_source.range(),
+            ByteRange::new(35, 76).unwrap()
+        );
+        assert_ne!(pair.definition.source(), pair.source);
+        let source = sources
+            .iter()
+            .find(|source| source.id() == pair.source)
+            .unwrap();
+        let changed_span = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+        assert!(changed_span.range().start() >= pair.previous_source.range().start());
+        assert!(changed_span.range().end() <= pair.previous_source.range().end());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+            .expect("rebuild restored nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed_span,
+                )
+            );
+            let registry = changed.registry.as_ref();
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed_span && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed_span
+            )));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .err()
+                .expect("the restored fixed-original pair refuses");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "restored {name}: original nominal pair rejects the still-contained origin change"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_original_owner_preparation_is_exact_retryable_and_accepts_source_aliases() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let fixture = vector_method_evidence_validation_fixture();
+        let graph = &fixture.graph;
+        let linked = link_modules(checked_linked_validation_graph(graph), graph.entry())
+            .expect("the original graph links");
+        let linked = validate_linked_facts_for_test(linked).expect("the original graph checks");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relations = &fixture.module_sources;
+
+        let mut measured = TypeWorkBudget::unbounded();
+        let anchors = GeneratedParameterAnchors::prepare_from_linked(
+            &linked,
+            &sources,
+            relations,
+            &mut measured,
+        )
+        .expect("the actual checked originals prepare");
+        let exact = measured.used();
+        assert!(exact > 1);
+        let rows = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(
+            |row| matches!(row.owner, OriginalOwner::Interface(_)) && row.parameters.len() == 2
+        ));
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Method(_))
+                    && row.parameters.len() == 1)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        // Equal immutable source identities, held in distinct SourceFile values,
+        // must not acquire a pointer-identity requirement.
+        let aliases = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().clone())
+            .collect::<Vec<_>>();
+        let alias_refs = aliases.iter().collect::<Vec<_>>();
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).expect("short prefix fits");
+            assert!(matches!(
+                GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut short,
+                ),
+                Err(OwnerAnchorPreparationError::Resource)
+            ));
+            for _ in 0..2 {
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).expect("exact prefix fits");
+                let retried = GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut retry,
+                )
+                .expect("an exact fresh retry fits");
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(
+                    retried.checked_owners().modules().len(),
+                    anchors.checked_owners().modules().len()
+                );
+            }
+        }
+        eprintln!("checked original owner preparation used exactly {exact} work units");
+    }
+
+    #[test]
+    fn checked_original_owners_cover_inherited_methods_and_reject_unissued_ties() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident first $first:ident second $second:ident => {\n    pub interface $name<A> {\n        $first<B> : (A, B) -> B\n        $second : A -> A\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose first pick second echo\nimpl Choose<Int> {\n    pick (left, right) = right\n    echo value = value\n}\nmain : Unit -> Int\nmain () = pick(echo(0), 42)\n",
+        );
+        let configuration = || crate::driver::RunConfiguration {
+            entry: entry.clone(),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled =
+            crate::driver::compile_path(configuration()).expect("the original graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let methods = original.method_evidence().methods();
+        let first = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "pick")
+            .unwrap();
+        let second = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "echo")
+            .unwrap();
+        assert_eq!(first.id.interface(), second.id.interface());
+        let [interface] = first.interface_parameters.as_ref() else {
+            panic!("one interface parameter")
+        };
+        let [(local, Kind::Type)] = first.parameters.as_ref() else {
+            panic!("one local parameter")
+        };
+        let (interface, local) = (*interface, *local);
+        assert_eq!(second.interface_parameters.as_ref(), &[interface]);
+        assert!(second.parameters.is_empty());
+        assert_eq!(first.inherited_parameters[0].binder, interface);
+        assert_eq!(second.inherited_parameters[0].binder, interface);
+        let anchors = original.generated_parameter_anchors();
+        let module = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .find(|module| module.module == first.id.interface().module())
+            .unwrap();
+        let row = |owner| module.rows.iter().find(|row| row.owner == owner).unwrap();
+        assert_eq!(
+            row(OriginalOwner::Interface(first.id.interface())).parameters[0].parameter,
+            interface
+        );
+        assert_eq!(
+            row(OriginalOwner::Method(first.id)).parameters[0].parameter,
+            local
+        );
+        assert!(row(OriginalOwner::Method(second.id)).parameters.is_empty());
+        assert!(
+            module
+                .rows
+                .iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let validator = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        let a = rebuilt.registry.type_variable(interface).unwrap();
+        let b = rebuilt.registry.type_variable(local).unwrap();
+        assert!(validator.allows_original_expansion_tie(a, b).unwrap());
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = b.origin
+        else {
+            panic!("direct expansion")
+        };
+        let mut changed = b.clone();
+        changed.origin = Origin::Source(invocation);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Generated {
+            cause: Box::new(b.origin.clone()),
+            reason: crate::source::GeneratedReason::TypeChecking,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Related {
+            primary: Box::new(b.origin.clone()),
+            related: Vec::new(),
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        let source = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let range = invocation.range();
+        let unequal = source
+            .span(ByteRange::new(range.start(), range.end() - 1).unwrap())
+            .unwrap();
+        changed.origin = Origin::Expansion {
+            invocation: unequal,
+            definition,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed = b.clone();
+        changed.id =
+            crate::types::TypeVariableId::resolved(first.id.interface().module(), u32::MAX);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        drop(validator);
+        validate_effect_modules(rebuilt, &sources, &relations).expect("genuine original validates");
+
+        let donor = crate::driver::compile_path(configuration()).expect("a separate checked donor");
+        let (donor, _) = donor.effect_build_input().unwrap();
+        let mut substituted = identity_effect_traversal(original).unwrap();
+        substituted.generated_parameter_anchors = Arc::clone(donor.generated_parameter_anchors());
+        let validator = Validator::new_modules(&substituted, &sources, &relations).unwrap();
+        assert_eq!(
+            validator
+                .authenticate_checked_originals()
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        drop(validator);
+        assert!(validate_effect_modules(substituted, &sources, &relations).is_err());
+    }
+
+    #[test]
+    fn checked_original_global_row_retains_type_and_effect_row_slots() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n    pub $name<E : EffectRow, A> : (Unit -> A ! { | E }) -> A ! { | E }\n    $name action = action ()\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit relay\neffect Read {\n    read : Unit -> Int\n}\nread_number : Unit -> Int ! {Read}\nread_number () = perform Read.read ()\nmain : Unit -> Int\nmain () = handle (relay(read_number)) with Read {\n    read ignored => resume 42\n}\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original effect-row graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, _) = compiled.effect_build_input().unwrap();
+        let registry = original.registry();
+        let row = original
+            .generated_parameter_anchors()
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .find(|row| {
+                matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2
+                    && registry
+                        .type_variable(row.parameters[0].parameter)
+                        .is_some_and(|p| p.spelling == "E")
+                    && registry
+                        .type_variable(row.parameters[1].parameter)
+                        .is_some_and(|p| p.spelling == "A")
+            })
+            .expect("the genuine global has its original E/A row");
+        let e = registry.type_variable(row.parameters[0].parameter).unwrap();
+        let a = registry.type_variable(row.parameters[1].parameter).unwrap();
+        assert_eq!(e.kind, Kind::EffectRow);
+        assert_eq!(a.kind, Kind::Type);
+        assert!(matches!(e.origin, Origin::Expansion { .. }));
+        assert!(matches!(a.origin, Origin::Expansion { .. }));
+        assert_eq!(e.origin.primary_span(), a.origin.primary_span());
+        assert_eq!(
+            row.parameters[0].expansion_primary,
+            Some(e.origin.primary_span())
+        );
+        assert_eq!(
+            row.parameters[1].expansion_primary,
+            Some(a.origin.primary_span())
+        );
+    }
+
+    #[test]
+    fn checked_original_nested_nominal_pair_rejects_contained_origin_mutation() {
+        use super::super::dialect::checked_owner_anchors::OriginalNominalPair;
+
+        fn configuration() -> crate::driver::RunConfiguration {
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/derives/nested.ash"),
+                roots: ModuleRoots::empty(),
+            }
+        }
+
+        fn check_pair(pair: OriginalNominalPair) {
+            assert_eq!(
+                pair.previous_source.range(),
+                ByteRange::new(35, 76).unwrap()
+            );
+            assert_eq!(pair.invocation.range(), ByteRange::new(70, 75).unwrap());
+            assert_ne!(pair.definition.source(), pair.source);
+        }
+
+        fn mutate_and_check(
+            program: &mut UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            prepared: Option<&GeneratedParameterAnchors>,
+            pair: OriginalNominalPair,
+        ) {
+            check_pair(pair);
+            let source = sources
+                .iter()
+                .find(|source| source.id() == pair.source)
+                .unwrap();
+            let changed = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+            assert!(changed.range().start() >= pair.previous_source.range().start());
+            assert!(changed.range().end() <= pair.previous_source.range().end());
+            assert!(
+                Arc::make_mut(&mut program.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed,
+                )
+            );
+            let registry = program.registry.as_ref();
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed
+            )));
+            let mut validator = Validator::new_modules(program, sources, relations).unwrap();
+            validator.prepared_owner_anchors = prepared;
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .err()
+                .expect("the fixed-original overlap must refuse");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+        }
+
+        let original = crate::driver::compile_path(configuration())
+            .expect("the unchanged nested derive graph compiles");
+        assert_eq!(
+            crate::driver::execute(&original).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = original.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the actual checked nested pair is retained");
+        check_pair(pair);
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild the original nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &relations)
+                .expect("the untouched nested transform independently validates");
+            let mut changed = rebuild().expect("rebuild for the fixed-original mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            mutate_and_check(&mut changed, &sources, &relations, None, pair);
+            assert!(validate_effect_modules(changed, &sources, &relations).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "{name}: exact original nominal pair rejected the still-contained 70..75 to 69..75 mutation"
+            );
+        }
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |mut program, sources, relations, linked| {
+                let anchors = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("prepare the actual checked linked originals");
+                let pair = *anchors
+                    .nominal_pairs()
+                    .iter()
+                    .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                    .expect("the actual linked nominal pair is present");
+                mutate_and_check(&mut program, sources, relations, Some(&anchors), pair);
+                reached.set(true);
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        );
+        assert!(reached.get(), "the actual linked guard was reached");
+        assert!(
+            negative.is_err(),
+            "the linked entry must reject the mutation"
+        );
+        eprintln!(
+            "linked: actual checked original pair rejected the coordinated contained mutation"
+        );
+    }
+
+    #[test]
+    fn checked_nominal_pair_work_is_exact_retryable_and_last_owner_drops() {
+        let configuration = || crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives/nested.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .expect("actual checked originals prepare");
+                assert!(
+                    originals
+                        .nominal_pairs()
+                        .iter()
+                        .any(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                );
+                let cost = measured.used();
+                assert!(cost > 1);
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                    short.charge(prefix).unwrap();
+                    assert!(matches!(
+                        GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut short,
+                        ),
+                        Err(OwnerAnchorPreparationError::Resource)
+                    ));
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                        exact.charge(prefix).unwrap();
+                        let retry = GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut exact,
+                        )
+                        .expect("a fresh exact original-pair retry succeeds");
+                        assert_eq!(exact.used(), prefix + cost);
+                        assert_eq!(retry.nominal_pairs(), originals.nominal_pairs());
+                    }
+                }
+                eprintln!("nested checked-original preparation uses exactly {cost} work units");
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the original checked nested program validates");
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let previous = rebuilt.registry.nominal(pair.previous).unwrap();
+        let current = rebuilt.registry.nominal(pair.current).unwrap();
+        let measured = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        assert!(
+            measured
+                .allows_original_nominal_overlap(previous, current, pair.source)
+                .unwrap()
+        );
+        let cost = measured.type_work.get();
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+            short.type_work_limit = prefix + cost - 1;
+            short.charge_type_work(prefix).unwrap();
+            assert_eq!(
+                short
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+                exact.type_work_limit = prefix + cost;
+                exact.charge_type_work(prefix).unwrap();
+                assert!(
+                    exact
+                        .allows_original_nominal_overlap(previous, current, pair.source)
+                        .unwrap()
+                );
+                assert_eq!(exact.type_work.get(), prefix + cost);
+            }
+        }
+        eprintln!("original nominal-pair lookup uses exactly {cost} work units");
+        drop(measured);
+        drop(rebuilt);
+        let weak = Arc::downgrade(original.generated_parameter_anchors());
+        let last = identity_effect_traversal(original).unwrap();
+        drop(compiled);
+        assert_eq!(
+            weak.strong_count(),
+            1,
+            "only the transformed Core retains the anchor"
+        );
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || drop(last))
+            .expect("small-stack last owner worker")
+            .join()
+            .expect("last owner drop is bounded");
+        assert!(weak.upgrade().is_none());
+
+        let reached = Cell::new(false);
+        let failure = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .unwrap();
+                assert!(!originals.nominal_pairs().is_empty());
+                let weak = Arc::downgrade(&program.generated_parameter_anchors);
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                let result = validate_effect_modules_linked_with_work(
+                    program, sources, relations, linked, &mut short,
+                );
+                assert_eq!(
+                    result
+                        .as_ref()
+                        .err()
+                        .expect("one-short linked preparation refuses")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+                assert!(
+                    weak.upgrade().is_none(),
+                    "failed preparation disposes the unchecked owner"
+                );
+                reached.set(true);
+                result
+            },
+        );
+        assert!(reached.get());
+        assert!(failure.is_err());
     }
 
     #[test]

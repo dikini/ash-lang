@@ -3575,7 +3575,7 @@ impl Resolver<'_, '_> {
                 let operation_id = OperationId::new(id, operation_index);
                 let operation_name = try_clone_resolution_string(
                     operation.spelling,
-                    operation.name_span,
+                    operation.name.span,
                     "effect operation name could not be retained",
                 )?;
                 operation_names.insert(operation_name, operation_id);
@@ -3871,11 +3871,39 @@ impl Resolver<'_, '_> {
                             "an effect operation must have one outer function arrow with a pure result",
                         ));
                     }
+                    let origin = if matches!(declaration, EffectSource::Foreign { .. }) {
+                        // Pay for inspecting the issued name context and retaining
+                        // the two inline spans before constructing its origin.
+                        self.type_work.charge(3).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                operation.name.span,
+                                "foreign operation origin exceeded its type-work budget",
+                            )
+                        })?;
+                        if operation.name.introduction != 0 {
+                            let invocation = operation.name.introduced_at.ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    operation.name.span,
+                                    "introduced foreign symbol has no invocation origin",
+                                )
+                            })?;
+                            Origin::Expansion {
+                                invocation,
+                                definition: operation.name.span,
+                            }
+                        } else {
+                            Origin::Source(operation.name.span)
+                        }
+                    } else {
+                        Origin::Source(operation.name.span)
+                    };
                     resolved.0.push(ResolvedEffectOperation {
                         id,
                         spelling,
                         annotation: annotation.into_inner(),
-                        origin: Origin::Source(operation.name_span),
+                        origin,
                         span: operation.span,
                     });
                 }
@@ -20703,6 +20731,15 @@ mod tests {
         dependency: &str,
         limit: usize,
     ) -> (Result<ResolvedModule, ResolveError>, usize) {
+        resolve_import_fixture_with_type_prefix(entry, dependency, limit, 0)
+    }
+
+    fn resolve_import_fixture_with_type_prefix(
+        entry: &str,
+        dependency: &str,
+        limit: usize,
+        prefix: usize,
+    ) -> (Result<ResolvedModule, ResolveError>, usize) {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
@@ -20726,6 +20763,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
+        type_work.charge(prefix).expect("the fixture prefix fits");
         let mut constraint_work = InterfaceConstraintBudget::default();
         let result = resolve_module_names_with_budget(
             entry,
@@ -21604,6 +21642,7 @@ mod tests {
             resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, TYPE_WORK_LIMIT);
         result.expect("the passive void symbol must resolve without a native binding");
         let mut binding_cutoffs = 0;
+        let mut origin_cutoffs = 0;
         for limit in 0..exact_work {
             let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, limit);
             let failure =
@@ -21617,17 +21656,79 @@ mod tests {
             binding_cutoffs += usize::from(
                 failure.primary.message() == "foreign symbol binding exceeded its work budget",
             );
+            origin_cutoffs += usize::from(
+                failure.primary.message()
+                    == "foreign operation origin exceeded its type-work budget",
+            );
         }
         assert!(
             binding_cutoffs > 0,
             "the cutoffs must reach the actual symbol binder"
         );
-        for _ in 0..2 {
-            let (result, used) =
-                resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, exact_work);
-            result.expect("the exact foreign resolution allowance must retry");
-            assert_eq!(used, exact_work);
+        assert!(
+            origin_cutoffs > 0,
+            "the cutoffs must reach the actual foreign origin producer"
+        );
+        for prefix in [0, 17] {
+            let (short, used) = resolve_import_fixture_with_type_prefix(
+                ENTRY,
+                DEPENDENCY,
+                prefix + exact_work - 1,
+                prefix,
+            );
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert!(used <= prefix + exact_work - 1);
+            for _ in 0..2 {
+                let (result, used) = resolve_import_fixture_with_type_prefix(
+                    ENTRY,
+                    DEPENDENCY,
+                    prefix + exact_work,
+                    prefix,
+                );
+                result.expect("the exact foreign resolution allowance must retry");
+                assert_eq!(used, prefix + exact_work);
+            }
         }
+    }
+
+    #[test]
+    fn introduced_foreign_operation_without_invocation_is_refused() {
+        let mut surface = declaration_fixture(
+            "foreign-missing-invocation.ash",
+            "foreign library Fixture {\nprofile \"x86_64-unknown-linux-gnu\"\nsymbol Make : Unit -> Unit { name \"fixture_make\" }\n}\n",
+        );
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        let identities = {
+            let sources = resolver.effect_sources(&surface).unwrap();
+            resolver.install_effect_identities(&sources).unwrap()
+        };
+        let symbol = surface.foreign_libraries[0]
+            .members
+            .iter_mut()
+            .find_map(|member| {
+                if let crate::surface::SurfaceForeignMember::Symbol(symbol) = member {
+                    Some(symbol)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        symbol.name.introduction = 1;
+        symbol.name.introduced_at = None;
+        let sources = resolver.effect_sources(&surface).unwrap();
+        let failure = resolver
+            .resolve_effect_declarations(&sources, identities, vec![Vec::new()], surface.span)
+            .unwrap_err();
+        assert_eq!(failure.reason, ResolveReason::InternalState);
+        assert_eq!(
+            failure.primary.message(),
+            "introduced foreign symbol has no invocation origin"
+        );
+        assert!(resolver.type_scopes.is_empty());
+        assert!(resolver.syntax_type_scopes.is_empty());
     }
 
     #[test]

@@ -11,6 +11,8 @@ mod gas;
 mod host;
 mod image;
 
+pub(crate) use image::AdmittedImageEffectProgram;
+
 pub use host::{
     BuildConfiguration, BuildFailure, BuiltProgram, NATIVE_TARGET, NativeLinkInput,
     PreparedProgramBuild, build_path, build_prepared, prepare_program,
@@ -221,11 +223,8 @@ pub fn __run_private_effect_image(
         .map_err(|()| image_error(image::ImageFailure::Resource))?;
     // Framing, fact comparison and reconstruction consume the same meter.
     let image = image::PureImage::decode_bytes(bytes, &mut work).map_err(image_error)?;
-    image
-        .admit_expected_native_facts(expected_facts, &mut work)
-        .map_err(image_error)?;
     let restored = image
-        .restore_effect_with_quote_guards(quote_guard_coordinates, &mut work)
+        .restore_effect_checked(expected_facts, quote_guard_coordinates, &mut work)
         .map_err(image_error)?;
     // Reconstructed coordinates connect the compiler-generated bridge entries
     // to their fresh runtime symbols.

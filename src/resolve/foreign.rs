@@ -30,7 +30,7 @@ pub(crate) enum EffectSource<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct OperationSource<'a> {
     pub(super) spelling: &'a str,
-    pub(super) name_span: Span,
+    pub(super) name: &'a SurfaceName,
     pub(super) annotation: &'a SurfaceType,
     pub(super) span: Span,
 }
@@ -86,14 +86,14 @@ impl EffectSource<'_> {
                     .get(index)
                     .map(|operation| OperationSource {
                         spelling: &operation.name.text,
-                        name_span: operation.name.span,
+                        name: &operation.name,
                         annotation: &operation.annotation,
                         span: operation.span,
                     })
             }
             Self::Foreign { symbol, .. } if index == 0 => Some(OperationSource {
                 spelling: "call",
-                name_span: symbol.name.span,
+                name: &symbol.name,
                 annotation: &symbol.ty,
                 span: symbol.span,
             }),

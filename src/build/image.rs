@@ -525,6 +525,52 @@ struct ConstructorRecord {
     origin: u32,
 }
 
+// These original rows hold source coordinates only. The reverse declaring-slot
+// index is derived after checked image admission.
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerModuleRecord {
+    module: u32,
+    source: u32,
+    rows: Slice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum OriginalOwnerIdentity {
+    Interface {
+        module: u32,
+        local: u32,
+    },
+    Method {
+        module: u32,
+        interface: u32,
+        local: u32,
+    },
+    Global(BinderIdentity),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerRowRecord {
+    owner: OriginalOwnerIdentity,
+    parameters: Slice,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalOwnerParameterRecord {
+    parameter: TypeVariableIdentity,
+    expansion_primary: Option<SpanRecord>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OriginalNominalPairRecord {
+    module: u32,
+    source: u32,
+    previous: NominalId,
+    previous_source: SpanRecord,
+    current: NominalId,
+    invocation: SpanRecord,
+    definition: SpanRecord,
+}
+
 /// Append-only shared-table extents sealed before executable graph encoding.
 /// These copied counts select the original declaration facts for expectations;
 /// they grant no registry or execution authority.
@@ -542,6 +588,10 @@ struct NativeFactPrefixes {
     source_methods: u32,
     method_variables: u32,
     inherited_parameters: u32,
+    original_owner_modules: u32,
+    original_owner_rows: u32,
+    original_owner_parameters: u32,
+    original_nominal_pairs: u32,
 }
 
 impl NativeFactPrefixes {
@@ -559,6 +609,10 @@ impl NativeFactPrefixes {
             source_methods: index(image.source_methods.len())?,
             method_variables: index(image.method_variables.len())?,
             inherited_parameters: index(image.inherited_parameters.len())?,
+            original_owner_modules: index(image.original_owner_modules.len())?,
+            original_owner_rows: index(image.original_owner_rows.len())?,
+            original_owner_parameters: index(image.original_owner_parameters.len())?,
+            original_nominal_pairs: index(image.original_nominal_pairs.len())?,
         })
     }
 
@@ -576,6 +630,11 @@ impl NativeFactPrefixes {
             || self.source_methods > available.source_methods
             || self.method_variables > available.method_variables
             || self.inherited_parameters > available.inherited_parameters
+            // There is no executable owner-record suffix.
+            || self.original_owner_modules != available.original_owner_modules
+            || self.original_owner_rows != available.original_owner_rows
+            || self.original_owner_parameters != available.original_owner_parameters
+            || self.original_nominal_pairs != available.original_nominal_pairs
         {
             return Err(ImageFailure::InvalidRecord);
         }
@@ -625,6 +684,10 @@ pub(crate) struct PureImage {
     inherited_parameters: Vec<InheritedParameterRecord>,
     method_arguments: Vec<u32>,
     method_variables: Vec<TypeVariableIdentity>,
+    original_owner_modules: Vec<OriginalOwnerModuleRecord>,
+    original_owner_rows: Vec<OriginalOwnerRowRecord>,
+    original_owner_parameters: Vec<OriginalOwnerParameterRecord>,
+    original_nominal_pairs: Vec<OriginalNominalPairRecord>,
 
     main_method_catalog: Option<u32>,
     source_method_evidence: Vec<u8>,
@@ -896,13 +959,15 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
     }
     encoder.encode_registry(registry)?;
     if effect_dialect {
-        encoder.encode_extended_registry(registry)?;
+        encoder.encode_extended_registry(registry, program.checked_owner_modules())?;
     }
     if effect_dialect {
         encoder.image.main_method_catalog = Some(encoder.encode_method_catalog(catalog)?);
     }
     prepare_originals(&mut encoder)?;
-    charge(encoder.work, 13)?;
+    encoder.encode_original_owner_rows(program.checked_owner_modules())?;
+    encoder.encode_original_nominal_pairs(program.checked_original_nominal_pairs())?;
+    charge(encoder.work, 17)?;
     encoder.image.native_fact_prefixes = Some(NativeFactPrefixes::seal(&encoder.image)?);
     charge(encoder.work, program.node_count())?;
     encoder
@@ -1992,7 +2057,24 @@ wire_struct!(
     source_methods,
     method_variables,
     inherited_parameters,
+    original_owner_modules,
+    original_owner_rows,
+    original_owner_parameters,
+    original_nominal_pairs,
 );
+wire_struct!(
+    OriginalNominalPairRecord,
+    module,
+    source,
+    previous,
+    previous_source,
+    current,
+    invocation,
+    definition
+);
+wire_struct!(OriginalOwnerModuleRecord, module, source, rows);
+wire_struct!(OriginalOwnerRowRecord, owner, parameters);
+wire_struct!(OriginalOwnerParameterRecord, parameter, expansion_primary);
 wire_struct!(SourceRecord, role, path, text);
 wire_struct!(ProvenanceViewRecord, nodes, children, root);
 wire_struct!(SpanRecord, source, start, end);
@@ -2106,6 +2188,48 @@ impl Wire for OriginRecord {
                 invocation: Wire::read(reader)?,
                 definition: Wire::read(reader)?,
             },
+            _ => return Err(ImageFailure::InvalidEncoding),
+        })
+    }
+}
+
+impl Wire for OriginalOwnerIdentity {
+    const MINIMUM: usize = 1 + BinderIdentity::MINIMUM;
+    fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
+        match self {
+            Self::Interface { module, local } => {
+                0u8.write(writer)?;
+                module.write(writer)?;
+                local.write(writer)
+            }
+            Self::Method {
+                module,
+                interface,
+                local,
+            } => {
+                1u8.write(writer)?;
+                module.write(writer)?;
+                interface.write(writer)?;
+                local.write(writer)
+            }
+            Self::Global(binder) => {
+                2u8.write(writer)?;
+                binder.write(writer)
+            }
+        }
+    }
+    fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
+        Ok(match u8::read(reader)? {
+            0 => Self::Interface {
+                module: Wire::read(reader)?,
+                local: Wire::read(reader)?,
+            },
+            1 => Self::Method {
+                module: Wire::read(reader)?,
+                interface: Wire::read(reader)?,
+                local: Wire::read(reader)?,
+            },
+            2 => Self::Global(Wire::read(reader)?),
             _ => return Err(ImageFailure::InvalidEncoding),
         })
     }
@@ -2906,6 +3030,26 @@ impl PureImage {
             executable,
         )?)?;
         writer.table(&self.method_arguments)?;
+        writer.table(native_fact_table(
+            &self.original_owner_modules,
+            prefixes.original_owner_modules,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_owner_rows,
+            prefixes.original_owner_rows,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_owner_parameters,
+            prefixes.original_owner_parameters,
+            executable,
+        )?)?;
+        writer.table(native_fact_table(
+            &self.original_nominal_pairs,
+            prefixes.original_nominal_pairs,
+            executable,
+        )?)?;
         self.main_method_catalog.write(writer)?;
         writer.table(if executable {
             &self.source_method_evidence
@@ -2990,6 +3134,10 @@ impl PureImage {
             method_variables: reader.table()?,
             inherited_parameters: reader.table()?,
             method_arguments: reader.table()?,
+            original_owner_modules: reader.table()?,
+            original_owner_rows: reader.table()?,
+            original_owner_parameters: reader.table()?,
+            original_nominal_pairs: reader.table()?,
             main_method_catalog: Wire::read(&mut reader)?,
             source_method_evidence: reader.byte_table()?,
             source_method_anchors: Wire::read(&mut reader)?,
@@ -3003,7 +3151,7 @@ impl PureImage {
         if reader.offset != bytes.len() {
             return Err(ImageFailure::InvalidEncoding);
         }
-        charge(reader.work, 13)?;
+        charge(reader.work, 17)?;
         image
             .native_fact_prefixes
             .ok_or(ImageFailure::InvalidRecord)?
@@ -3130,7 +3278,7 @@ impl PureImage {
             decoder.modules.push(module, decoder.work)?;
         }
         let registry = if seen_common {
-            decoder.extended_registry()?.registry
+            decoder.extended_registry(None)?.registry
         } else {
             if !self.effects.is_empty()
                 || !self.kinds.is_empty()
@@ -4568,6 +4716,1299 @@ mod tests {
     use super::*;
 
     #[test]
+    fn checked_image_retains_original_owners_and_refuses_fixed_fact_changes() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n\
+                 pub $name<A, B> : A -> B -> A\n\
+                 $name first _ = first\n\
+             }\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\
+             emit choose\n\
+             main : Unit -> Int\n\
+             main () = choose 42 true\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let image = &build.image;
+        assert!(image.original_owner_rows.len() >= 2);
+        assert!(
+            image
+                .original_owner_parameters
+                .iter()
+                .filter(|parameter| parameter.expansion_primary.is_some())
+                .count()
+                >= 2
+        );
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let mut measured = TypeWorkBudget::unbounded();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut measured)
+            .unwrap();
+        let cost = measured.used();
+        assert!(!restored.program.checked_owner_modules().is_empty());
+        let source_refs = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &source_refs, &module_sources)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                image
+                    .restore_effect_checked(&expected, &[], &mut short)
+                    .is_err()
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                image
+                    .restore_effect_checked(&expected, &[], &mut exact)
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+
+        // Ignoring the old unit comparison cannot turn raw restoration into authority.
+        image
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let raw = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(raw.program.checked_owner_modules().is_empty());
+
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut changed = decode();
+        changed.original_owner_rows.swap(0, 1);
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut changed = decode();
+        changed
+            .original_owner_parameters
+            .iter_mut()
+            .find(|parameter| parameter.expansion_primary.is_some())
+            .unwrap()
+            .expansion_primary = None;
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut missing = decode();
+        missing.original_owner_rows.pop();
+        assert!(
+            missing
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut duplicate = decode();
+        duplicate.original_owner_rows[1] = duplicate.original_owner_rows[0];
+        assert!(
+            duplicate
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut suffix = decode();
+        suffix
+            .original_owner_rows
+            .push(suffix.original_owner_rows[0]);
+        assert!(
+            suffix
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(PureImage::decode_bytes(&truncated, &mut TypeWorkBudget::default()).is_err());
+
+        // A second genuine compiler image contributes only its owner tables;
+        // the original image's canonical facts and fixed expectation stay put.
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n\
+                 pub $name<A, B> : A -> B -> A\n\
+                 $name first _ = first\n\
+             }\n",
+        );
+        donor_tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\
+             another : Unit -> Int\n\
+             another () = 0\n\
+             emit choose\n\
+             main : Unit -> Int\n\
+             main () = choose 42 true\n",
+        );
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let mut changed = decode();
+        changed.original_owner_modules = donor.original_owner_modules.clone();
+        changed.original_owner_rows = donor.original_owner_rows.clone();
+        changed.original_owner_parameters = donor.original_owner_parameters.clone();
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checked_image_rejects_coordinated_restored_global_owner_swap() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $first:ident and $second:ident => {\n    pub $first<A> : A -> A\n    $first value = value\n    pub $second<B> : B -> B\n    $second value = value\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit first and second\nmain : Unit -> Int\nmain () = first(second(42))\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        crate::core::validate::exercise_restored_global_swap_for_image_test(
+            &restored.program,
+            &sources,
+            &module_sources,
+        );
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn generated_foreign_symbol_origins_survive_checked_image_and_wrong_source_refuses() {
+        fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32, String) {
+            let source = sources
+                .iter()
+                .find(|source| source.id() == span.source())
+                .unwrap();
+            let start = span.range().start();
+            let end = span.range().end();
+            (
+                source.display_path().to_owned(),
+                start,
+                end,
+                source.text()[start as usize..end as usize].to_owned(),
+            )
+        }
+        fn facts(
+            program: &crate::core::ValidatedEffectProgram,
+            sources: &[&SourceFile],
+        ) -> Vec<(
+            String,
+            u32,
+            (String, u32, u32, String),
+            Vec<(String, u32, u32, String)>,
+        )> {
+            ["Make", "Other"]
+                .into_iter()
+                .map(|name| {
+                    let registry = program.registry();
+                    let effect = registry
+                        .effects()
+                        .iter()
+                        .find(|effect| effect.spelling == name)
+                        .unwrap();
+                    assert!(effect.parameters.is_empty());
+                    let [operation] = effect.operations.as_ref() else {
+                        panic!("one synthetic operation")
+                    };
+                    assert_eq!(operation.id.owner(), effect.id);
+                    assert_eq!(operation.id.operation(), 0);
+                    assert_eq!(operation.spelling, "call");
+                    assert!(operation.annotation.ty.function_view().is_some());
+                    let contract = registry.native_symbol(operation.id).unwrap();
+                    assert!(std::sync::Arc::ptr_eq(
+                        effect.native_contract.as_ref().unwrap(),
+                        contract
+                    ));
+                    assert!(
+                        contract
+                            .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                            .unwrap()
+                    );
+                    let origin = match &operation.origin {
+                        Origin::Source(span) => vec![place(*span, sources)],
+                        Origin::Expansion {
+                            invocation,
+                            definition,
+                        } => vec![place(*invocation, sources), place(*definition, sources)],
+                        _ => panic!("the fixture uses only source or direct expansion"),
+                    };
+                    if name == "Make" {
+                        assert_eq!(origin.len(), 1);
+                        assert_eq!(origin[0].3, "Make");
+                    } else {
+                        assert_eq!(origin.len(), 2);
+                        assert_eq!(origin[0].3, "make_foreign Fixture symbol Make");
+                        assert_eq!(origin[1].3, "Other");
+                    }
+                    let mut work = TypeWorkBudget::unbounded();
+                    let retained =
+                        crate::resolved::clone_resolved_effect_with_budget(effect, &mut work)
+                            .unwrap();
+                    let cost = work.used();
+                    assert_eq!(&retained, effect);
+                    eprintln!("foreign {name} canonical clone uses exactly {cost} work units");
+                    for prefix in [0, 17] {
+                        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                        short.charge(prefix).unwrap();
+                        assert!(
+                            crate::resolved::clone_resolved_effect_with_budget(effect, &mut short)
+                                .is_err()
+                        );
+                        for _ in 0..2 {
+                            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                            exact.charge(prefix).unwrap();
+                            assert_eq!(
+                                &crate::resolved::clone_resolved_effect_with_budget(
+                                    effect, &mut exact
+                                )
+                                .unwrap(),
+                                effect
+                            );
+                            assert_eq!(exact.used(), prefix + cost);
+                        }
+                    }
+                    std::thread::Builder::new()
+                        .stack_size(64 * 1024)
+                        .spawn(move || drop(retained))
+                        .unwrap()
+                        .join()
+                        .unwrap();
+                    (
+                        name.to_owned(),
+                        operation.id.operation(),
+                        place(operation.span, sources),
+                        origin,
+                    )
+                })
+                .collect()
+        }
+
+        let tree = SourceTree::new();
+        let forms = include_str!("../../docs/design/macros/fixtures/declarations/forms.ash").replacen(
+            "symbol $S : Unit -> F.Address { name \"fixture_make\" }",
+            "symbol $S : Unit -> F.Address { name \"fixture_make\" }\n        symbol Other : Unit -> F.Address { name \"fixture_other\" }",
+            1,
+        );
+        tree.write("forms.ash", &forms);
+        tree.write(
+            "entry.ash",
+            include_str!("../../docs/design/macros/fixtures/declarations/case_06.ash"),
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let original = facts(program, &sources);
+        crate::core::validate::exercise_foreign_wrong_source_for_image_test(
+            program, &sources, &relation,
+        );
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(sources);
+        // This is the final owner of the original compiled foreign registry;
+        // the image has not yet been restored into a separate program.
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || drop(compiled))
+            .unwrap()
+            .join()
+            .unwrap();
+        drop(tree);
+
+        let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let relation = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        assert_eq!(facts(&restored.program, &sources), original);
+        crate::core::validate::exercise_foreign_wrong_source_for_image_test(
+            &restored.program,
+            &sources,
+            &relation,
+        );
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            assert_eq!(facts(&checked, &sources), original);
+        }
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn foreign_symbol_captured_after_introduction_keeps_original_context() {
+        let tree = SourceTree::new();
+        let outer_source = "import inner (syntax inner)\npub syntax declaration: (outer) => {\n    inner Other\n}\n";
+        let entry_source = "import outer (syntax outer)\nouter\nmain : Unit -> Int\nmain () = 42\n";
+        tree.write("inner.ash", "import @builtin.foreign as F\npub syntax declaration: (inner) $S:ident => {\n    pub foreign library Fixture {\n        profile \"x86_64-unknown-linux-gnu\"\n        symbol $S : Unit -> F.Address { name \"fixture_other\" }\n    }\n}\n");
+        tree.write("outer.ash", outer_source);
+        tree.write("entry.ash", entry_source);
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let effect = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Other")
+            .unwrap();
+        let operation = &effect.operations[0];
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = operation.origin
+        else {
+            panic!("the already-introduced captured symbol must retain its own direct expansion")
+        };
+        let location = |span: Span| {
+            let source = provenance
+                .iter()
+                .find(|(_, source)| source.id() == span.source())
+                .unwrap()
+                .1
+                .as_ref();
+            (
+                source.display_path().to_owned(),
+                span.range().start() as usize,
+                span.range().end() as usize,
+                source.text()[span.range().start() as usize..span.range().end() as usize]
+                    .to_owned(),
+            )
+        };
+        let invocation_location = location(invocation);
+        let definition_location = location(definition);
+        let invocation_start = entry_source.find("\nouter\n").unwrap() + 1;
+        let definition_start = outer_source.find("inner Other").unwrap() + "inner ".len();
+        assert!(invocation_location.0.ends_with("/entry.ash"));
+        assert_eq!(
+            (
+                invocation_location.1,
+                invocation_location.2,
+                invocation_location.3.as_str()
+            ),
+            (invocation_start, invocation_start + "outer".len(), "outer")
+        );
+        assert!(definition_location.0.ends_with("/outer.ash"));
+        assert_eq!(
+            (
+                definition_location.1,
+                definition_location.2,
+                definition_location.3.as_str()
+            ),
+            (definition_start, definition_start + "Other".len(), "Other")
+        );
+        assert_ne!(invocation.source(), definition.source());
+        assert_eq!(operation.id.owner(), effect.id);
+        assert_eq!(operation.id.operation(), 0);
+        assert_eq!(operation.spelling, "call");
+        assert!(
+            effect
+                .native_contract
+                .as_ref()
+                .unwrap()
+                .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn ordinary_generated_and_handwritten_operations_keep_source_origins() {
+        for generated in [false, true] {
+            let tree = SourceTree::new();
+            tree.write(
+                "extra_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/declarations/extra_forms.ash"),
+            );
+            tree.write(
+                "entry.ash",
+                if generated {
+                    include_str!("../../docs/design/macros/fixtures/declarations/operations.ash")
+                } else {
+                    include_str!(
+                        "../../docs/design/macros/fixtures/declarations/control_operations.ash"
+                    )
+                },
+            );
+            let compiled = compile_path(tree.configuration()).unwrap();
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let effect = program
+                .registry()
+                .effects()
+                .iter()
+                .find(|effect| effect.spelling == "Ask")
+                .unwrap();
+            assert!(effect.native_contract.is_none());
+            assert_eq!(effect.operations.len(), 2);
+            for (ordinal, (operation, spelling)) in
+                effect.operations.iter().zip(["left", "right"]).enumerate()
+            {
+                assert_eq!(operation.spelling, spelling);
+                assert_eq!(operation.id.owner(), effect.id);
+                assert_eq!(operation.id.operation(), ordinal as u32);
+                let Origin::Source(span) = operation.origin else {
+                    panic!("ordinary operations retain Source")
+                };
+                let source = provenance
+                    .iter()
+                    .find(|(_, source)| source.id() == span.source())
+                    .unwrap()
+                    .1
+                    .as_ref();
+                assert_eq!(
+                    &source.text()[span.range().start() as usize..span.range().end() as usize],
+                    spelling
+                );
+            }
+        }
+    }
+
+    // This covers the newly supported declaration metadata, without claiming
+    // native support for a concrete implementation or method invocation.
+    #[test]
+    fn checked_image_restores_declared_method_originals_and_bounds() {
+        use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+
+        fn origin_shape(
+            origin: &Origin,
+            sources: &[&SourceFile],
+        ) -> (u8, String, u32, u32, Option<(String, u32, u32)>) {
+            fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32) {
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                (
+                    source.display_path().to_owned(),
+                    span.range().start(),
+                    span.range().end(),
+                )
+            }
+            match origin {
+                Origin::Source(span) => {
+                    let (path, start, end) = place(*span, sources);
+                    (0, path, start, end, None)
+                }
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    let (path, start, end) = place(*invocation, sources);
+                    (1, path, start, end, Some(place(*definition, sources)))
+                }
+                _ => panic!("the fixture has only Source or direct Expansion origins"),
+            }
+        }
+
+        fn rows(
+            program: &crate::core::ValidatedEffectProgram,
+            sources: &[&SourceFile],
+        ) -> Vec<(
+            bool,
+            String,
+            (u8, String, u32, u32, Option<(String, u32, u32)>),
+        )> {
+            let mut result = Vec::new();
+            let mut interface = None;
+            let mut method = None;
+            for module in program.checked_owner_modules() {
+                for row in &module.rows {
+                    let is_method = match row.owner {
+                        OriginalOwner::Interface(id) if row.parameters.len() == 1 => {
+                            interface = Some(id);
+                            false
+                        }
+                        OriginalOwner::Method(id) if row.parameters.len() == 1 => {
+                            method = Some(id);
+                            true
+                        }
+                        _ => continue,
+                    };
+                    let original = row.parameters[0];
+                    let parameter = program
+                        .registry()
+                        .type_variable(original.parameter)
+                        .unwrap();
+                    assert_eq!(parameter.id, original.parameter);
+                    assert_eq!(parameter.kind, crate::types::Kind::Type);
+                    assert_eq!(
+                        original.expansion_primary,
+                        match parameter.origin {
+                            Origin::Expansion { invocation, .. } => Some(invocation),
+                            _ => None,
+                        }
+                    );
+                    result.push((
+                        is_method,
+                        parameter.spelling.clone(),
+                        origin_shape(&parameter.origin, sources),
+                    ));
+                }
+            }
+            assert_eq!(method.unwrap().interface(), interface.unwrap());
+            result.sort_by_key(|row| row.0);
+            assert_eq!(result.len(), 2);
+            assert_eq!((&*result[0].1, &*result[1].1), ("A", "B"));
+            result
+        }
+
+        for generated in [false, true] {
+            let tree = SourceTree::new();
+            tree.write(
+                "forms.ash",
+                "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+            );
+            tree.write(
+                "entry.ash",
+                if generated {
+                    "import forms (syntax emit)\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n"
+                } else {
+                    "interface Choose<A> {\n    choose<B> : (A, B) -> B\n}\nmain : Unit -> Int\nmain () = 42\n"
+                },
+            );
+            let compiled = compile_path(tree.configuration()).unwrap();
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let source_refs = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let original_rows = rows(program, &source_refs);
+            assert!(
+                original_rows
+                    .iter()
+                    .all(|row| row.2.0 == u8::from(generated))
+            );
+            let mut encode_work = TypeWorkBudget::unbounded();
+            let build = encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut encode_work,
+            )
+            .unwrap();
+            let encode_cost = encode_work.used();
+            eprintln!(
+                "declared method image encoding (generated={generated}) uses exactly {encode_cost} work units"
+            );
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + encode_cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    encode_effect_for_build(
+                        program,
+                        provenance,
+                        &[],
+                        super::super::NATIVE_TARGET,
+                        &mut short
+                    ),
+                    Err(NativeImageFailure::Image(ImageFailure::Resource))
+                ));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + encode_cost);
+                    exact.charge(prefix).unwrap();
+                    encode_effect_for_build(
+                        program,
+                        provenance,
+                        &[],
+                        super::super::NATIVE_TARGET,
+                        &mut exact,
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + encode_cost);
+                }
+            }
+            let bytes = build
+                .image
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            let expected = build
+                .image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap();
+            drop(build);
+            drop(compiled);
+            drop(tree);
+
+            let image = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let mut measured = TypeWorkBudget::unbounded();
+            let restored = image
+                .restore_effect_checked(&expected, &[], &mut measured)
+                .unwrap();
+            let cost = measured.used();
+            eprintln!(
+                "declared method image restore (generated={generated}) uses exactly {cost} work units"
+            );
+            let sources = restored._sources.iter().collect::<Vec<_>>();
+            assert_eq!(rows(&restored.program, &sources), original_rows);
+            let module_sources = restored
+                .modules
+                .iter()
+                .copied()
+                .zip(restored._sources.iter().map(SourceFile::id))
+                .collect::<Vec<_>>();
+            for transformed in [
+                crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+                crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+            ] {
+                let checked =
+                    crate::core::validate_effect_modules(transformed, &sources, &module_sources)
+                        .unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&checked)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
+            }
+            if generated {
+                crate::core::validate::exercise_restored_owner_swap_for_image_test(
+                    &restored.program,
+                    &sources,
+                    &module_sources,
+                );
+                assert_eq!(
+                    image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+                    bytes
+                );
+                assert_eq!(
+                    image
+                        .encode_native_expectations(&mut TypeWorkBudget::default())
+                        .unwrap(),
+                    expected
+                );
+            }
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(
+                    image
+                        .restore_effect_checked(&expected, &[], &mut short)
+                        .is_err()
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    image
+                        .restore_effect_checked(&expected, &[], &mut exact)
+                        .unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+            }
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            drop(sources);
+            std::thread::Builder::new()
+                .stack_size(64 * 1024)
+                .spawn(move || drop(restored))
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn checked_image_declared_method_facts_refuse_fixed_image_changes() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let method_row = image
+            .original_owner_rows
+            .iter()
+            .position(|row| {
+                matches!(row.owner, OriginalOwnerIdentity::Method { .. }) && row.parameters.len == 1
+            })
+            .unwrap();
+        let interface_row = image
+            .original_owner_rows
+            .iter()
+            .position(|row| {
+                matches!(row.owner, OriginalOwnerIdentity::Interface { .. })
+                    && row.parameters.len == 1
+            })
+            .unwrap();
+        let method_parameter = image.original_owner_rows[method_row].parameters.start as usize;
+        let interface_parameter =
+            image.original_owner_rows[interface_row].parameters.start as usize;
+        let method_id = image.original_owner_parameters[method_parameter].parameter;
+        let method_scope = image
+            .scope_parameters
+            .iter()
+            .position(|slot| image.parameters[*slot as usize].id == method_id)
+            .unwrap();
+        let parameter_slot = image.scope_parameters[method_scope] as usize;
+        let origin_slot = image.parameters[parameter_slot].origin as usize;
+        assert!(matches!(
+            image.origins[origin_slot],
+            OriginRecord::Expansion { .. }
+        ));
+        assert!(
+            image.original_owner_parameters[method_parameter]
+                .expansion_primary
+                .is_some()
+        );
+        fn refuses(image: &PureImage, expected: &[u8]) {
+            assert!(
+                image
+                    .compare_native_expectations(expected, &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            assert!(
+                image
+                    .restore_effect_checked(expected, &[], &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+        }
+
+        let mut changed = decode();
+        changed.original_owner_rows[method_row].owner =
+            changed.original_owner_rows[interface_row].owner;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_rows[method_row].parameters.len = 0;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_parameters[method_parameter].parameter =
+            changed.original_owner_parameters[interface_parameter].parameter;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.original_owner_parameters[method_parameter].expansion_primary = None;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion { invocation, .. } = changed.origins[origin_slot] else {
+            unreachable!()
+        };
+        changed.origins[origin_slot] = OriginRecord::Source(invocation);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion {
+            ref mut invocation, ..
+        } = changed.origins[origin_slot]
+        else {
+            unreachable!()
+        };
+        invocation.start = invocation.start.saturating_add(1);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        let OriginRecord::Expansion {
+            ref mut definition, ..
+        } = changed.origins[origin_slot]
+        else {
+            unreachable!()
+        };
+        definition.start = definition.start.saturating_add(1);
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.kinds.push(KindRecord::EffectRow);
+        changed.parameters[parameter_slot].kind = (changed.kinds.len() - 1) as u32;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed.parameters.push(changed.parameters[parameter_slot]);
+        changed.scope_parameters[method_scope] = (changed.parameters.len() - 1) as u32;
+        refuses(&changed, &expected);
+        let mut changed = decode();
+        changed
+            .original_owner_rows
+            .push(changed.original_owner_rows[method_row]);
+        // The expectation intentionally compares the sealed prefix. The
+        // checked preflight must reject an owner-table suffix before mint.
+        assert!(
+            changed
+                .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                .is_ok()
+        );
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let mut changed = decode();
+        changed.original_owner_parameters.remove(method_parameter);
+        refuses(&changed, &expected);
+
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        donor_tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\n\nemit Choose method choose\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let mut changed = decode();
+        changed.original_owner_modules = donor.original_owner_modules.clone();
+        changed.original_owner_rows = donor.original_owner_rows.clone();
+        changed.original_owner_parameters = donor.original_owner_parameters.clone();
+        refuses(&changed, &expected);
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checked_image_keeps_non_type_method_locals_unsupported() {
+        let tree = SourceTree::new();
+        tree.write(
+            "entry.ash",
+            "interface Transform<A> {\n    transform<F : Type -> Type> : F<A> -> F<A>\n}\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        assert!(matches!(
+            encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default()
+            ),
+            Err(NativeImageFailure::Image(ImageFailure::Unsupported(
+                Unsupported::RegistryMetadata
+            )))
+        ));
+    }
+
+    #[test]
+    fn concrete_method_image_keeps_existing_evidence_refusal() {
+        let tree = SourceTree::new();
+        tree.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        tree.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        assert!(matches!(
+            encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(NativeImageFailure::Image(ImageFailure::Unsupported(
+                Unsupported::MethodEvidence
+            )))
+        ));
+    }
+
+    #[test]
+    fn checked_image_preserves_nested_nominal_pair_and_fixed_expectation() {
+        let tree = SourceTree::new();
+        for (name, source) in [
+            (
+                "entry.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/nested.ash"),
+            ),
+            (
+                "spawn_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/spawn_forms.ash"),
+            ),
+            (
+                "forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/forms.ash"),
+            ),
+            (
+                "api.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/api.ash"),
+            ),
+        ] {
+            tree.write(name, source);
+        }
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let pair = build
+            .image
+            .original_nominal_pairs
+            .iter()
+            .find(|pair| pair.invocation.start == 70 && pair.invocation.end == 75)
+            .unwrap();
+        assert!(
+            pair.previous_source.start <= 69 && pair.invocation.end <= pair.previous_source.end
+        );
+        assert_ne!(pair.invocation.source, pair.definition.source);
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let restored = image
+            .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(!restored.program.checked_original_nominal_pairs().is_empty());
+        let sources = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
+            .collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
+        ] {
+            let checked =
+                crate::core::validate_effect_modules(transformed, &sources, &module_sources)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+        crate::core::validate::exercise_restored_nominal_pair_mutation_for_image_test(
+            &restored.program,
+            &sources,
+            &module_sources,
+        );
+        assert_eq!(
+            image.encode_bytes(&mut TypeWorkBudget::default()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap(),
+            expected
+        );
+        let raw = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(raw.program.checked_original_nominal_pairs().is_empty());
+
+        // The changed start remains contained; only the original pair table
+        // changes here, while the canonical image and EXPECTED_FACTS stay fixed.
+        let mut changed = decode();
+        changed
+            .original_nominal_pairs
+            .iter_mut()
+            .find(|pair| pair.invocation.start == 70 && pair.invocation.end == 75)
+            .unwrap()
+            .invocation
+            .start = 69;
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        let mut missing = decode();
+        missing.original_nominal_pairs.clear();
+        assert!(
+            missing
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let mut suffix = decode();
+        suffix
+            .original_nominal_pairs
+            .push(suffix.original_nominal_pairs[0]);
+        assert!(
+            suffix
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let mut wrong_expected = expected.clone();
+        wrong_expected.push(0);
+        assert!(
+            image
+                .restore_effect_checked(&wrong_expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+
+        // The donor is compiled separately with a different genuine invocation
+        // span. Copy only its pair facts into the fixed original image.
+        let donor_tree = SourceTree::new();
+        donor_tree.write(
+            "entry.ash",
+            &include_str!("../../docs/design/macros/fixtures/derives/nested.ash")
+                .replace("\ntype Source", "\n\ntype Source"),
+        );
+        for (name, source) in [
+            (
+                "spawn_forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/spawn_forms.ash"),
+            ),
+            (
+                "forms.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/forms.ash"),
+            ),
+            (
+                "api.ash",
+                include_str!("../../docs/design/macros/fixtures/derives/api.ash"),
+            ),
+        ] {
+            donor_tree.write(name, source);
+        }
+        let donor_compiled = compile_path(donor_tree.configuration()).unwrap();
+        let (donor_program, donor_provenance) = donor_compiled.effect_build_input().unwrap();
+        let donor = encode_effect_for_build(
+            donor_program,
+            donor_provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        assert!(
+            donor
+                .original_nominal_pairs
+                .iter()
+                .any(|pair| pair.invocation.start == 71 && pair.invocation.end == 76)
+        );
+        let mut changed = decode();
+        changed.original_nominal_pairs = donor.original_nominal_pairs.clone();
+        assert!(
+            changed
+                .restore_effect_checked(&expected, &[], &mut TypeWorkBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
     fn generic_cell_private_image_reconstructs_and_executes() {
         let (donor, sources, relation) =
             crate::core::validate::generic_cell_source_fixture_for_test(
@@ -4619,10 +6060,9 @@ mod tests {
         drop(sources);
         let mut work = TypeWorkBudget::default();
         let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
-        decoded
-            .admit_expected_native_facts(&expected, &mut work)
+        let restored = decoded
+            .restore_effect_checked(&expected, &[], &mut work)
             .unwrap();
-        let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
             restored.program.method_evidence_anchors().len(),
             anchor_count
@@ -5102,7 +6542,7 @@ mod tests {
             ));
         }
         assert_eq!(Slice::MINIMUM, 2);
-        assert_eq!(NativeFactPrefixes::MINIMUM, 12);
+        assert_eq!(NativeFactPrefixes::MINIMUM, 16);
     }
     use crate::driver::{RunConfiguration, compile_path};
     use crate::module::ModuleRoots;
@@ -6832,6 +8272,164 @@ fn structural_child_depth(tag: TypeTag, child: usize, depth: usize) -> usize {
 }
 
 impl Encoder<'_> {
+    fn encode_original_owner_rows(
+        &mut self,
+        modules: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
+    ) -> Result<(), ImageFailure> {
+        use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+        if !self.image.original_owner_modules.is_empty()
+            || !self.image.original_owner_rows.is_empty()
+            || !self.image.original_owner_parameters.is_empty()
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        let mut row_count = 0usize;
+        let mut parameter_count = 0usize;
+        charge(self.work, modules.len())?;
+        for module in modules {
+            charge(self.work, 1)?;
+            row_count = row_count
+                .checked_add(module.rows.len())
+                .ok_or(ImageFailure::Resource)?;
+            for row in module.rows.iter() {
+                charge(self.work, 1)?;
+                parameter_count = parameter_count
+                    .checked_add(row.parameters.len())
+                    .ok_or(ImageFailure::Resource)?;
+            }
+        }
+        let cells = modules
+            .len()
+            .checked_add(row_count)
+            .and_then(|count| count.checked_add(parameter_count))
+            .ok_or(ImageFailure::Resource)?;
+        charge(self.work, cells)?;
+        self.image
+            .original_owner_modules
+            .try_reserve_exact(modules.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        self.image
+            .original_owner_rows
+            .try_reserve_exact(row_count)
+            .map_err(|_| ImageFailure::Resource)?;
+        self.image
+            .original_owner_parameters
+            .try_reserve_exact(parameter_count)
+            .map_err(|_| ImageFailure::Resource)?;
+        for module in modules {
+            charge(self.work, 1)?;
+            let module_slot = self.module(module.module)?;
+            charge(self.work, 1)?;
+            let source_slot = *self
+                .sources
+                .get(&module.source)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            if module_slot != source_slot {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let row_start = self.image.original_owner_rows.len();
+            for row in module.rows.iter() {
+                charge(self.work, 1)?;
+                let parameter_start = self.image.original_owner_parameters.len();
+                for parameter in row.parameters.iter() {
+                    let id = self.type_variable(parameter.parameter)?;
+                    let primary = parameter
+                        .expansion_primary
+                        .map(|span| self.span(span))
+                        .transpose()?;
+                    push(
+                        &mut self.image.original_owner_parameters,
+                        OriginalOwnerParameterRecord {
+                            parameter: id,
+                            expansion_primary: primary,
+                        },
+                        self.work,
+                    )?;
+                }
+                let parameters = Slice::of(&self.image.original_owner_parameters, parameter_start)?;
+                let owner = match row.owner {
+                    OriginalOwner::Interface(id) => OriginalOwnerIdentity::Interface {
+                        module: self.module(id.module())?,
+                        local: id.declaration(),
+                    },
+                    OriginalOwner::Method(id) => OriginalOwnerIdentity::Method {
+                        module: self.module(id.interface().module())?,
+                        interface: id.interface().declaration(),
+                        local: id.declaration(),
+                    },
+                    OriginalOwner::Global(id) => OriginalOwnerIdentity::Global(self.binder_id(id)?),
+                };
+                push(
+                    &mut self.image.original_owner_rows,
+                    OriginalOwnerRowRecord { owner, parameters },
+                    self.work,
+                )?;
+            }
+            let rows = Slice::of(&self.image.original_owner_rows, row_start)?;
+            push(
+                &mut self.image.original_owner_modules,
+                OriginalOwnerModuleRecord {
+                    module: module_slot,
+                    source: source_slot,
+                    rows,
+                },
+                self.work,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn encode_original_nominal_pairs(
+        &mut self,
+        pairs: &[crate::core::dialect::checked_owner_anchors::OriginalNominalPair],
+    ) -> Result<(), ImageFailure> {
+        if !self.image.original_nominal_pairs.is_empty() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        charge(self.work, pairs.len())?;
+        self.image
+            .original_nominal_pairs
+            .try_reserve_exact(pairs.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for pair in pairs {
+            charge(self.work, 1)?;
+            let module = self.module(pair.module)?;
+            charge(self.work, 1)?;
+            let source = *self
+                .sources
+                .get(&pair.source)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            if module != source
+                || pair.previous.module() != pair.module
+                || pair.current.module() != pair.module
+                || pair.previous.declaration().checked_add(1) != Some(pair.current.declaration())
+                || pair.previous_source.source() != pair.source
+                || pair.invocation.source() != pair.source
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let previous = self.nominal(pair.previous)?;
+            let previous_source = self.span(pair.previous_source)?;
+            let current = self.nominal(pair.current)?;
+            let invocation = self.span(pair.invocation)?;
+            let definition = self.span(pair.definition)?;
+            push(
+                &mut self.image.original_nominal_pairs,
+                OriginalNominalPairRecord {
+                    module,
+                    source,
+                    previous,
+                    previous_source,
+                    current,
+                    invocation,
+                    definition,
+                },
+                self.work,
+            )?;
+        }
+        Ok(())
+    }
+
     fn type_variable(
         &mut self,
         id: crate::types::TypeVariableId,
@@ -7826,6 +9424,73 @@ impl Encoder<'_> {
         self.encode_parameter_data(original)
     }
 
+    // Resolve only an existing checked declaring slot. The reverse index is
+    // derived at checked Core admission and cannot be supplied by a caller.
+    fn original_parameter_slot(
+        &mut self,
+        modules: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
+        parameter: &crate::resolved::ResolvedTypeVariable,
+    ) -> Result<
+        Option<(
+            crate::core::dialect::checked_owner_anchors::OriginalOwner,
+            usize,
+        )>,
+        ImageFailure,
+    > {
+        let Some(module_id) = parameter.id.module() else {
+            return Ok(None);
+        };
+        charge(
+            self.work,
+            (usize::BITS - modules.len().leading_zeros()) as usize + 1,
+        )?;
+        let Ok(position) = modules.binary_search_by_key(&module_id, |module| module.module) else {
+            return Ok(None);
+        };
+        let module = &modules[position];
+        charge(
+            self.work,
+            (usize::BITS - module.slots.len().leading_zeros()) as usize + 1,
+        )?;
+        let Ok(position) = module
+            .slots
+            .binary_search_by_key(&parameter.id, |slot| slot.parameter)
+        else {
+            return Ok(None);
+        };
+        let slot = module.slots[position];
+        let row = module
+            .rows
+            .get(usize::try_from(slot.row).map_err(|_| ImageFailure::InvalidRecord)?)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let ordinal = usize::try_from(slot.slot).map_err(|_| ImageFailure::InvalidRecord)?;
+        let original = row
+            .parameters
+            .get(ordinal)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let primary = match parameter.origin {
+            Origin::Source(span) if span.source() == module.source => None,
+            Origin::Expansion { invocation, .. } if invocation.source() == module.source => {
+                Some(invocation)
+            }
+            _ => return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
+        };
+        if original.parameter != parameter.id || original.expansion_primary != primary {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(Some((row.owner, ordinal)))
+    }
+
+    fn encode_checked_parameter(
+        &mut self,
+        original: &crate::resolved::ResolvedTypeVariable,
+    ) -> Result<u32, ImageFailure> {
+        if original.kind != crate::types::Kind::Type {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
+        self.encode_parameter_data(original)
+    }
+
     // Global records are consumed by their owning registry helper, so recursive
     // origins can use the existing paid flat Origin codec without cloning.
     fn encode_parameter_data(
@@ -7973,8 +9638,9 @@ impl Encoder<'_> {
     fn encode_extended_registry(
         &mut self,
         registry: &ResolvedRegistry,
+        originals: &[crate::core::dialect::checked_owner_anchors::OriginalModuleOwners],
     ) -> Result<(), ImageFailure> {
-        self.encode_interface_owners(registry)?;
+        self.encode_interface_owners(registry, originals)?;
         let mut nominal_parameters = Vec::new();
         for (owner, parameters) in registry.nominal_parameter_entries() {
             let key = self.nominal(owner)?;
@@ -8152,7 +9818,13 @@ impl Encoder<'_> {
         for (_, parameter) in parameters {
             charge(self.work, 1)?;
             if !selected.contains_key(&parameter.id) {
-                let slot = self.encode_parameter(parameter)?;
+                let slot = match self.original_parameter_slot(originals, parameter)? {
+                    Some((
+                        crate::core::dialect::checked_owner_anchors::OriginalOwner::Method(_),
+                        _,
+                    )) => self.encode_checked_parameter(parameter)?,
+                    _ => self.encode_parameter(parameter)?,
+                };
                 push(&mut self.image.scope_parameters, slot, self.work)?;
             }
         }
@@ -8698,7 +10370,10 @@ impl Decoder<'_> {
             origin,
         })
     }
-    fn extended_registry(&mut self) -> Result<RestoredNativeRegistry, ImageFailure> {
+    fn extended_registry(
+        &mut self,
+        checked: Option<&CheckedImageOwners<'_>>,
+    ) -> Result<RestoredNativeRegistry, ImageFailure> {
         use crate::foreign::checked_source::*;
 
         let mut registry = self.registry()?;
@@ -8789,17 +10464,41 @@ impl Decoder<'_> {
             }
         }
 
+        let mut method_variables = Vec::new();
+        if let Some(checked) = checked {
+            charge(self.work, checked.method_count)?;
+            method_variables
+                .try_reserve_exact(checked.method_count)
+                .map_err(|_| ImageFailure::Resource)?;
+        }
         for slot in &self.image.scope_parameters {
             charge(self.work, 1)?;
-            let parameter = get(
-                self.fact_table(&self.image.parameters, |p| p.parameters)?,
-                *slot,
-            )?;
+            let parameters = if checked.is_some() {
+                let prefix = self
+                    .image
+                    .native_fact_prefixes
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                native_fact_table(&self.image.parameters, prefix.parameters, false)?
+            } else {
+                self.fact_table(&self.image.parameters, |p| p.parameters)?
+            };
+            let parameter = get(parameters, *slot)?;
             let id = self.type_variable(parameter.id)?;
             if id.module().is_none() || parameter_ids.insert(id, ()).is_some() {
                 return Err(ImageFailure::InvalidRecord);
             }
+            if let Some(checked) = checked
+                && checked
+                    .original_slot(parameter.id, self.work)?
+                    .is_some_and(|slot| matches!(slot.owner, OriginalOwnerIdentity::Method { .. }))
+            {
+                method_variables.push(id);
+            }
         }
+        if checked.is_some_and(|checked| checked.method_count != method_variables.len()) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        sort_image_records(&mut method_variables, |id| *id, self.work)?;
 
         charge(self.work, 1)?;
         if parameter_ids.len()
@@ -8868,15 +10567,24 @@ impl Decoder<'_> {
             .0
             .try_reserve_exact(self.image.scope_parameters.len())
             .map_err(|_| ImageFailure::Resource)?;
-        for slot in &self.image.scope_parameters {
-            interface_parameters.0.push(self.parameter(*get(
-                self.fact_table(&self.image.parameters, |p| p.parameters)?,
-                *slot,
-            )?)?);
+        for (position, slot) in self.image.scope_parameters.iter().enumerate() {
+            let parameter = if let Some(checked) = checked {
+                checked.scope_parameter(self, position)?
+            } else {
+                self.parameter(*get(
+                    self.fact_table(&self.image.parameters, |p| p.parameters)?,
+                    *slot,
+                )?)?
+            };
+            interface_parameters.0.push(parameter);
         }
 
-        for record in &self.image.interface_owners {
-            let parameters = self.parameters(record.parameters)?;
+        for (position, record) in self.image.interface_owners.iter().enumerate() {
+            let parameters = if let Some(checked) = checked {
+                checked.interface_parameters(self, position)?
+            } else {
+                self.parameters(record.parameters)?
+            };
             charge(self.work, parameters.0.len())?;
             interface_parameters
                 .0
@@ -8888,9 +10596,13 @@ impl Decoder<'_> {
             .with_image_source_parameters(interface_parameters.into_vec(), self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut interfaces = Vec::new();
-        for record in &self.image.interface_owners {
+        for (position, record) in self.image.interface_owners.iter().enumerate() {
             let id = self.interface_identity(record.id)?;
-            let parameters = self.parameters(record.parameters)?;
+            let parameters = if let Some(checked) = checked {
+                checked.interface_parameters(self, position)?
+            } else {
+                self.parameters(record.parameters)?
+            };
             push(&mut interfaces, (id, parameters.into_vec()), self.work)?;
         }
         registry = registry
@@ -9011,8 +10723,25 @@ impl Decoder<'_> {
                 push(&mut identities, identity, self.work)?;
             }
         }
+        for identity in &identities {
+            charge(
+                self.work,
+                (usize::BITS - method_variables.len().leading_zeros()) as usize + 1,
+            )?;
+            if method_variables.binary_search(identity).is_ok() {
+                return Err(ImageFailure::InvalidRecord);
+            }
+        }
+        for identity in &method_variables {
+            charge(self.work, 1)?;
+            if registry.type_variable(*identity).is_none_or(|parameter| {
+                parameter.id != *identity || parameter.kind != crate::types::Kind::Type
+            }) {
+                return Err(ImageFailure::InvalidRecord);
+            }
+        }
         if !registry
-            .native_image_subset_with_source_scopes(&identities, &[], self.work)
+            .native_image_subset_with_source_scopes(&identities, &method_variables, self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?
         {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
@@ -9060,18 +10789,586 @@ pub(crate) struct RestoredEffectImage {
     modules: Vec<ModuleId>,
 }
 
+// This value can only be created by the checked restoration below. It owns
+// the fresh Core and rows decoded in that same coordinate arena.
+pub(crate) struct AdmittedImageEffectProgram {
+    program: crate::core::UnvalidatedEffectProgram,
+    modules: Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+    nominal_pairs: Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+}
+impl AdmittedImageEffectProgram {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        crate::core::UnvalidatedEffectProgram,
+        Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+        Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+    ) {
+        (self.program, self.modules, self.nominal_pairs)
+    }
+}
+
+// Minted only after comparing this exact immutable image with the fixed facts.
+struct CheckedImage<'a> {
+    image: &'a PureImage,
+}
+
+#[derive(Clone, Copy)]
+struct CheckedImageSlot {
+    parameter: TypeVariableIdentity,
+    owner: OriginalOwnerIdentity,
+    ordinal: usize,
+    expansion_primary: Option<SpanRecord>,
+}
+
+// A temporary index over only the original fact prefixes of the same image
+// whose fixed expectation was just compared. It cannot publish a program.
+struct CheckedImageOwners<'a> {
+    image: &'a PureImage,
+    slots: Vec<CheckedImageSlot>,
+    method_count: usize,
+}
+
+impl<'a> CheckedImage<'a> {
+    fn preflight(&self, decoder: &mut Decoder<'_>) -> Result<CheckedImageOwners<'a>, ImageFailure> {
+        charge(decoder.work, 18)?;
+        if !std::ptr::eq(self.image, decoder.image) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        self.image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?
+            .validate(self.image)?;
+        let counts = self
+            .image
+            .original_owner_modules
+            .len()
+            .checked_add(self.image.original_owner_rows.len())
+            .and_then(|count| count.checked_add(self.image.original_owner_parameters.len()))
+            .ok_or(ImageFailure::Resource)?;
+        charge(decoder.work, counts)?;
+        let mut modules = Vec::new();
+        let mut owners = Vec::new();
+        let mut slots = Vec::new();
+        modules
+            .try_reserve_exact(self.image.original_owner_modules.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        owners
+            .try_reserve_exact(self.image.original_owner_rows.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        slots
+            .try_reserve_exact(self.image.original_owner_parameters.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        let mut next_row = 0u32;
+        let mut next_parameter = 0u32;
+        let mut method_count = 0usize;
+        for module in &self.image.original_owner_modules {
+            charge(decoder.work, 4)?;
+            if module.module != module.source || module.rows.start != next_row {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            next_row = next_row
+                .checked_add(module.rows.len)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            let source = get(&decoder.sources, module.source)?;
+            if get(&self.image.sources, module.source)?.role != ModuleRoleRecord::Ordinary
+                || *get(&decoder.modules, module.module)? != ModuleId::from(source.id())
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            modules.push(module.module);
+            for row in module.rows.get(&self.image.original_owner_rows)? {
+                charge(decoder.work, 2)?;
+                if row.parameters.start != next_parameter {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                next_parameter = next_parameter
+                    .checked_add(row.parameters.len)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let owner_module = match row.owner {
+                    OriginalOwnerIdentity::Interface { module, .. }
+                    | OriginalOwnerIdentity::Method { module, .. }
+                    | OriginalOwnerIdentity::Global(BinderIdentity::Resolved { module, .. }) => {
+                        module
+                    }
+                    OriginalOwnerIdentity::Global(BinderIdentity::Generated(_)) => {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                };
+                if owner_module != module.module {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                owners.push(row.owner);
+                for (ordinal, parameter) in row
+                    .parameters
+                    .get(&self.image.original_owner_parameters)?
+                    .iter()
+                    .enumerate()
+                {
+                    charge(decoder.work, 2)?;
+                    if !matches!(parameter.parameter, TypeVariableIdentity::Resolved { module: owner, .. } if owner == module.module)
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    if let Some(primary) = parameter.expansion_primary {
+                        if primary.source != module.source {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        decoder.span(primary)?;
+                    }
+                    if matches!(row.owner, OriginalOwnerIdentity::Method { .. }) {
+                        method_count = method_count.checked_add(1).ok_or(ImageFailure::Resource)?;
+                    }
+                    slots.push(CheckedImageSlot {
+                        parameter: parameter.parameter,
+                        owner: row.owner,
+                        ordinal,
+                        expansion_primary: parameter.expansion_primary,
+                    });
+                }
+            }
+        }
+        if usize::try_from(next_row).ok() != Some(self.image.original_owner_rows.len())
+            || usize::try_from(next_parameter).ok()
+                != Some(self.image.original_owner_parameters.len())
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        sort_image_records(&mut modules, |module| *module, decoder.work)?;
+        sort_image_records(&mut owners, |owner| *owner, decoder.work)?;
+        sort_image_records(&mut slots, |slot| slot.parameter, decoder.work)?;
+        charge(decoder.work, counts)?;
+        if modules.windows(2).any(|pair| pair[0] == pair[1])
+            || owners.windows(2).any(|pair| pair[0] == pair[1])
+            || slots
+                .windows(2)
+                .any(|pair| pair[0].parameter == pair[1].parameter)
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        for owner in &owners {
+            charge(decoder.work, 1)?;
+            if let OriginalOwnerIdentity::Method {
+                module, interface, ..
+            } = *owner
+            {
+                charge(
+                    decoder.work,
+                    (usize::BITS - owners.len().leading_zeros()) as usize + 1,
+                )?;
+                if owners
+                    .binary_search(&OriginalOwnerIdentity::Interface {
+                        module,
+                        local: interface,
+                    })
+                    .is_err()
+                {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+            }
+        }
+        Ok(CheckedImageOwners {
+            image: self.image,
+            slots,
+            method_count,
+        })
+    }
+}
+
+impl CheckedImageOwners<'_> {
+    fn original_slot(
+        &self,
+        id: TypeVariableIdentity,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<CheckedImageSlot>, ImageFailure> {
+        charge(
+            work,
+            (usize::BITS - self.slots.len().leading_zeros()) as usize + 1,
+        )?;
+        Ok(self
+            .slots
+            .binary_search_by_key(&id, |slot| slot.parameter)
+            .ok()
+            .map(|index| self.slots[index]))
+    }
+
+    // Both the actual parameter and its original owner/slot are selected from
+    // this image by coordinate; the caller cannot pass either record.
+    fn checked_parameter(
+        &self,
+        decoder: &mut Decoder<'_>,
+        parameter_slot: u32,
+        expected_owner: OriginalOwnerIdentity,
+        ordinal: usize,
+    ) -> Result<crate::resolved::ResolvedTypeVariable, ImageFailure> {
+        charge(decoder.work, 4)?;
+        if !std::ptr::eq(self.image, decoder.image) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        let prefix = self
+            .image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let parameters = native_fact_table(&self.image.parameters, prefix.parameters, false)?;
+        let record = *get(parameters, parameter_slot)?;
+        let original = self
+            .original_slot(record.id, decoder.work)?
+            .ok_or(ImageFailure::InvalidRecord)?;
+        if original.owner != expected_owner
+            || original.ordinal != ordinal
+            || *get(
+                native_fact_table(&self.image.kinds, prefix.kinds, false)?,
+                record.kind,
+            )? != KindRecord::Type
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        let origin = *get(
+            native_fact_table(&self.image.origins, prefix.origins, false)?,
+            record.origin,
+        )?;
+        let owner_module = match expected_owner {
+            OriginalOwnerIdentity::Interface { module, .. }
+            | OriginalOwnerIdentity::Method { module, .. } => module,
+            _ => return Err(ImageFailure::InvalidRecord),
+        };
+        match (origin, original.expansion_primary) {
+            (OriginRecord::Source(span), None) if span.source == owner_module => {
+                decoder.span(span)?;
+            }
+            (
+                OriginRecord::Expansion {
+                    invocation,
+                    definition,
+                },
+                Some(primary),
+            ) if invocation == primary && invocation.source == owner_module => {
+                decoder.span(invocation)?;
+                decoder.span(definition)?;
+            }
+            _ => return Err(ImageFailure::InvalidRecord),
+        }
+        let previous = decoder.expected_fact_prefixes.replace(prefix);
+        let result = decoder.parameter_data(record);
+        decoder.expected_fact_prefixes = previous;
+        result
+    }
+
+    fn source_parameter(
+        &self,
+        decoder: &mut Decoder<'_>,
+        parameter_slot: u32,
+    ) -> Result<crate::resolved::ResolvedTypeVariable, ImageFailure> {
+        charge(decoder.work, 1)?;
+        if !std::ptr::eq(self.image, decoder.image) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        let prefix = self
+            .image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let record = *get(
+            native_fact_table(&self.image.parameters, prefix.parameters, false)?,
+            parameter_slot,
+        )?;
+        let previous = decoder.expected_fact_prefixes.replace(prefix);
+        let result = decoder.parameter(record);
+        decoder.expected_fact_prefixes = previous;
+        result
+    }
+
+    fn interface_parameters(
+        &self,
+        decoder: &mut Decoder<'_>,
+        owner_index: usize,
+    ) -> Result<ParameterBuffer, ImageFailure> {
+        charge(decoder.work, 1)?;
+        let owner = *self
+            .image
+            .interface_owners
+            .get(owner_index)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let expected = OriginalOwnerIdentity::Interface {
+            module: owner.id.module,
+            local: owner.id.local,
+        };
+        let prefix = self
+            .image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let records = owner.parameters.get(native_fact_table(
+            &self.image.parameters,
+            prefix.parameters,
+            false,
+        )?)?;
+        charge(decoder.work, records.len())?;
+        let mut parameters = ParameterBuffer(Vec::new());
+        parameters
+            .0
+            .try_reserve_exact(records.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for (ordinal, record) in records.iter().enumerate() {
+            let slot = owner
+                .parameters
+                .start
+                .checked_add(index(ordinal)?)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            let origin = get(
+                native_fact_table(&self.image.origins, prefix.origins, false)?,
+                record.origin,
+            )?;
+            let parameter = if matches!(origin, OriginRecord::Source(_)) {
+                self.source_parameter(decoder, slot)?
+            } else {
+                self.checked_parameter(decoder, slot, expected, ordinal)?
+            };
+            parameters.0.push(parameter);
+        }
+        Ok(parameters)
+    }
+
+    fn scope_parameter(
+        &self,
+        decoder: &mut Decoder<'_>,
+        scope_index: usize,
+    ) -> Result<crate::resolved::ResolvedTypeVariable, ImageFailure> {
+        let slot = *self
+            .image
+            .scope_parameters
+            .get(scope_index)
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let prefix = self
+            .image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let record = *get(
+            native_fact_table(&self.image.parameters, prefix.parameters, false)?,
+            slot,
+        )?;
+        match self.original_slot(record.id, decoder.work)? {
+            Some(original) if matches!(original.owner, OriginalOwnerIdentity::Method { .. }) => {
+                self.checked_parameter(decoder, slot, original.owner, original.ordinal)
+            }
+            _ => self.source_parameter(decoder, slot),
+        }
+    }
+}
+
+impl CheckedImage<'_> {
+    fn decode_owners(
+        self,
+        decoder: &mut Decoder<'_>,
+        registry: &ResolvedRegistry,
+    ) -> Result<
+        (
+            Vec<crate::core::dialect::checked_owner_anchors::OriginalModuleOwners>,
+            Vec<crate::core::dialect::checked_owner_anchors::OriginalNominalPair>,
+        ),
+        ImageFailure,
+    > {
+        use crate::core::dialect::checked_owner_anchors::{
+            OriginalModuleOwners, OriginalNominalPair, OriginalOwner, OriginalOwnerRow,
+            OriginalParameter,
+        };
+        charge(decoder.work, 1)?;
+        if !std::ptr::eq(self.image, decoder.image) {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        // No record in these tables can refer to an executable suffix.
+        charge(decoder.work, 17)?;
+        self.image
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?
+            .validate(self.image)?;
+        charge(decoder.work, self.image.original_owner_modules.len())?;
+        let mut modules = Vec::new();
+        modules
+            .try_reserve_exact(self.image.original_owner_modules.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        let mut next_row = 0u32;
+        let mut next_parameter = 0u32;
+        for module_record in &self.image.original_owner_modules {
+            charge(decoder.work, 4)?;
+            if module_record.module != module_record.source || module_record.rows.start != next_row
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            next_row = next_row
+                .checked_add(module_record.rows.len)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            let module = *get(&decoder.modules, module_record.module)?;
+            let source = get(&decoder.sources, module_record.source)?.id();
+            // Ordinary source modules restore to the existing source-derived
+            // DirectCoreSource identity, not the loader's admitted namespace.
+            if get(&self.image.sources, module_record.source)?.role != ModuleRoleRecord::Ordinary
+                || module != ModuleId::from(source)
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let image_rows = module_record.rows.get(&self.image.original_owner_rows)?;
+            charge(decoder.work, image_rows.len())?;
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(image_rows.len())
+                .map_err(|_| ImageFailure::Resource)?;
+            for row in image_rows {
+                charge(decoder.work, 3)?;
+                if row.parameters.start != next_parameter {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                next_parameter = next_parameter
+                    .checked_add(row.parameters.len)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let owner = match row.owner {
+                    OriginalOwnerIdentity::Interface { module, local } => OriginalOwner::Interface(
+                        crate::interface::InterfaceId::new(*get(&decoder.modules, module)?, local),
+                    ),
+                    OriginalOwnerIdentity::Method {
+                        module,
+                        interface,
+                        local,
+                    } => OriginalOwner::Method(crate::interface::MethodId::new(
+                        crate::interface::InterfaceId::new(
+                            *get(&decoder.modules, module)?,
+                            interface,
+                        ),
+                        local,
+                    )),
+                    OriginalOwnerIdentity::Global(binder) => {
+                        OriginalOwner::Global(decoder.binder_id(binder)?)
+                    }
+                };
+                let owner_module = match owner {
+                    OriginalOwner::Interface(id) => Some(id.module()),
+                    OriginalOwner::Method(id) => Some(id.interface().module()),
+                    OriginalOwner::Global(id) => id.module(),
+                };
+                if owner_module != Some(module) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let image_parameters = row.parameters.get(&self.image.original_owner_parameters)?;
+                charge(decoder.work, image_parameters.len())?;
+                let mut parameters = Vec::new();
+                parameters
+                    .try_reserve_exact(image_parameters.len())
+                    .map_err(|_| ImageFailure::Resource)?;
+                for parameter in image_parameters {
+                    charge(decoder.work, 1)?;
+                    let id = decoder.type_variable(parameter.parameter)?;
+                    let expansion_primary = parameter
+                        .expansion_primary
+                        .map(|span| decoder.span(span))
+                        .transpose()?;
+                    charge(decoder.work, 1)?;
+                    let canonical = registry
+                        .type_variable(id)
+                        .ok_or(ImageFailure::InvalidRecord)?;
+                    let canonical_primary = match &canonical.origin {
+                        Origin::Expansion { invocation, .. } => Some(*invocation),
+                        _ => None,
+                    };
+                    if id.module() != Some(module)
+                        || canonical.id != id
+                        || expansion_primary != canonical_primary
+                        || expansion_primary.is_some_and(|span| span.source() != source)
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    parameters.push(OriginalParameter {
+                        parameter: id,
+                        expansion_primary,
+                    });
+                }
+                rows.push(OriginalOwnerRow {
+                    owner,
+                    parameters: parameters.into_boxed_slice(),
+                });
+            }
+            modules.push(OriginalModuleOwners {
+                module,
+                source,
+                rows: rows.into_boxed_slice(),
+                slots: Box::default(),
+            });
+        }
+        if usize::try_from(next_row).map_err(|_| ImageFailure::InvalidRecord)?
+            != self.image.original_owner_rows.len()
+            || usize::try_from(next_parameter).map_err(|_| ImageFailure::InvalidRecord)?
+                != self.image.original_owner_parameters.len()
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        charge(decoder.work, self.image.original_nominal_pairs.len())?;
+        let mut nominal_pairs = Vec::new();
+        nominal_pairs
+            .try_reserve_exact(self.image.original_nominal_pairs.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for pair in &self.image.original_nominal_pairs {
+            charge(decoder.work, 4)?;
+            if pair.module != pair.source
+                || pair.previous.module != pair.module
+                || pair.current.module != pair.module
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let module = *get(&decoder.modules, pair.module)?;
+            let source = get(&decoder.sources, pair.source)?.id();
+            if get(&self.image.sources, pair.source)?.role != ModuleRoleRecord::Ordinary
+                || module != ModuleId::from(source)
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let previous = decoder.nominal(pair.previous)?;
+            let previous_source = decoder.span(pair.previous_source)?;
+            let current = decoder.nominal(pair.current)?;
+            let invocation = decoder.span(pair.invocation)?;
+            // Definitions may be in a different admitted source.
+            let definition = decoder.span(pair.definition)?;
+            if previous.declaration().checked_add(1) != Some(current.declaration())
+                || previous_source.source() != source
+                || invocation.source() != source
+                || invocation.range().start() >= invocation.range().end()
+                || previous_source.range().start() > invocation.range().start()
+                || invocation.range().end() > previous_source.range().end()
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            nominal_pairs.push(OriginalNominalPair {
+                module,
+                source,
+                previous,
+                previous_source,
+                current,
+                invocation,
+                definition,
+            });
+        }
+        Ok((modules, nominal_pairs))
+    }
+}
+
 impl PureImage {
     #[cfg(test)]
     pub(crate) fn restore_effect(
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<RestoredEffectImage, ImageFailure> {
-        self.restore_effect_with_quote_guards(&[], work)
+        self.restore_effect_inner(&[], None, work)
     }
 
-    pub(crate) fn restore_effect_with_quote_guards(
+    pub(crate) fn restore_effect_checked(
+        &self,
+        expected: &[u8],
+        guard_coordinates: &[u32],
+        work: &mut TypeWorkBudget,
+    ) -> Result<RestoredEffectImage, ImageFailure> {
+        self.compare_native_expectations(expected, work)?;
+        self.restore_effect_inner(guard_coordinates, Some(CheckedImage { image: self }), work)
+    }
+
+    fn restore_effect_inner(
         &self,
         guard_coordinates: &[u32],
+        checked: Option<CheckedImage<'_>>,
         work: &mut TypeWorkBudget,
     ) -> Result<RestoredEffectImage, ImageFailure> {
         charge(work, 1)?;
@@ -9183,12 +11480,16 @@ impl PureImage {
             decoder.sources.push(source, decoder.work)?;
             decoder.modules.push(module, decoder.work)?;
         }
+        let original_owners = checked
+            .as_ref()
+            .map(|admission| admission.preflight(&mut decoder))
+            .transpose()?;
         let RestoredNativeRegistry {
             registry,
             provenance,
             prepared,
             symbols,
-        } = decoder.extended_registry()?;
+        } = decoder.extended_registry(original_owners.as_ref())?;
         charge(decoder.work, 1)?;
         let registry = Arc::new(registry);
         let binder_ids = decoder.source_binder_reservations()?;
@@ -9216,6 +11517,9 @@ impl PureImage {
             decoded_rows,
             work,
         };
+        let owner_rows = checked
+            .map(|admission| admission.decode_owners(&mut decoder, &registry))
+            .transpose()?;
         let catalog = decoder.method_catalog(
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
@@ -9258,9 +11562,20 @@ impl PureImage {
             self.source_method_anchors
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
-        let program = builder
-            .finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?
-            .into_compiler_image(decoder.work)?;
+        let program = builder.finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?;
+        let program = match owner_rows {
+            Some((modules, nominal_pairs)) => {
+                crate::core::UnvalidatedEffectProgram::from_checked_image(
+                    AdmittedImageEffectProgram {
+                        program,
+                        modules,
+                        nominal_pairs,
+                    },
+                    decoder.work,
+                )?
+            }
+            None => program.into_compiler_image(decoder.work)?,
+        };
         // The emitted coordinates select only nodes mapped by this restore.
         // Pay both the temporary vector and the final shared slice before
         // retaining the authenticated program-local identities.
@@ -10027,6 +12342,7 @@ impl RestoredEffectImage {
 }
 
 impl PureImage {
+    #[cfg(test)]
     pub(crate) fn admit_expected_native_facts(
         &self,
         expected: &[u8],
@@ -10077,6 +12393,136 @@ pub(crate) fn encode_effect_for_build(
     encode_native_preparation(program, provenance, quote_guards, target, work)
 }
 
+// Only locally declaring Method rows from genuine checked Core can supply
+// the additional native inventory category. Inherited Interface slots are
+// not Method declarations.
+fn checked_method_inventory(
+    program: &crate::core::ValidatedEffectProgram,
+    scope_identities: &[crate::types::TypeVariableId],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<crate::types::TypeVariableId>, ImageFailure> {
+    use crate::core::dialect::checked_owner_anchors::OriginalOwner;
+    use crate::types::Kind;
+
+    let modules = program.checked_owner_modules();
+    let mut count = 0usize;
+    for module in modules {
+        charge(work, 1)?;
+        for row in &module.rows {
+            charge(work, 1)?;
+            if matches!(row.owner, OriginalOwner::Method(_)) {
+                count = count
+                    .checked_add(row.parameters.len())
+                    .ok_or(ImageFailure::Resource)?;
+            }
+        }
+    }
+    charge(work, count)?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve_exact(count)
+        .map_err(|_| ImageFailure::Resource)?;
+    for module in modules {
+        charge(work, 1)?;
+        for (row_index, row) in module.rows.iter().enumerate() {
+            charge(work, 1)?;
+            let OriginalOwner::Method(method) = row.owner else {
+                continue;
+            };
+            if method.interface().module() != module.module {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            for (ordinal, original) in row.parameters.iter().enumerate() {
+                charge(
+                    work,
+                    (usize::BITS - module.slots.len().leading_zeros()) as usize + 3,
+                )?;
+                let slot = module
+                    .slots
+                    .binary_search_by_key(&original.parameter, |slot| slot.parameter)
+                    .ok()
+                    .and_then(|position| module.slots.get(position))
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let canonical = program
+                    .registry()
+                    .type_variable(original.parameter)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let primary = match canonical.origin {
+                    Origin::Source(span) if span.source() == module.source => None,
+                    Origin::Expansion { invocation, .. }
+                        if invocation.source() == module.source =>
+                    {
+                        Some(invocation)
+                    }
+                    _ => return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
+                };
+                if canonical.kind != Kind::Type {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                }
+                if original.parameter.module() != Some(module.module)
+                    || canonical.id != original.parameter
+                    || original.expansion_primary != primary
+                    || usize::try_from(slot.row).ok() != Some(row_index)
+                    || usize::try_from(slot.slot).ok() != Some(ordinal)
+                {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                methods.push(original.parameter);
+            }
+        }
+    }
+    sort_image_records(&mut methods, |id| *id, work)?;
+    charge(work, methods.len())?;
+    if methods.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(ImageFailure::InvalidRecord);
+    }
+    if methods.is_empty() {
+        return Ok(methods);
+    }
+    fn disjoint(
+        methods: &[crate::types::TypeVariableId],
+        id: crate::types::TypeVariableId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ImageFailure> {
+        charge(
+            work,
+            (usize::BITS - methods.len().leading_zeros()) as usize + 1,
+        )?;
+        if methods.binary_search(&id).is_ok() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(())
+    }
+    for (_, parameters) in program.registry().nominal_parameter_entries() {
+        charge(work, 1)?;
+        for parameter in parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for effect in program.registry().effects() {
+        charge(work, 1)?;
+        for parameter in &effect.parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for (_, parameters) in program.registry().image_interface_owner_definitions() {
+        charge(work, 1)?;
+        for parameter in parameters {
+            disjoint(&methods, parameter.id, work)?;
+        }
+    }
+    for row in program.registry().global_parameter_rows() {
+        charge(work, 1)?;
+        for id in row.parameters() {
+            disjoint(&methods, *id, work)?;
+        }
+    }
+    for id in scope_identities {
+        disjoint(&methods, *id, work)?;
+    }
+    Ok(methods)
+}
+
 fn encode_native_preparation(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
@@ -10111,9 +12557,10 @@ fn encode_native_preparation(
             push(&mut identities, scope.identity(), work)?;
         }
     }
+    let method_variables = checked_method_inventory(program, &identities, work)?;
     if !program
         .registry()
-        .native_image_subset_with_source_scopes(&identities, &[], work)
+        .native_image_subset_with_source_scopes(&identities, &method_variables, work)
         .map_err(|_| ImageFailure::RegistryAdmission)?
     {
         return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());

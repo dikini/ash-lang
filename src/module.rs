@@ -285,6 +285,14 @@ enum ModuleIdNamespace {
 }
 
 impl ModuleId {
+    pub(crate) const fn is_admitted_source(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::Admitted)
+    }
+
+    pub(crate) const fn is_direct_core_source(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::DirectCoreSource)
+    }
+
     /// Reconstructs one graph-local module identity from its numeric value.
     ///
     /// Compiler stages should normally obtain identities from [`LoadedModule`].
