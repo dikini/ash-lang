@@ -4261,9 +4261,10 @@ mod tests {
             assert_eq!(ordinary, ResolveReason::InterfaceKind);
             let (introduced, _, exact) = run(depth, 1, 1, usize::MAX, 0);
             assert_eq!(introduced, ResolveReason::InterfaceKind);
-            // Three owner comparisons, one copied byte, then a hash, comparison,
-            // and visit for each scope up to the matching outer region.
-            assert_eq!(exact - ordinary_work, 3 + 1 + 3 * (depth + 1));
+            // Retaining the introduced region's Expansion origin costs two;
+            // owner authentication costs three, the key copy one byte, and
+            // each reached scope costs a hash, comparison, and visit.
+            assert_eq!(exact - ordinary_work, 2 + 3 + 1 + 3 * (depth + 1));
             assert_eq!(
                 run(depth, 1, 2, usize::MAX, 0).0,
                 ResolveReason::UnknownInterface
