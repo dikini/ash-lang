@@ -2231,7 +2231,7 @@ where
                             }
                         }
                         let result = selected.ok_or_else(internal_file_failure)?;
-                        let _ = (result.effects(), result.origin());
+                        let _ = result.origin();
                         let category = crate::syntax::escape_result_category(
                             result.ty(),
                             builtin,
@@ -2249,7 +2249,12 @@ where
                                 ),
                             ))
                         })?;
-                        categories.push(category);
+                        checking_type_work.charge(1).map_err(|()| {
+                            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                            )))
+                        })?;
+                        categories.push((category, result.effects().is_empty()));
                     }
                     drop(checked_module);
                     drop(results);

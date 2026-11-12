@@ -5509,7 +5509,7 @@ pub(crate) fn finish_escape_probes(
     module: &mut crate::surface::SurfaceModule,
     introduction: Option<usize>,
     probes: &[usize],
-    categories: &[EscapeResultCategory],
+    categories: &[(EscapeResultCategory, bool)],
     budget: &mut SyntaxBudget,
 ) -> Result<(), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
@@ -5522,7 +5522,7 @@ pub(crate) fn finish_escape_probes(
         return Err(MacroParseFailure::Invalid);
     }
     let introduction = introduction.ok_or(MacroParseFailure::Invalid)?;
-    for (definition, &category) in probes.iter().zip(categories) {
+    for (definition, &(category, pure)) in probes.iter().zip(categories) {
         let definition = module
             .definitions
             .get_mut(*definition)
@@ -5600,6 +5600,11 @@ pub(crate) fn finish_escape_probes(
             diagnostic: None,
         };
         function.codomain = Box::new(ty);
+        if pure {
+            // The ordinary probe finalized this initializer as effect-free;
+            // the complete final module check verifies the narrower shell.
+            function.effects = None;
+        }
         block.result = Box::new(returned);
     }
     Ok(())

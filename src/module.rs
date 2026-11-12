@@ -565,7 +565,7 @@ impl LoadedModule {
     pub(crate) fn finish_escape_probes(
         &mut self,
         probes: &[usize],
-        categories: &[crate::syntax::EscapeResultCategory],
+        categories: &[(crate::syntax::EscapeResultCategory, bool)],
         budget: &mut SyntaxBudget,
     ) -> Result<(), crate::parser::MacroParseFailure> {
         crate::syntax::finish_escape_probes(
