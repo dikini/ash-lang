@@ -1468,6 +1468,7 @@ pub(crate) struct StagedModuleLoan<'a> {
     dependencies: &'a [ModuleDependency],
     span: Span,
     source_snapshot: &'a std::cell::RefCell<Option<std::sync::Arc<SourceFile>>>,
+    quote_projection: Option<&'a std::cell::RefCell<crate::parser::QuoteProjection>>,
 }
 
 pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut(
@@ -1486,6 +1487,12 @@ pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut
     + 'a;
 
 impl StagedModuleLoan<'_> {
+    pub(crate) fn quote_projection(
+        &self,
+    ) -> Option<&std::cell::RefCell<crate::parser::QuoteProjection>> {
+        self.quote_projection
+    }
+
     fn retained_source(
         &self,
         source: &SourceFile,
@@ -1510,10 +1517,22 @@ impl StagedModuleLoan<'_> {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub(crate) fn no_quote_adapter_view(
         &self,
         source: &SourceFile,
         definition: crate::surface::SurfaceDefinition,
+        budget: &mut SyntaxBudget,
+    ) -> Result<LoadedModule, ResourceFailure> {
+        self.adapter_view(source, definition, Vec::new(), None, budget)
+    }
+
+    pub(crate) fn adapter_view(
+        &self,
+        source: &SourceFile,
+        definition: crate::surface::SurfaceDefinition,
+        quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
+        quote_introduction: Option<usize>,
         budget: &mut SyntaxBudget,
     ) -> Result<LoadedModule, ResourceFailure> {
         use crate::surface::{
@@ -1592,8 +1611,8 @@ impl StagedModuleLoan<'_> {
                 span: self.span,
             },
             dependencies: self.dependencies.to_vec().into_boxed_slice(),
-            quote_sites: Vec::new(),
-            quote_introduction: None,
+            quote_sites,
+            quote_introduction,
         })
     }
 }
@@ -1716,6 +1735,7 @@ impl StagedModule {
                         dependencies: &self.dependencies,
                         span,
                         source_snapshot: &source_snapshot,
+                        quote_projection: quote_projection.as_ref(),
                     };
                     let enabled = transformer.is_some();
                     let mut transformer = transformer;

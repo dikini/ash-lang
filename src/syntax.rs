@@ -2622,13 +2622,20 @@ pub(crate) fn generator_adapter_definition(
     captures: &[SurfaceSyntaxCapture],
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
+    quote_projection: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
     definition_introduction: usize,
     builtin_introduction: usize,
     owners: &[SyntaxOwner],
     frame: &Arc<ExpansionFrame>,
     budget: &mut SyntaxBudget,
-) -> Result<(crate::surface::SurfaceDefinition, Vec<SyntaxNameUse>), crate::parser::MacroParseFailure>
-{
+) -> Result<
+    (
+        crate::surface::SurfaceDefinition,
+        Vec<SyntaxNameUse>,
+        Vec<SurfaceQuoteSite>,
+    ),
+    crate::parser::MacroParseFailure,
+> {
     use crate::parser::MacroParseFailure;
     use crate::surface::*;
     let span = frame.invocation;
@@ -3147,6 +3154,99 @@ pub(crate) fn generator_adapter_definition(
         )?;
         Ok(Some(expression))
     }
+    #[allow(clippy::too_many_arguments)]
+    fn capture_seed(
+        capture: &SurfaceExpressionCapture,
+        source: &crate::source::SourceFile,
+        contexts: &SyntaxContexts,
+        projection: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
+        sites: &mut Vec<SurfaceQuoteSite>,
+        frame: &Arc<ExpansionFrame>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<SurfaceExpr, MacroParseFailure> {
+        let resource = |error| MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        };
+        match &capture.quote_sites {
+            CapturedQuoteSites::Empty => {
+                if charge_new_expression_copy(&capture.expression, 0, false, budget)
+                    .map_err(resource)?
+                    .is_none()
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+                Ok(capture.expression.clone())
+            }
+            CapturedQuoteSites::Owned(_) => {
+                let projection = projection.ok_or(MacroParseFailure::Invalid)?;
+                // Source capture packets contain literal tokens and groups.
+                // Do not clone a forwarded capture that may own other sites.
+                budget
+                    .charge_units(capture.contents.len())
+                    .map_err(resource)?;
+                let mut pending = capture
+                    .contents
+                    .iter()
+                    .map(|node| (node, 0usize))
+                    .collect::<Vec<_>>();
+                while let Some((node, depth)) = pending.pop() {
+                    budget.charge().map_err(resource)?;
+                    match node {
+                        MacroOutputNode::Identifier(..) | MacroOutputNode::Token(..) => {}
+                        MacroOutputNode::Group(_, children, _) => {
+                            let child = type_depth(depth, 1).map_err(resource)?;
+                            let requested = pending.len().saturating_add(children.len());
+                            if requested > pending.capacity() {
+                                budget
+                                    .charge_units(requested.saturating_add(pending.len()))
+                                    .map_err(resource)?;
+                                pending
+                                    .try_reserve_exact(children.len())
+                                    .map_err(|_| MacroParseFailure::Invalid)?;
+                            }
+                            budget.charge_units(children.len()).map_err(resource)?;
+                            pending.extend(children.iter().map(|node| (node, child)));
+                        }
+                        _ => return Err(MacroParseFailure::Invalid),
+                    }
+                }
+                let (contents, _, _) = copy_fragment_output_with_type(&capture.contents, budget)?;
+                let (introduction, mut next_ordinal) = {
+                    let projection = projection.borrow();
+                    (projection.introduction, projection.next_ordinal)
+                };
+                let rebuilt = crate::parser::parse_macro_expression_with_quotes(
+                    source,
+                    capture.expression.span,
+                    contents,
+                    contexts,
+                    frame,
+                    budget,
+                    &mut next_ordinal,
+                    introduction,
+                )?;
+                // Do not hold a projection borrow across parsing or checking.
+                projection.borrow_mut().next_ordinal = next_ordinal;
+                let requested = sites.len().saturating_add(rebuilt.quote_sites.len());
+                if requested > sites.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(sites.len()))
+                        .map_err(resource)?;
+                    sites
+                        .try_reserve_exact(rebuilt.quote_sites.len())
+                        .map_err(|_| MacroParseFailure::Invalid)?;
+                }
+                budget
+                    .charge_units(rebuilt.quote_sites.len())
+                    .map_err(resource)?;
+                sites.extend(rebuilt.quote_sites);
+                Ok(rebuilt.expression)
+            }
+            CapturedQuoteSites::Lost => Err(MacroParseFailure::Invalid),
+        }
+    }
+    let mut quote_sites = Vec::new();
     let mut declarations = Vec::with_capacity(
         plan.actions
             .len()
@@ -3158,6 +3258,7 @@ pub(crate) fn generator_adapter_definition(
         // Checking this local function establishes the ordinary step shape.
         // Its body is never applied, including for a zero-count repetition.
         let generator = &generators[*binding];
+        let mut owned_capture = None;
         let candidate = match &generator.seed.kind {
             SurfaceExprKind::TemplateSplice(name) => {
                 charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
@@ -3167,7 +3268,10 @@ pub(crate) fn generator_adapter_definition(
                     {
                         Some(&capture.expression)
                     }
-                    Ok((SurfaceSyntaxCapture::Expression(_), 0)) => None,
+                    Ok((SurfaceSyntaxCapture::Expression(capture), 0)) => {
+                        owned_capture = Some(capture);
+                        None
+                    }
                     Ok((SurfaceSyntaxCapture::Repeated(_), depth)) if depth > 0 => None,
                     _ => return Err(MacroParseFailure::Invalid),
                 }
@@ -3188,6 +3292,18 @@ pub(crate) fn generator_adapter_definition(
             } else {
                 None
             }
+        } else if let Some(capture) = owned_capture {
+            let mut seed = capture_seed(
+                capture,
+                source,
+                contexts,
+                quote_projection,
+                &mut quote_sites,
+                frame,
+                budget,
+            )?;
+            inherit_frame(&mut seed.diagnostic, seed.span, frame, budget)?;
+            Some(seed)
         } else if !matches!(generator.seed.kind, SurfaceExprKind::TemplateSplice(_)) {
             materialize_seed(
                 generator,
@@ -3248,16 +3364,15 @@ pub(crate) fn generator_adapter_definition(
                         else {
                             return Err(MacroParseFailure::Invalid);
                         };
-                        if !matches!(capture.quote_sites, CapturedQuoteSites::Empty) {
-                            return Err(MacroParseFailure::Invalid);
-                        }
-                        if charge_new_expression_copy(&capture.expression, 0, false, budget)
-                            .map_err(resource)?
-                            .is_none()
-                        {
-                            return Err(MacroParseFailure::Invalid);
-                        }
-                        capture.expression.clone()
+                        capture_seed(
+                            capture,
+                            source,
+                            contexts,
+                            quote_projection,
+                            &mut quote_sites,
+                            frame,
+                            budget,
+                        )?
                     }
                     SurfaceExprKind::Integer(_)
                     | SurfaceExprKind::Boolean(_)
@@ -3673,7 +3788,7 @@ pub(crate) fn generator_adapter_definition(
             record("invocation_origin", builtin_introduction)?;
         }
     }
-    Ok((definition, uses))
+    Ok((definition, uses, quote_sites))
 }
 
 pub(crate) enum DeclarationAdapter<'a> {
@@ -8007,6 +8122,7 @@ mod tests {
                 &[],
                 &source,
                 &contexts,
+                None,
                 1,
                 2,
                 &[],
@@ -8016,8 +8132,9 @@ mod tests {
         };
         let mut measured = SyntaxBudget::default();
         measured.charge_units(17).unwrap();
-        let (definition, uses) = run(&mut measured).unwrap();
+        let (definition, uses, sites) = run(&mut measured).unwrap();
         assert!(uses.is_empty());
+        assert!(sites.is_empty());
         let used = measured.consumed();
 
         fn visit(
@@ -8188,7 +8305,7 @@ mod tests {
         for _ in 0..2 {
             let mut exact = SyntaxBudget::with_limit(used);
             exact.charge_units(17).unwrap();
-            let (definition, _) = run(&mut exact).unwrap();
+            let (definition, _, _) = run(&mut exact).unwrap();
             assert_eq!(exact.consumed(), used);
             drop(definition);
             assert_eq!(

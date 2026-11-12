@@ -3714,7 +3714,12 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         let ConcreteElement::Node(child) = element else {
             continue;
         };
-        let tokens = current.tokens(&staging_frames);
+        let mut tokens = current.tokens(&staging_frames);
+        if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
+            // Caller-authored capture quotes share this module's actual quote
+            // introduction and ordinal, while their sites remain capture-owned.
+            tokens.quote_sites = quote_sites;
+        }
         let deriving = if matches!(
             child.kind,
             NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
@@ -4778,6 +4783,11 @@ fn charge_declaration_invocation(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let generator_capture = executing
+        && template
+        && selection.declaration.contains_generators
+        && source_projection_tokens(tokens)
+        && tokens.quote_sites.is_some();
     if has_structured {
         if !template {
             return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
@@ -4856,8 +4866,8 @@ fn charge_declaration_invocation(
                     ))?
             };
             let new_pattern = declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Pattern;
-            let new_expression =
-                declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Expression;
+            let new_expression = (declaration_transformer || generator_capture)
+                && *kind == SurfaceSyntaxCaptureKind::Expression;
             let mut bridge = if new_expression {
                 charge_projection_preflight_with_expression(
                     value,
@@ -7589,6 +7599,7 @@ fn capture_template_contents(
                 tokens,
                 tokens.originals.unwrap_or(&empty),
                 Some(&mut reads),
+                None,
             )?;
             reserve_expression_scratch(adapters, 1, tokens.expression_budget)?;
             adapters.push(make_template_escape_adapter(
@@ -8790,6 +8801,10 @@ fn project_selected_declaration_invocation_node_inner(
             selected.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let source_generator = allow_declaration
+        && source_projection_tokens(tokens)
+        && selected.declaration.contains_generators
+        && tokens.quote_sites.is_some();
     let selection = selected.clone();
     let mut children = node.children.iter();
     let _ = children.next();
@@ -8854,8 +8869,8 @@ fn project_selected_declaration_invocation_node_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                    let (expression, contents, contains_protected_type) =
-                        if source_transformer && budget.is_some() {
+                    let (expression, contents, contains_protected_type, quote_sites) =
+                        if (source_transformer || source_generator) && budget.is_some() {
                             let expression_budget = std::cell::RefCell::new(
                                 budget
                                     .as_deref_mut()
@@ -8873,7 +8888,9 @@ fn project_selected_declaration_invocation_node_inner(
                                 staging_frames: tokens.staging_frames,
                                 preserve_name_diagnostic: tokens.preserve_name_diagnostic,
                                 expression_budget: Some(&expression_budget),
-                                quote_sites: None,
+                                quote_sites: source_generator
+                                    .then_some(tokens.quote_sites)
+                                    .flatten(),
                             };
                             let (contents, contains_type) = capture_contents_and_type(
                                 source,
@@ -8881,31 +8898,48 @@ fn project_selected_declaration_invocation_node_inner(
                                 &selected_tokens,
                                 originals,
                             )?;
-                            let expression = project_expression_with_fragments(
-                                source,
-                                expression,
-                                &selected_tokens,
-                                originals,
-                            )?;
+                            let (expression, quote_sites) = if source_generator {
+                                project_captured_expression_with_fragments(
+                                    source,
+                                    expression,
+                                    &selected_tokens,
+                                    originals,
+                                )?
+                            } else {
+                                (
+                                    project_expression_with_fragments(
+                                        source,
+                                        expression,
+                                        &selected_tokens,
+                                        originals,
+                                    )?,
+                                    crate::surface::CapturedQuoteSites::Empty,
+                                )
+                            };
                             expression_budget
                                 .borrow_mut()
                                 .charge_units(contents.len().saturating_mul(2).saturating_add(1))
                                 .map_err(ProjectionError::ResourceLimit)?;
-                            (expression, contents, contains_type)
+                            (expression, contents, contains_type, quote_sites)
                         } else {
                             let (contents, contains_type) =
                                 capture_contents_and_type(source, expression, tokens, originals)?;
                             let expression = project_expression_with_fragments(
                                 source, expression, tokens, originals,
                             )?;
-                            (expression, contents, contains_type)
+                            (
+                                expression,
+                                contents,
+                                contains_type,
+                                crate::surface::CapturedQuoteSites::Empty,
+                            )
                         };
                     captures.push(SurfaceSyntaxCapture::Expression(
                         project_syntax_expression_capture(
                             expression,
                             contents,
                             contains_protected_type,
-                            crate::surface::CapturedQuoteSites::Empty,
+                            quote_sites,
                         )?,
                     ));
                 }
@@ -9617,7 +9651,25 @@ fn project_expression_with_fragments(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<SurfaceExpr, ProjectionError> {
-    project_expression_with_escape_reads(source, node, tokens, original_nodes, None)
+    project_expression_with_escape_reads(source, node, tokens, original_nodes, None, None)
+}
+
+fn project_captured_expression_with_fragments(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<(SurfaceExpr, crate::surface::CapturedQuoteSites), ProjectionError> {
+    let mut sites = crate::surface::CapturedQuoteSites::Empty;
+    let expression = project_expression_with_escape_reads(
+        source,
+        node,
+        tokens,
+        original_nodes,
+        None,
+        Some(&mut sites),
+    )?;
+    Ok((expression, sites))
 }
 
 fn project_expression_with_escape_reads(
@@ -9626,19 +9678,26 @@ fn project_expression_with_escape_reads(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     mut escape_reads: Option<&mut Vec<SurfaceName>>,
+    capture_output: Option<&mut crate::surface::CapturedQuoteSites>,
 ) -> Result<SurfaceExpr, ProjectionError> {
     struct CaptureQuotes {
         sites: Vec<crate::syntax::SurfaceQuoteSite>,
         descendants: bool,
     }
-    let mut tasks = if tokens.expression_budget.is_some() {
-        let mut tasks = Vec::new();
-        reserve_expression_scratch(&mut tasks, 1, tokens.expression_budget)?;
-        tasks.push(ExpressionTask::Visit(node));
-        tasks
-    } else {
-        vec![ExpressionTask::Visit(node)]
-    };
+    let mut tasks = Vec::new();
+    let capture_root = capture_output.is_some();
+    reserve_expression_scratch(
+        &mut tasks,
+        if capture_root { 3 } else { 1 },
+        tokens.expression_budget,
+    )?;
+    if capture_root {
+        tasks.push(ExpressionTask::EndCapture);
+    }
+    tasks.push(ExpressionTask::Visit(node));
+    if capture_root {
+        tasks.push(ExpressionTask::StartCapture);
+    }
     let mut projected = Vec::new();
     let mut type_facts = Vec::<bool>::new();
     let mut capture_depth = 0_usize;
@@ -10951,9 +11010,16 @@ fn project_expression_with_escape_reads(
     if projected.len() != 1
         || capture_depth != 0
         || !capture_quotes.is_empty()
-        || !completed_quotes.is_empty()
+        || completed_quotes.len() != usize::from(capture_root)
     {
         return malformed(InternalReason::UnexpectedShape);
+    }
+    if let Some(output) = capture_output {
+        *output = completed_quotes
+            .pop()
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
     }
     projected.pop().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,

@@ -2827,13 +2827,15 @@ fn evaluate_generator_transformer(
     let contexts =
         crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
             .map_err(quote_resource_failure)?;
-    let (definition, uses) = crate::syntax::generator_adapter_definition(
+    let quote_projection = staged.quote_projection();
+    let (definition, uses, quote_sites) = crate::syntax::generator_adapter_definition(
         plan,
         &escape_categories,
         &selection.declaration.matcher,
         captures,
         source,
         &contexts,
+        quote_projection,
         introduction,
         builtin_introduction,
         owners,
@@ -2853,8 +2855,18 @@ fn evaluate_generator_transformer(
         })),
         crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
     })?;
+    let quote_introduction = if quote_sites.is_empty() {
+        None
+    } else {
+        Some(
+            quote_projection
+                .ok_or_else(internal_file_failure)?
+                .borrow()
+                .introduction,
+        )
+    };
     let module = staged
-        .no_quote_adapter_view(source, definition, budget)
+        .adapter_view(source, definition, quote_sites, quote_introduction, budget)
         .map_err(quote_resource_failure)?;
     budget
         .charge_units(module.dependencies().len())
