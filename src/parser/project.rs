@@ -39,11 +39,15 @@ type G1CaptureObserver =
     fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget);
 #[cfg(test)]
 type StagedModuleObserver = fn(&SourceFile, &SurfaceModule);
+#[cfg(test)]
+type StagedEnterObserver =
+    fn(&crate::syntax::ExpansionFrame, &crate::syntax_resource::SyntaxBudget, bool);
 
 #[cfg(test)]
 std::thread_local! {
     pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<G1CaptureObserver>> = const { std::cell::Cell::new(None) };
     pub(crate) static STAGED_MODULE_OBSERVER: std::cell::Cell<Option<StagedModuleObserver>> = const { std::cell::Cell::new(None) };
+    static STAGED_ENTER_OBSERVER: std::cell::Cell<Option<StagedEnterObserver>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -3689,6 +3693,17 @@ fn enter_staged_frame(
     Ok(())
 }
 
+#[cfg(test)]
+fn observe_staged_enter(
+    frame: &DeclarationFrame<'_>,
+    budget: &crate::syntax_resource::SyntaxBudget,
+    deferred: bool,
+) {
+    if let (Some(observe), Some(frame)) = (STAGED_ENTER_OBSERVER.get(), frame.frame.as_deref()) {
+        observe(frame, budget, deferred);
+    }
+}
+
 fn reserve_staged_failure_frame(
     staging_frames: &mut Vec<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
@@ -3819,6 +3834,8 @@ pub(crate) fn project_declaration_expansions_with_resource(
                 .last_mut()
                 .and_then(|frame| frame.deferred.pop_front())
             {
+                #[cfg(test)]
+                observe_staged_enter(&output, budget, true);
                 if let Err(error) = enter_staged_frame(&output, &mut staging_frames, budget) {
                     if error.resource().is_some() {
                         failure_frame = output.frame.take();
@@ -4087,6 +4104,8 @@ pub(crate) fn project_declaration_expansions_with_resource(
             )?;
             let mut next =
                 admit_staged_output(output, source, &staging_frames, &mut failure_frame, budget)?;
+            #[cfg(test)]
+            observe_staged_enter(&next, budget, false);
             if let Err(error) = enter_staged_frame(&next, &mut staging_frames, budget) {
                 if error.resource().is_some() {
                     failure_frame = next.frame.take();
@@ -14243,6 +14262,518 @@ mod tests {
             tree.parse_diagnostics()
         );
         tree
+    }
+
+    #[test]
+    fn staged_resource_frame_work_is_paid_and_released_at_real_prepare_and_admit() {
+        use crate::{syntax::SyntaxContexts, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "resource-forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let imports = [vec![]];
+        let source = SourceFile::new("resource-caller.ash", "emit answer\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let contexts = SyntaxContexts::new(&selected, &imports, &[]);
+        let prepare = |limit: usize, prefix: usize| {
+            let invocation =
+                project_declaration_invocation_node(&source, node, &tokens, &contexts, true)
+                    .unwrap();
+            let mut owners = Vec::new();
+            let mut failure_frame = None;
+            let mut transformer = None;
+            let mut work = SyntaxBudget::with_limit(limit);
+            work.charge_units(prefix).unwrap();
+            let result = prepare_staged_output(
+                invocation,
+                false,
+                false,
+                &source,
+                &selected,
+                &imports,
+                &mut owners,
+                &[],
+                &mut failure_frame,
+                &mut transformer,
+                &mut work,
+            );
+            (result, failure_frame, work.consumed(), owners.len())
+        };
+        let (result, absent, cost, _) = prepare(100_000, 0);
+        assert!(absent.is_none());
+        let pending = result.unwrap();
+        let prepare_weak = Arc::downgrade(&pending.frame);
+        drop(pending);
+        assert!(prepare_weak.upgrade().is_none());
+        let (result, absent, _, owners) = prepare(1, 0);
+        assert!(result.is_err());
+        assert!(absent.is_none());
+        assert_eq!(owners, 0);
+        for prefix in [0, 7] {
+            let (result, failed, used, _) = prepare(prefix + cost - 1, prefix);
+            assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == prefix + cost - 1));
+            assert!(used >= prefix && used < prefix + cost);
+            let failed = failed.expect("the actual prepared frame moves on failure");
+            assert_eq!(failed.definition, selected[0].declaration.span);
+            assert_eq!(failed.invocation.source(), source.id());
+            let weak = Arc::downgrade(&failed);
+            drop(failed);
+            assert!(weak.upgrade().is_none());
+            for _ in 0..2 {
+                let (result, absent, used, _) = prepare(prefix + cost, prefix);
+                assert!(absent.is_none());
+                assert_eq!(used, prefix + cost);
+                drop(result.unwrap());
+            }
+        }
+
+        let make_pending = || prepare(100_000, 0).0.unwrap();
+        let pending = make_pending();
+        let mut measured = SyntaxBudget::with_limit(100_000);
+        let mut failure_frame = None;
+        let admitted =
+            admit_staged_output(pending, &source, &[], &mut failure_frame, &mut measured).unwrap();
+        assert!(failure_frame.is_none());
+        let admit_cost = measured.consumed();
+        drop(admitted);
+        for limit in [0, admit_cost - 1] {
+            let pending = make_pending();
+            let weak = Arc::downgrade(&pending.frame);
+            let mut failure_frame = None;
+            let result = admit_staged_output(
+                pending,
+                &source,
+                &[],
+                &mut failure_frame,
+                &mut SyntaxBudget::with_limit(limit),
+            );
+            assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: actual }), ..
+            }) if actual == limit));
+            let failed = failure_frame.expect("admission moves its actual pending frame");
+            assert!(weak.ptr_eq(&Arc::downgrade(&failed)));
+            drop(failed);
+            assert!(weak.upgrade().is_none());
+        }
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(7 + admit_cost);
+            exact.charge_units(7).unwrap();
+            let mut failure_frame = None;
+            let admitted =
+                admit_staged_output(make_pending(), &source, &[], &mut failure_frame, &mut exact)
+                    .unwrap();
+            assert!(failure_frame.is_none());
+            assert_eq!(exact.consumed(), 7 + admit_cost);
+            drop(admitted);
+        }
+    }
+
+    #[test]
+    fn staged_failure_slot_prepays_growth_and_preserves_the_original_resource() {
+        use crate::{syntax::ExpansionFrame, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        let source = SourceFile::new("slot.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut frames = Vec::with_capacity(1);
+        frames.push(Arc::clone(&frame));
+        while frames.len() < frames.capacity() {
+            frames.push(Arc::clone(&frame));
+        }
+        let live = frames.len();
+        let cost = 2 * live + 1;
+        let before = Arc::strong_count(&frame);
+        let mut short = SyntaxBudget::with_limit(7 + cost - 1);
+        short.charge_units(7).unwrap();
+        assert!(
+            matches!(reserve_staged_failure_frame(&mut frames, &mut short),
+            Err(ResourceFailure::SyntaxWork { limit }) if limit == 7 + cost - 1)
+        );
+        assert_eq!(frames.len(), live);
+        assert_eq!(frames.capacity(), live);
+        assert_eq!(Arc::strong_count(&frame), before);
+        let mut exact = SyntaxBudget::with_limit(7 + cost);
+        exact.charge_units(7).unwrap();
+        reserve_staged_failure_frame(&mut frames, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), 7 + cost);
+        assert!(frames.capacity() > frames.len());
+        assert_eq!(Arc::strong_count(&frame), before);
+
+        let malformed = SourceFile::new("malformed.ash", "main :\n").unwrap();
+        let parsed = parse(lex(&malformed).unwrap());
+        let diagnostics = parsed.parse_diagnostics().to_vec();
+        assert!(!diagnostics.is_empty());
+        let failure = staged_template_failure(
+            super::super::MacroParseFailure::Syntax {
+                diagnostics: diagnostics.clone(),
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: STRUCTURAL_DEPTH_LIMIT,
+                }),
+            },
+            &frames,
+            &frame,
+            &mut SyntaxBudget::with_limit(0),
+        )
+        .unwrap();
+        assert!(matches!(failure, DeclarationExpansionFailure::Syntax {
+            diagnostics: actual,
+            resource: Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT }),
+        } if actual == diagnostics));
+    }
+
+    #[test]
+    fn staged_resource_before_new_frame_keeps_only_the_entered_chain() {
+        use crate::syntax_resource::SyntaxBudget;
+        use std::cell::RefCell;
+
+        std::thread_local! {
+            static CUTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+            static PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe(_: &SourceFile, _: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+            CUTS.with(|cuts| cuts.borrow_mut().push(budget.consumed()));
+        }
+        fn publication(source: &SourceFile, _: &SurfaceModule) {
+            if source.display_path() == "resource-caller.ash" {
+                PUBLISHED.set(true);
+            }
+        }
+
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident => { inner $name }\n",
+        )
+        .unwrap();
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let outer = h1_selection(&outer_source, 0, None);
+        let inner = h1_selection(&inner_source, 1, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner], vec![]];
+        let source = SourceFile::new("resource-caller.ash", "outer answer\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let mut owners = Vec::new();
+        let mut location = None;
+        CUTS.with(|cuts| cuts.borrow_mut().clear());
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut SyntaxBudget::with_limit(100_000),
+            None,
+            None,
+            &mut location,
+        );
+        G1_CAPTURE_OBSERVER.set(None);
+        assert!(result.is_ok());
+        assert!(location.is_none());
+        let cuts = CUTS.with(|cuts| cuts.borrow().clone());
+        assert_eq!(cuts.len(), 2);
+        let limit = cuts[1] + 1;
+
+        let mut owners = Vec::new();
+        let mut location = None;
+        PUBLISHED.set(false);
+        STAGED_MODULE_OBSERVER.set(Some(publication));
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut SyntaxBudget::with_limit(limit),
+            None,
+            None,
+            &mut location,
+        );
+        STAGED_MODULE_OBSERVER.set(None);
+        assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+            resource: Some(ResourceFailure::SyntaxWork { limit: actual }), ..
+        }) if actual == limit));
+        assert!(owners.is_empty());
+        assert!(!PUBLISHED.get());
+        let location = location.expect("the entered outer frame survives the refusal");
+        assert_eq!(location.frames.len(), 1);
+        assert_eq!(location.frames[0].definition, outer.declaration.span);
+        let weak = std::sync::Arc::downgrade(&location.frames[0]);
+        drop(location);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn staged_enter_refusals_move_only_the_real_active_frame() {
+        use crate::{syntax::ExpansionFrame, syntax_resource::SyntaxBudget};
+        use std::{cell::RefCell, sync::Arc};
+
+        std::thread_local! {
+            static ENTERS: RefCell<Vec<(usize, Span, bool)>> = const { RefCell::new(Vec::new()) };
+            static PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe_enter(frame: &ExpansionFrame, budget: &SyntaxBudget, deferred: bool) {
+            ENTERS.with(|events| {
+                events
+                    .borrow_mut()
+                    .push((budget.consumed(), frame.definition, deferred))
+            });
+        }
+        fn observe_publication(source: &SourceFile, _: &SurfaceModule) {
+            if source.display_path() == "resource-enter.ash" {
+                PUBLISHED.set(true);
+            }
+        }
+        fn check(
+            source: &SourceFile,
+            selected: &[crate::syntax::SelectedSyntax],
+            imports: &[Vec<crate::syntax::SelectedSyntax>],
+            expected_definition: Span,
+            deferred: bool,
+        ) {
+            let tree = h1_tree(source, selected);
+            let mut owners = Vec::new();
+            let mut location = None;
+            let mut measured = SyntaxBudget::with_limit(100_000);
+            ENTERS.with(|events| events.borrow_mut().clear());
+            STAGED_ENTER_OBSERVER.set(Some(observe_enter));
+            project_declaration_expansions_with_resource(
+                source,
+                &tree,
+                selected,
+                imports,
+                &mut owners,
+                &mut measured,
+                None,
+                None,
+                &mut location,
+            )
+            .unwrap();
+            STAGED_ENTER_OBSERVER.set(None);
+            assert!(location.is_none());
+            let events = ENTERS.with(|events| events.borrow().clone());
+            let (cut, _, _) = events
+                .into_iter()
+                .find(|(_, definition, is_deferred)| {
+                    *definition == expected_definition && *is_deferred == deferred
+                })
+                .expect("the actual selected frame reaches enter");
+            let mut owners = Vec::new();
+            let mut location = None;
+            let mut short = SyntaxBudget::with_limit(cut);
+            PUBLISHED.set(false);
+            STAGED_MODULE_OBSERVER.set(Some(observe_publication));
+            let failure = project_declaration_expansions_with_resource(
+                source,
+                &tree,
+                selected,
+                imports,
+                &mut owners,
+                &mut short,
+                None,
+                None,
+                &mut location,
+            );
+            STAGED_MODULE_OBSERVER.set(None);
+            assert!(matches!(failure, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == cut));
+            assert!(owners.is_empty());
+            assert!(!PUBLISHED.get());
+            let location = location.expect("the refused actual frame moves to the diagnostic");
+            assert_eq!(location.frames.len(), 1);
+            assert_eq!(location.frames[0].definition, expected_definition);
+            assert_eq!(location.frames[0].invocation.source(), source.id());
+            let weak = Arc::downgrade(&location.frames[0]);
+            drop(location);
+            assert!(weak.upgrade().is_none());
+        }
+
+        let ordinary_forms = SourceFile::new(
+            "ordinary.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let ordinary = [h1_selection(&ordinary_forms, 0, None)];
+        let ordinary_source = SourceFile::new("resource-enter.ash", "emit answer\n").unwrap();
+        check(
+            &ordinary_source,
+            &ordinary,
+            &[vec![]],
+            ordinary[0].declaration.span,
+            false,
+        );
+
+        let alpha_forms = SourceFile::new(
+            "alpha.ash",
+            "pub syntax derive: (alpha) => {\nalpha_result : Unit -> Int\nalpha_result () = 1\n}\n",
+        )
+        .unwrap();
+        let beta_forms = SourceFile::new(
+            "beta.ash",
+            "pub syntax derive: (beta) => {\nbeta_result : Unit -> Int\nbeta_result () = 2\n}\n",
+        )
+        .unwrap();
+        let derives = [
+            h1_selection(&alpha_forms, 0, None),
+            h1_selection(&beta_forms, 1, None),
+        ];
+        let derive_source = SourceFile::new(
+            "resource-enter.ash",
+            "type Color = Red\n    deriving (alpha, beta)\n",
+        )
+        .unwrap();
+        check(
+            &derive_source,
+            &derives,
+            &[vec![], vec![]],
+            derives[1].declaration.span,
+            true,
+        );
+    }
+
+    #[test]
+    fn staged_nonresource_failure_never_attaches_resource_context() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new(
+            "make.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("caller.ash", "make Upper\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let mut owners = Vec::new();
+        let mut location = None;
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut owners,
+            &mut SyntaxBudget::default(),
+            None,
+            None,
+            &mut location,
+        );
+        assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+            diagnostics, resource: None,
+        }) if diagnostics.iter().any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken)));
+        assert!(owners.is_empty());
+        assert!(location.is_none());
+
+        // Cut the real output parser after it has recorded the unexpected
+        // Upper token, then compare its original failure with admission's.
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let imports = [vec![]];
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &imports, &[]);
+        let invocation =
+            project_declaration_invocation_node(&source, node, &tokens, &contexts, true).unwrap();
+        let mut preparation_owners = Vec::new();
+        let mut preparation_frame = None;
+        let pending = prepare_staged_output(
+            invocation,
+            false,
+            false,
+            &source,
+            &selected,
+            &imports,
+            &mut preparation_owners,
+            &[],
+            &mut preparation_frame,
+            &mut None,
+            &mut SyntaxBudget::default(),
+        )
+        .unwrap();
+        assert!(preparation_frame.is_none());
+        let mut measured = SyntaxBudget::with_limit(100_000);
+        let parsed = super::super::parse_macro_tree_with_expression_scratch(
+            &source,
+            pending.anchor,
+            pending.output.clone(),
+            &pending.contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            pending.pattern_accounting,
+            pending.actual_expression,
+            &mut measured,
+        );
+        assert!(
+            matches!(parsed, Err(super::super::MacroParseFailure::Syntax {
+            diagnostics, resource: None,
+        }) if diagnostics.iter().any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken))
+        );
+        let parser_cost = measured.consumed();
+        let limit = 7 + 2 + parser_cost - 1;
+        let mut direct = SyntaxBudget::with_limit(limit);
+        direct.charge_units(7 + 2).unwrap();
+        let raw = super::super::parse_macro_tree_with_expression_scratch(
+            &source,
+            pending.anchor,
+            pending.output.clone(),
+            &pending.contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            pending.pattern_accounting,
+            pending.actual_expression,
+            &mut direct,
+        );
+        let Err(super::super::MacroParseFailure::Syntax {
+            diagnostics: original,
+            resource:
+                Some(ResourceFailure::SyntaxWork {
+                    limit: original_limit,
+                }),
+        }) = raw
+        else {
+            panic!("expected the real parser's resource refusal")
+        };
+        assert_eq!(original_limit, limit);
+        assert!(
+            original
+                .iter()
+                .any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken)
+        );
+
+        let weak = std::sync::Arc::downgrade(&pending.frame);
+        let mut admission = SyntaxBudget::with_limit(limit);
+        admission.charge_units(7).unwrap();
+        let mut failed_frame = None;
+        let admitted =
+            admit_staged_output(pending, &source, &[], &mut failed_frame, &mut admission);
+        let Err(DeclarationExpansionFailure::Syntax {
+            diagnostics: actual,
+            resource:
+                Some(ResourceFailure::SyntaxWork {
+                    limit: actual_limit,
+                }),
+        }) = admitted
+        else {
+            panic!("expected the same refusal at admission")
+        };
+        assert_eq!(actual_limit, original_limit);
+        assert_eq!(actual, original);
+        assert_eq!(admission.consumed(), direct.consumed());
+        let failed = failed_frame.expect("the actual frame moves with the original payload");
+        assert!(weak.ptr_eq(&std::sync::Arc::downgrade(&failed)));
+        drop(failed);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

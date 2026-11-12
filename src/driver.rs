@@ -4171,6 +4171,112 @@ mod tests {
     }
 
     #[test]
+    fn i20_recursive_bound_preserves_every_frame_and_publishes_no_module() {
+        use crate::eval::machine_test_hooks as hooks;
+        use std::sync::Arc;
+
+        std::thread_local! {
+            static TARGET_PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe(source: &SourceFile, _: &crate::surface::SurfaceModule) {
+            if source.display_path().ends_with("diagnostics/recursive.ash") {
+                TARGET_PUBLISHED.set(true);
+            }
+        }
+
+        hooks::reset();
+        TARGET_PUBLISHED.set(false);
+        crate::parser::STAGED_MODULE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/diagnostics/recursive.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        crate::parser::STAGED_MODULE_OBSERVER.set(None);
+        let failure = match result {
+            Err(failure) => failure,
+            Ok(_) => panic!("the original recursive graph must reach its bound"),
+        };
+        assert!(!TARGET_PUBLISHED.get());
+        assert!(hooks::ROOT_CLOSES.get() > 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFER_ATTEMPTS.get());
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+
+        let FileFailure::Graph(graph) = &failure else {
+            panic!("the existing graph failure must retain the resource")
+        };
+        let LoadGraphError::Syntax(syntax) = graph.failure() else {
+            panic!("the original syntax resource remains the failure")
+        };
+        assert_eq!(
+            syntax.resource,
+            Some(ResourceFailure::StructuralDepth {
+                limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+            })
+        );
+        let location = graph.resource_location().expect("actual expansion context");
+        assert!(location.frames.len() > 1);
+        let weak = location
+            .frames
+            .iter()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
+        let diagnostics = crate::presentation::compile_file_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        let mut bytes = Vec::new();
+        crate::presentation::write_json(&mut bytes, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["reason"], "internal.resource.structural-depth");
+        assert_eq!(json["responsibility"], "compiler");
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 2 * location.frames.len());
+        for (index, frame) in location.frames.iter().enumerate() {
+            assert!(
+                !location.frames[..index]
+                    .iter()
+                    .any(|previous| Arc::ptr_eq(previous, frame))
+            );
+            for (offset, span, relationship, expected_path, expected_text) in [
+                (
+                    0,
+                    frame.invocation,
+                    "syntax_invocation",
+                    "recursive.ash",
+                    "repeat_forever",
+                ),
+                (
+                    1,
+                    frame.definition,
+                    "syntax_definition",
+                    "recursive_forms.ash",
+                    "pub syntax declaration: (repeat_forever)",
+                ),
+            ] {
+                let source = graph
+                    .sources()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                let range = span.range();
+                let text = &source.text()[range.start() as usize..range.end() as usize];
+                assert!(source.display_path().ends_with(expected_path));
+                assert!(text.contains(expected_text), "{text:?}");
+                let label = &labels[2 * index + offset];
+                assert_eq!(label["role"], "related");
+                assert_eq!(label["relationship"], relationship);
+                assert_eq!(label["path"], source.display_path());
+                assert_eq!(label["byte_start"], range.start());
+                assert_eq!(label["byte_end"], range.end());
+            }
+        }
+        drop(diagnostics);
+        drop(failure);
+        assert!(weak.into_iter().all(|frame| frame.upgrade().is_none()));
+        hooks::reset();
+    }
+
+    #[test]
     fn d2_reports_a_missing_export_from_a_declaration_syntax_module() {
         let entry =
             TestSource::write("import forms (syntax absent)\nmain : Unit -> Int\nmain () = 42\n");

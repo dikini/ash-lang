@@ -962,6 +962,54 @@ impl Error for ModuleFailure {}
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn staged_resource_location_requires_each_admitted_source() {
+        use crate::{
+            presentation::{PresentationError, compile_graph_diagnostics, write_json},
+            source::ByteRange,
+            syntax::{DiagnosticLocation, ExpansionFrame},
+            syntax_resource::ResourceFailure,
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("caller.ash", "invoke").unwrap();
+        let missing = SourceFile::new("forms.ash", "definition").unwrap();
+        let invocation = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let definition = missing.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let mut location = DiagnosticLocation::new(invocation.into());
+        location.frames.push(Arc::new(ExpansionFrame {
+            invocation,
+            definition,
+        }));
+        let mut graph = GraphDiagnostic {
+            failure: Box::new(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                source,
+                import_span: None,
+                lexical: Vec::new(),
+                parser: Vec::new(),
+                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+            }))),
+            sources: Box::default(),
+            compilation_work: None,
+            resource_location: Some(location),
+        };
+        assert!(matches!(
+            compile_graph_diagnostics(&graph),
+            Err(PresentationError::MissingSource)
+        ));
+
+        graph.resource_location = None;
+        let diagnostics = compile_graph_diagnostics(&graph).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.resource.structural-depth");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["labels"], serde_json::json!([]));
+    }
+
     #[test]
     fn corrupt_projected_paths_report_compiler_failures_with_specific_causes() {
         for (input, missing_parent, expected_cause) in [
