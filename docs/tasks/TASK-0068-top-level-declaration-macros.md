@@ -176,8 +176,12 @@ including the distinct diagnostic gaps in
 [#313](https://github.com/dikini/ash-lang/issues/313),
 [#321](https://github.com/dikini/ash-lang/issues/321) and
 [#322](https://github.com/dikini/ash-lang/issues/322). The user has authorized
-one bounded diagnostic repair and retention for these three issues; its
-implementation, verification and acceptance remain in progress.
+one bounded diagnostic repair and retention for these three issues. The
+candidate retains the existing contextual names, source labels and profile
+causes through the diagnostic presenter. Its original I01–I08 driver corpus,
+handwritten controls and prescribed negative variants were replayed in human
+and JSON modes; focused locale, provenance and work-budget checks also passed.
+Independent final review, retention and issue acceptance remain in progress.
 
 Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
 V8 retained equality and acceptance remain required. The last full workspace
