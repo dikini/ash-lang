@@ -8714,7 +8714,7 @@ impl Encoder<'_> {
         &mut self,
         original: &crate::resolved::ResolvedTypeVariable,
     ) -> Result<u32, ImageFailure> {
-        if original.kind != crate::kind::Kind::Type {
+        if original.kind != crate::types::Kind::Type {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
         self.encode_parameter_data(original)
@@ -9964,7 +9964,7 @@ impl Decoder<'_> {
         for identity in &method_variables {
             charge(self.work, 1)?;
             if registry.type_variable(*identity).is_none_or(|parameter| {
-                parameter.id != *identity || parameter.kind != crate::kind::Kind::Type
+                parameter.id != *identity || parameter.kind != crate::types::Kind::Type
             }) {
                 return Err(ImageFailure::InvalidRecord);
             }
@@ -11630,7 +11630,7 @@ fn checked_method_inventory(
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<crate::types::TypeVariableId>, ImageFailure> {
     use crate::core::dialect::checked_owner_anchors::OriginalOwner;
-    use crate::kind::Kind;
+    use crate::types::Kind;
 
     let modules = program.checked_owner_modules();
     let mut count = 0usize;
