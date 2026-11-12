@@ -4,10 +4,22 @@ use crate::{
     evidence_validation::ValidatedInterfaceProgram,
     interface::{InterfaceId, MethodId},
     module::ModuleId,
-    resolved::{BinderId, ResolvedRegistry},
+    resolved::{BinderId, ResolvedNominalType, ResolvedRegistry},
     source::{Origin, SourceFile, SourceId, Span},
-    types::{TypeVariableId, TypeWorkBudget},
+    types::{NominalTypeId, TypeVariableId, TypeWorkBudget},
 };
+
+/// The exact checked predecessor and generated nominal for one nested derive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OriginalNominalPair {
+    pub(crate) module: ModuleId,
+    pub(crate) source: SourceId,
+    pub(crate) previous: NominalTypeId,
+    pub(crate) previous_source: Span,
+    pub(crate) current: NominalTypeId,
+    pub(crate) invocation: Span,
+    pub(crate) definition: Span,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum OriginalOwner {
@@ -184,6 +196,107 @@ fn sorted_unique<T, K: Copy + Ord>(
         sorted.push(item);
     }
     Ok(sorted)
+}
+
+fn original_nested_pair(
+    previous: &ResolvedNominalType,
+    current: &ResolvedNominalType,
+) -> Option<OriginalNominalPair> {
+    let (
+        Origin::Source(previous_source),
+        Origin::Expansion {
+            invocation,
+            definition,
+        },
+    ) = (&previous.origin, &current.origin)
+    else {
+        return None;
+    };
+    let module = current.id.module();
+    let outer = previous_source.range();
+    let inner = invocation.range();
+    if !module.is_admitted_source()
+        || previous.id.module() != module
+        || previous.id.is_lexical()
+        || current.id.is_lexical()
+        || previous.id.declaration().checked_add(1) != Some(current.id.declaration())
+        || previous_source.source() != invocation.source()
+        || outer.start() >= outer.end()
+        || inner.start() >= inner.end()
+        || inner.start() < outer.start()
+        || inner.end() > outer.end()
+    {
+        return None;
+    }
+    Some(OriginalNominalPair {
+        module,
+        source: previous_source.source(),
+        previous: previous.id,
+        previous_source: *previous_source,
+        current: current.id,
+        invocation: *invocation,
+        definition: *definition,
+    })
+}
+
+pub(super) fn prepare_nominal_pairs(
+    linked: &ValidatedInterfaceProgram,
+    owners: &CheckedOwnerOrders,
+    sources: &[&SourceFile],
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[OriginalNominalPair]>, PreparationError> {
+    // The combined registry retains each checked group's actual nominal order.
+    // Count first so storage is paid exactly, including empty collections.
+    let nominals = linked.registry().nominals();
+    let mut count = 0usize;
+    for pair in nominals.windows(2) {
+        charge(work, 1)?;
+        if original_nested_pair(&pair[0], &pair[1]).is_some() {
+            count = add(count, 1)?;
+        }
+    }
+    charge(work, count)?;
+    let mut pairs = Vec::new();
+    pairs
+        .try_reserve_exact(count)
+        .map_err(|_| PreparationError::Resource)?;
+    for pair in nominals.windows(2) {
+        charge(work, 1)?;
+        let Some(pair) = original_nested_pair(&pair[0], &pair[1]) else {
+            continue;
+        };
+        let modules = owners.modules();
+        let (mut low, mut high) = (0, modules.len());
+        let mut found = None;
+        while low < high {
+            charge(work, 1)?;
+            let middle = low + (high - low) / 2;
+            match modules[middle].module.cmp(&pair.module) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => {
+                    found = Some(&modules[middle]);
+                    break;
+                }
+            }
+        }
+        if found.is_none_or(|module| module.source != pair.source) {
+            return Err(PreparationError::Invalid);
+        }
+        // Definition and invocation may be in different admitted sources.
+        for span in [pair.previous_source, pair.invocation, pair.definition] {
+            charge(work, sources.len())?;
+            let source = sources
+                .iter()
+                .find(|source| source.id() == span.source())
+                .ok_or(PreparationError::Invalid)?;
+            if source.span(span.range()) != Ok(span) {
+                return Err(PreparationError::Invalid);
+            }
+        }
+        pairs.push(pair);
+    }
+    Ok(sorted_unique(pairs, |pair| pair.current, work)?.into_boxed_slice())
 }
 
 impl CheckedOwnerOrders {

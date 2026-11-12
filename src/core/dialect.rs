@@ -1782,6 +1782,7 @@ pub(crate) struct CheckedFragmentNode<'a, F: CoreOperationFamily> {
 pub(super) struct GeneratedParameterAnchors {
     orders: crate::resolved::GeneratedParameterOrders,
     checked_owners: checked_owner_anchors::CheckedOwnerOrders,
+    nominal_pairs: Box<[checked_owner_anchors::OriginalNominalPair]>,
 }
 
 impl GeneratedParameterAnchors {
@@ -1797,6 +1798,8 @@ impl GeneratedParameterAnchors {
             module_sources,
             work,
         )?;
+        let nominal_pairs =
+            checked_owner_anchors::prepare_nominal_pairs(linked, &checked_owners, sources, work)?;
         let mut order_count = 0usize;
         for group in linked.groups() {
             work.charge(1)
@@ -1830,6 +1833,7 @@ impl GeneratedParameterAnchors {
         Ok(Self {
             orders,
             checked_owners,
+            nominal_pairs,
         })
     }
 
@@ -1839,6 +1843,10 @@ impl GeneratedParameterAnchors {
 
     pub(super) fn checked_owners(&self) -> &checked_owner_anchors::CheckedOwnerOrders {
         &self.checked_owners
+    }
+
+    pub(super) fn nominal_pairs(&self) -> &[checked_owner_anchors::OriginalNominalPair] {
+        &self.nominal_pairs
     }
 }
 
@@ -2145,6 +2153,12 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
 
     pub(super) fn generated_parameter_anchors(&self) -> &Arc<GeneratedParameterAnchors> {
         &self.0.generated_parameter_anchors
+    }
+
+    pub(crate) fn checked_original_nominal_pairs(
+        &self,
+    ) -> &[checked_owner_anchors::OriginalNominalPair] {
+        self.0.generated_parameter_anchors.nominal_pairs()
     }
 }
 

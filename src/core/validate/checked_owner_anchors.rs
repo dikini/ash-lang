@@ -114,7 +114,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_module = None;
         for module in modules {
             self.charge_type_work(1)?;
-            if !module.module.is_admitted_source()
+            if !(module.module.is_admitted_source()
+                || module.module == ModuleId::from(module.source))
                 || previous_module.is_some_and(|previous| previous >= module.module)
                 || !self.sources.contains_key(&module.source)
                 || self.module_sources.as_ref().is_some_and(|relation| {
@@ -242,7 +243,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         // The reverse direction refuses active source owners absent from the originals.
         for (id, _) in registry.image_interface_owner_definitions() {
             self.charge_type_work(1)?;
-            if id.module().is_admitted_source()
+            if (id.module().is_admitted_source() || id.module().is_direct_core_source())
                 && self.original_row(OriginalOwner::Interface(id))?.is_none()
             {
                 return Err(invalid());
@@ -250,7 +251,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         for method in catalog.methods() {
             self.charge_type_work(1)?;
-            if method.id.interface().module().is_admitted_source()
+            if (method.id.interface().module().is_admitted_source()
+                || method.id.interface().module().is_direct_core_source())
                 && self
                     .original_row(OriginalOwner::Method(method.id))?
                     .is_none()
@@ -263,7 +265,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if row
                 .owner()
                 .module()
-                .is_some_and(ModuleId::is_admitted_source)
+                .is_some_and(|module| module.is_admitted_source() || module.is_direct_core_source())
                 && self
                     .original_row(OriginalOwner::Global(row.owner()))?
                     .is_none()
