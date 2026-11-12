@@ -33439,12 +33439,14 @@ mod tests {
             let changed = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
             assert!(changed.range().start() >= pair.previous_source.range().start());
             assert!(changed.range().end() <= pair.previous_source.range().end());
-            let registry = Arc::make_mut(&mut program.registry);
-            assert!(registry.replace_nominal_invocation_for_core_test(
-                pair.current,
-                pair.invocation,
-                changed,
-            ));
+            assert!(
+                Arc::make_mut(&mut program.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed,
+                )
+            );
+            let registry = program.registry.as_ref();
             let previous = registry.nominal(pair.previous).unwrap();
             let current = registry.nominal(pair.current).unwrap();
             assert_eq!(previous.origin, Origin::Source(pair.previous_source));
