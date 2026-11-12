@@ -124,6 +124,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     let definition = surface.definitions.pop().unwrap();
 
     let slot = RefCell::new(None);
+    let caller_slot = RefCell::new(None);
     let loan = StagedModuleLoan {
         id: staged.id,
         source_id: staged.source.id(),
@@ -132,6 +133,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
         dependencies: &staged.dependencies,
         span: staged.surface.span,
         source_snapshot: &slot,
+        caller_quote_owner: &caller_slot,
         quote_projection: None,
     };
     let mut measured = SyntaxBudget::default();
@@ -156,6 +158,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     assert!(weak.upgrade().is_none());
 
     let slot = RefCell::new(None);
+    let caller_slot = RefCell::new(None);
     let loan = StagedModuleLoan {
         id: staged.id,
         source_id: staged.source.id(),
@@ -164,6 +167,7 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
         dependencies: &staged.dependencies,
         span: staged.surface.span,
         source_snapshot: &slot,
+        caller_quote_owner: &caller_slot,
         quote_projection: None,
     };
     let mut short = SyntaxBudget::with_limit(used - 1);
@@ -216,6 +220,7 @@ fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
         }
         let source_id = graph.pending.front().unwrap().source.id();
         let observed = RefCell::new(None);
+        let observed_owner = RefCell::new(None);
         let mut callback = |_: &crate::syntax::SelectedSyntax,
                             _: crate::syntax::DeclarationAdapter<'_>,
                             _: &[crate::surface::SurfaceSyntaxCapture],
@@ -231,6 +236,11 @@ fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
                 .retained_source(source, budget)
                 .map_err(|_| caller.span)?;
             *observed.borrow_mut() = Some(Arc::downgrade(&retained));
+            let owner = loan
+                .retain_caller_quote_owner(source, std::slice::from_ref(&selection), budget)
+                .map_err(|_| caller.span)?
+                .ok_or(caller.span)?;
+            *observed_owner.borrow_mut() = Some(Arc::downgrade(&owner));
             if fail {
                 Err(caller.span)
             } else {
@@ -247,12 +257,14 @@ fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
             .borrow_mut()
             .take()
             .unwrap_or_else(|| panic!("the real staged callback did not run: {result:?}"));
+        let owner = observed_owner.borrow_mut().take().unwrap();
         if fail {
             let failure = result.unwrap_err();
             assert!(
                 matches!(failure.failure(), LoadGraphError::Projection { source, .. } if source.id() == source_id)
             );
             assert!(weak.upgrade().is_none());
+            assert!(owner.upgrade().is_none());
             assert!(graph.loaded.is_empty());
         } else {
             let loaded = result.unwrap().unwrap();
@@ -261,8 +273,140 @@ fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
                 .expect("the final module retains the snapshot");
             assert!(Arc::ptr_eq(&source, loaded.retained_source()));
             assert_eq!(loaded.source().id(), source_id);
+            assert!(Arc::ptr_eq(
+                &owner.upgrade().unwrap(),
+                loaded.caller_quote_owner().unwrap(),
+            ));
+            assert!(loaded.clone().caller_quote_owner().is_none());
         }
     }
+}
+
+#[test]
+fn caller_quote_record_snapshot_is_prepaid_shared_and_retryable() {
+    use std::{cell::RefCell, sync::Arc};
+
+    let definition_source = SourceFile::new(
+        "forms.ash",
+        "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = $next\n} with {\n$next from 0 step advance\n}\n",
+    ).unwrap();
+    let tree = crate::parser::parse(crate::lexer::lex(&definition_source).unwrap());
+    let mut module = crate::parser::project_declaration_expansions(
+        &definition_source,
+        &tree,
+        &[],
+        &[],
+        &mut Vec::new(),
+        &mut SyntaxBudget::default(),
+        None,
+    )
+    .unwrap();
+    let declaration = module.syntax_declarations.remove(0);
+    let selection = crate::syntax::SelectedSyntax {
+        name: "make".into(),
+        owner: 0,
+        import_span: declaration.span,
+        declaration,
+    };
+    let retained_generators = selection.declaration.generators.as_ref().unwrap();
+    let baseline = Arc::strong_count(retained_generators);
+    let fixture = Tree::new();
+    let entry = fixture.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
+    let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let staged = graph
+        .pending
+        .iter()
+        .find(|module| module.canonical_path == entry)
+        .unwrap();
+    let run = |limit| {
+        let source_slot = RefCell::new(None);
+        let owner_slot = RefCell::new(None);
+        let loan = StagedModuleLoan {
+            id: staged.id,
+            source_id: staged.source.id(),
+            canonical_path: &staged.canonical_path,
+            imports: &staged.surface.imports,
+            dependencies: &staged.dependencies,
+            span: staged.surface.span,
+            source_snapshot: &source_slot,
+            caller_quote_owner: &owner_slot,
+            quote_projection: None,
+        };
+        let mut budget = SyntaxBudget::with_limit(limit);
+        budget.charge_units(17).unwrap();
+        let owner = loan.retain_caller_quote_owner(
+            &staged.source,
+            std::slice::from_ref(&selection),
+            &mut budget,
+        );
+        let used = budget.consumed();
+        match owner {
+            Ok(Some(owner)) => {
+                assert!(Arc::ptr_eq(
+                    &owner.source,
+                    source_slot.borrow().as_ref().unwrap()
+                ));
+                assert_eq!(owner.module, staged.id);
+                assert_eq!(owner.selected.len(), 1);
+                assert_eq!(Arc::strong_count(retained_generators), baseline + 1);
+                let weak = Arc::downgrade(&owner);
+                drop(owner);
+                drop(loan);
+                drop(owner_slot);
+                drop(source_slot);
+                assert!(weak.upgrade().is_none());
+                assert_eq!(Arc::strong_count(retained_generators), baseline);
+                (true, used)
+            }
+            Err(ResourceFailure::SyntaxWork { .. }) => {
+                assert!(source_slot.borrow().is_none());
+                assert!(owner_slot.borrow().is_none());
+                assert_eq!(Arc::strong_count(retained_generators), baseline);
+                (false, used)
+            }
+            _ => panic!("unexpected caller-record result"),
+        }
+    };
+    let (ok, exact) = run(usize::MAX);
+    assert!(ok && exact > 17);
+    assert!(!run(exact - 1).0);
+    for _ in 0..2 {
+        assert_eq!(run(exact), (true, exact));
+    }
+    let source_slot = RefCell::new(None);
+    let owner_slot = RefCell::new(None);
+    let loan = StagedModuleLoan {
+        id: staged.id,
+        source_id: staged.source.id(),
+        canonical_path: &staged.canonical_path,
+        imports: &staged.surface.imports,
+        dependencies: &staged.dependencies,
+        span: staged.surface.span,
+        source_snapshot: &source_slot,
+        caller_quote_owner: &owner_slot,
+        quote_projection: None,
+    };
+    let mut budget = SyntaxBudget::default();
+    let first = loan
+        .retain_caller_quote_owner(
+            &staged.source,
+            std::slice::from_ref(&selection),
+            &mut budget,
+        )
+        .unwrap()
+        .unwrap();
+    let before_retry = budget.consumed();
+    let second = loan
+        .retain_caller_quote_owner(
+            &staged.source,
+            std::slice::from_ref(&selection),
+            &mut budget,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(budget.consumed(), before_retry + 1);
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(Arc::strong_count(retained_generators), baseline + 1);
 }
 
 #[test]

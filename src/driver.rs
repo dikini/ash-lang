@@ -1655,6 +1655,7 @@ where
                     return Err(internal_file_failure());
                 }
                 Ok(crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: Some(owner),
                     declaration: dependency.span(),
                     import_span: edge.import_span(),
@@ -2035,6 +2036,8 @@ where
                         .ok_or_else(internal_file_failure)?;
                     budget
                         .charge_units(syntax_owners.len())
+                        .map_err(quote_resource_failure)?;
+                    crate::syntax::charge_caller_owner_retains(&syntax_owners, budget)
                         .map_err(quote_resource_failure)?;
                     syntax_owners.clone()
                 } else {
@@ -2769,6 +2772,7 @@ fn evaluate_generator_transformer(
         owners.reserve_exact(1);
     }
     owners.push(crate::syntax::SyntaxOwner {
+        caller_quote_owner: None,
         owner: Some(builtin_index),
         declaration: builtin.span(),
         import_span: route.import_span(),
@@ -2855,6 +2859,16 @@ fn evaluate_generator_transformer(
         })),
         crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
     })?;
+    let caller_quote_owner = if quote_sites.is_empty() {
+        None
+    } else {
+        Some(
+            staged
+                .retain_caller_quote_owner(source, selected, budget)
+                .map_err(quote_resource_failure)?
+                .ok_or_else(internal_file_failure)?,
+        )
+    };
     let quote_introduction = if quote_sites.is_empty() {
         None
     } else {
@@ -2885,6 +2899,7 @@ fn evaluate_generator_transformer(
     budget
         .charge_units(owners.len())
         .map_err(quote_resource_failure)?;
+    crate::syntax::charge_caller_owner_retains(owners, budget).map_err(quote_resource_failure)?;
     let mut nested =
         |_: &crate::syntax::SelectedSyntax,
          _: &[crate::surface::SurfaceSyntaxCapture],
@@ -2967,6 +2982,9 @@ fn evaluate_generator_transformer(
         &local,
         constraint_work,
         Some(&mut *budget),
+        caller_quote_owner
+            .as_ref()
+            .map(|owner| (owner, module.quote_sites())),
     )?;
     budget.charge().map_err(quote_resource_failure)?;
     #[cfg(test)]
@@ -3037,6 +3055,7 @@ fn evaluate_selected_transformer(
                 checked,
                 constraint_work,
                 syntax_work.as_deref_mut(),
+                None,
             )?)
         }
     };
@@ -3110,12 +3129,45 @@ fn transformer_owner_and_binder<'a>(
     Ok((owner, binder))
 }
 
+fn is_caller_quote_site(
+    owner: ModuleId,
+    template: &Arc<crate::syntax::QuoteTemplate>,
+    caller_quotes: Option<(
+        &Arc<crate::syntax::CallerQuoteOwner>,
+        &[crate::syntax::SurfaceQuoteSite],
+    )>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, FileFailure> {
+    let Some((caller, sites)) = caller_quotes else {
+        return Ok(false);
+    };
+    for site in sites {
+        budget.charge().map_err(quote_resource_failure)?;
+        if Arc::ptr_eq(&site.template, template) {
+            if owner != caller.module || template.origin.source() != caller.source.id() {
+                return Err(internal_file_failure());
+            }
+            return Ok(true);
+        }
+    }
+    if owner == caller.module {
+        // A site in the partial adapter cannot acquire its checked owner as
+        // a substitute for the actual rebuilt caller quote association.
+        return Err(internal_file_failure());
+    }
+    Ok(false)
+}
+
 fn prepare_transformer_entry(
     owner: &crate::resolved::CheckedModule,
     binder: crate::resolved::BinderId,
     checked: &[Arc<crate::resolved::CheckedModule>],
     constraint_work: &mut InterfaceConstraintBudget,
     mut syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    caller_quotes: Option<(
+        &Arc<crate::syntax::CallerQuoteOwner>,
+        &[crate::syntax::SurfaceQuoteSite],
+    )>,
 ) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
     #[cfg(test)]
     TRANSFORMER_ENTRY_PREPARATIONS.set(TRANSFORMER_ENTRY_PREPARATIONS.get() + 1);
@@ -3221,6 +3273,8 @@ fn prepare_transformer_entry(
             .try_reserve_exact(quote_sites.len())
             .map_err(|_| internal_file_failure())?;
         for nodes in quote_sites {
+            let is_caller_quote =
+                is_caller_quote_site(nodes.owner, &nodes.template, caller_quotes, budget)?;
             let mut owner_index = None;
             for (index, checked_owner) in checked.iter().enumerate() {
                 budget.charge().map_err(quote_resource_failure)?;
@@ -3239,10 +3293,22 @@ fn prepare_transformer_entry(
                     break;
                 }
             }
+            let source = source.ok_or_else(internal_file_failure)?;
+            let caller_quote_owner = if is_caller_quote {
+                let (caller, _) = caller_quotes.ok_or_else(internal_file_failure)?;
+                if !Arc::ptr_eq(&source, &caller.source) {
+                    return Err(internal_file_failure());
+                }
+                budget.charge().map_err(quote_resource_failure)?;
+                Some(Arc::clone(caller))
+            } else {
+                None
+            };
             prepared.push(crate::syntax::PreparedQuoteSite {
                 nodes,
                 owner: owner_index,
-                source: source.ok_or_else(internal_file_failure)?,
+                caller_quote_owner,
+                source,
             });
         }
         budget
@@ -5562,6 +5628,194 @@ mod tests {
         static FAILURE_OUTPUTS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
+        static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn observe_caller_quote_reference(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{SurfaceExprKind, SurfaceReference},
+            syntax::MacroOutputNode,
+        };
+        if selection.declaration.name.text != "make" {
+            return;
+        }
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        let [MacroOutputNode::Expression(capture, _)] = output else {
+            panic!("the reached generator returns one expression");
+        };
+        let SurfaceExprKind::Apply(application) = &capture.expression.kind else {
+            panic!("the caller quote contains the original application");
+        };
+        let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &application.function.kind
+        else {
+            panic!("the caller quote retains its number reference");
+        };
+        assert_eq!(name.text, "number");
+        assert_ne!(name.introduction, 0);
+        CALLER_QUOTE_REFERENCES.with(|slot| slot.borrow_mut().push((name.introduction, name.span)));
+    }
+
+    #[test]
+    fn caller_quote_site_requires_the_exact_rebuilt_template() {
+        use crate::{
+            source::{ByteRange, SourceFile},
+            syntax::{CallerQuoteOwner, QuoteTemplate, SurfaceQuoteSite},
+            syntax_resource::SyntaxBudget,
+        };
+        let source = Arc::new(SourceFile::new("caller-site.ash", "quote").unwrap());
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let module = ModuleId::new(90_501);
+        let caller = Arc::new(CallerQuoteOwner {
+            module,
+            source: Arc::clone(&source),
+            selected: Arc::from([]),
+        });
+        let template = Arc::new(QuoteTemplate {
+            ordinal: 7,
+            origin: span,
+            contents: Box::new([]),
+            holes: 0,
+        });
+        let same_shape = Arc::new(QuoteTemplate {
+            ordinal: 7,
+            origin: span,
+            contents: Box::new([]),
+            holes: 0,
+        });
+        let sites = [SurfaceQuoteSite {
+            callee: 1,
+            template: Arc::clone(&template),
+        }];
+        let run = |owner, checked: &Arc<QuoteTemplate>, limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let result = is_caller_quote_site(owner, checked, Some((&caller, &sites)), &mut budget);
+            (result, budget.consumed())
+        };
+        let (matched, exact) = run(module, &template, usize::MAX);
+        assert!(matched.unwrap());
+        assert_eq!(exact, 18);
+        assert!(run(module, &template, exact - 1).0.is_err());
+        for _ in 0..2 {
+            let (result, used) = run(module, &template, exact);
+            assert!(result.unwrap());
+            assert_eq!(used, exact);
+        }
+        assert!(run(module, &same_shape, usize::MAX).0.is_err());
+        assert!(run(ModuleId::new(90_502), &template, usize::MAX).0.is_err());
+        assert!(
+            !run(ModuleId::new(90_502), &same_shape, usize::MAX)
+                .0
+                .unwrap()
+        );
+        let foreign_source = Arc::new(SourceFile::new("foreign-site.ash", "quote").unwrap());
+        let foreign_caller = Arc::new(CallerQuoteOwner {
+            module,
+            source: foreign_source,
+            selected: Arc::from([]),
+        });
+        assert!(
+            is_caller_quote_site(
+                module,
+                &template,
+                Some((&foreign_caller, &sites)),
+                &mut SyntaxBudget::default()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn caller_quote_references_keep_fresh_contexts_and_the_imported_binder() {
+        use crate::{
+            core::{EffectExprKind, PureComputation, PureExprKind},
+            eval::machine_test_hooks as hooks,
+        };
+
+        const CALLER: &str = "import forms (syntax make)\nimport api (number)\n\nmake starting_at syntax { number(()) } name one\nmake starting_at syntax { number(()) } name two\n\nmain : Unit -> Int\nmain () = one(()) + two(())\n";
+        const FORMS: &str = "import @builtin.compiler.syntax as Syntax\n\necho : Syntax.ExpressionFragment -> (Syntax.ExpressionFragment, Syntax.ExpressionFragment)\necho state = (state, state)\n\npub syntax declaration: (make) starting_at $start:expr name $name:ident => {\n    pub $name : Unit -> Int\n    $name () = $next\n} with {\n    $next from $start step echo\n}\n";
+        let source = TestSource::write(CALLER);
+        source.write_sibling("forms.ash", FORMS);
+        source.write_sibling("api.ash", "pub number : Unit -> Int\nnumber () = 42\n");
+        hooks::reset();
+        CALLER_QUOTE_REFERENCES.with(|slot| slot.borrow_mut().clear());
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_caller_quote_reference));
+        let compiled = compile_path(source.configuration()).expect("both caller quotes compile");
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let references =
+            CALLER_QUOTE_REFERENCES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(references.len(), 2);
+        assert_ne!(references[0].0, references[1].0);
+        assert_ne!(references[0].1, references[1].1);
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("validated linked program");
+        let api = provenance
+            .iter()
+            .find(|(_, source)| source.display_path().ends_with("api.ash"))
+            .unwrap()
+            .1
+            .as_ref();
+        let mut actual = std::collections::HashSet::new();
+        for node in program.nodes() {
+            let mut inspect = |binder: &crate::core::TypedBinder| {
+                let span = binder.origin().primary_span();
+                let range = span.range();
+                if span.source() == api.id()
+                    && api.text().get(range.start() as usize..range.end() as usize)
+                        == Some("number")
+                {
+                    actual.insert(binder.id());
+                }
+            };
+            match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    inspect(binding.binder())
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(group),
+                )) => {
+                    for member in group.members() {
+                        inspect(member.binder());
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            actual.len(),
+            1,
+            "the actual imported number binder is present"
+        );
+        let expected = *actual.iter().next().unwrap();
+        for (_, span) in references {
+            let matched = program
+                .nodes()
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if node.origin.primary_span() == span =>
+                    {
+                        Some(variable.binder())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !matched.is_empty(),
+                "the caller quote survives final linking"
+            );
+            assert!(matched.iter().all(|binder| *binder == expected));
+        }
+        assert_eq!(execute(&compiled).unwrap().value_display(), "84");
+        assert_generator_cleanup(1);
+        hooks::reset();
     }
 
     fn observe_generator_owner(
@@ -6829,11 +7083,12 @@ mod tests {
         ];
         let span = selected[0].import_span;
         let original = SyntaxOwner {
+            caller_quote_owner: None,
             owner: None,
             declaration: span,
             import_span: span,
         };
-        let mut owners = vec![original];
+        let mut owners = vec![original.clone()];
         let mut full = SyntaxBudget::default();
         DERIVE_WORK.with(|slot| slot.borrow_mut().clear());
         G1_CAPTURE_OBSERVER.set(Some(observe_derive_work));
@@ -6859,7 +7114,7 @@ mod tests {
         limits.sort_unstable();
         limits.dedup();
         for limit in limits {
-            let mut owners = vec![original];
+            let mut owners = vec![original.clone()];
             let mut short = SyntaxBudget::with_limit(limit);
             let failure = crate::parser::project_declaration_expansions(
                 &source,
@@ -6891,7 +7146,7 @@ mod tests {
                 (original.owner, original.declaration, original.import_span)
             );
         }
-        let mut owners = vec![original];
+        let mut owners = vec![original.clone()];
         let mut exact = SyntaxBudget::with_limit(total);
         let module = crate::parser::project_declaration_expansions(
             &source,

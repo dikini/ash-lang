@@ -3198,6 +3198,7 @@ fn prepare_staged_output(
     // Reserve the owner and frame before retaining either one.
     budget.charge_units(2)?;
     staged_owners.push(crate::syntax::SyntaxOwner {
+        caller_quote_owner: None,
         owner: Some(invocation.selection.owner),
         declaration: invocation.selection.declaration.span,
         import_span: invocation.selection.import_span,
@@ -3259,6 +3260,7 @@ fn prepare_staged_output(
                 .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
                 budget.charge_units(fresh_count)?;
                 staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: None,
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
@@ -3357,6 +3359,7 @@ fn prepare_staged_output(
             .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
             budget.charge_units(fresh_count)?;
             staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                caller_quote_owner: None,
                 owner: None,
                 declaration: invocation.selection.declaration.span,
                 import_span: invocation.selection.import_span,
@@ -3663,6 +3666,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
     }
     let span = node_span(source, root, &source_tokens)?;
     budget.charge_units(owners.len())?;
+    crate::syntax::charge_caller_owner_retains(owners, budget)?;
     let mut staged_owners = owners.clone();
     let contexts = crate::syntax::SyntaxContexts::new_budgeted(
         selected,
@@ -4020,6 +4024,7 @@ fn materialize_template_escapes(
                 .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
                 budget.charge_units(fresh_count)?;
                 owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
                     owner: None,
                     declaration: selection.declaration.span,
                     import_span: selection.import_span,
@@ -20227,11 +20232,12 @@ mod tests {
         let first_tree = h1_tree(&first, &selected);
         let tree = h1_tree(&source, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut prefix_owners = vec![existing];
+        let mut prefix_owners = vec![existing.clone()];
         let mut prefix = SyntaxBudget::default();
         let first_module = project_declaration_expansions(
             &first,
@@ -20246,7 +20252,7 @@ mod tests {
         assert_eq!(first_module.definitions.len(), 1);
         drop(first_module);
 
-        let mut measured_owners = vec![existing];
+        let mut measured_owners = vec![existing.clone()];
         let mut measured = SyntaxBudget::default();
         let module = project_declaration_expansions(
             &source,
@@ -20293,7 +20299,7 @@ mod tests {
         let used = measured.consumed();
         assert!(prefix.consumed() < used - 1);
 
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         let mut short = SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
             project_declaration_expansions(
@@ -20315,7 +20321,7 @@ mod tests {
         assert_eq!(owners[0].declaration, existing.declaration);
         assert_eq!(owners[0].import_span, existing.import_span);
 
-        let mut retry_owners = vec![existing];
+        let mut retry_owners = vec![existing.clone()];
         let mut exact = SyntaxBudget::with_limit(used);
         let retried = project_declaration_expansions(
             &source,
@@ -20378,11 +20384,12 @@ mod tests {
             .unwrap();
             let tree = h1_tree(&caller, &selected);
             let existing = crate::syntax::SyntaxOwner {
+                caller_quote_owner: None,
                 owner: Some(9),
                 declaration: before.declaration.span,
                 import_span: before.import_span,
             };
-            let mut owners = vec![existing];
+            let mut owners = vec![existing.clone()];
             let result = project_declaration_expansions(
                 &caller,
                 &tree,
@@ -20429,11 +20436,12 @@ mod tests {
         let first_tree = h1_tree(&first, &selected);
         let tree = h1_tree(&source, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut prefix_owners = vec![existing];
+        let mut prefix_owners = vec![existing.clone()];
         let mut prefix = crate::syntax_resource::SyntaxBudget::default();
         let first_module = project_declaration_expansions(
             &first,
@@ -20447,7 +20455,7 @@ mod tests {
         .unwrap();
         assert_eq!(first_module.definitions.len(), 1);
         drop(first_module);
-        let mut measured_owners = vec![existing];
+        let mut measured_owners = vec![existing.clone()];
         let mut measured = crate::syntax_resource::SyntaxBudget::default();
         let module = project_declaration_expansions(
             &source,
@@ -20465,7 +20473,7 @@ mod tests {
         assert!(prefix.consumed() < used - 1);
         drop(module);
 
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
             project_declaration_expansions(
@@ -20486,7 +20494,7 @@ mod tests {
         assert_eq!(owners[0].owner, existing.owner);
         assert_eq!(owners[0].declaration, existing.declaration);
         assert_eq!(owners[0].import_span, existing.import_span);
-        let mut exact_owners = vec![existing];
+        let mut exact_owners = vec![existing.clone()];
         let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
         let module = project_declaration_expansions(
             &source,
@@ -20675,11 +20683,12 @@ mod tests {
         let caller = SourceFile::new("caller.ash", "make good\nmake Upper\n").unwrap();
         let tree = h1_tree(&caller, &selected);
         let existing = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected[0].declaration.span,
             import_span: selected[0].import_span,
         };
-        let mut owners = vec![existing];
+        let mut owners = vec![existing.clone()];
         assert!(
             project_declaration_expansions(
                 &caller,

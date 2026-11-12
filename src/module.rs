@@ -482,6 +482,7 @@ pub struct LoadedModule {
     dependencies: Box<[ModuleDependency]>,
     quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
     quote_introduction: Option<usize>,
+    caller_quote_owner: Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>,
 }
 
 // A cloned surface has different Box allocations. Its source syntax is still
@@ -496,6 +497,7 @@ impl Clone for LoadedModule {
             dependencies: self.dependencies.clone(),
             quote_sites: Vec::new(),
             quote_introduction: None,
+            caller_quote_owner: None,
         }
     }
 }
@@ -513,6 +515,19 @@ impl PartialEq for LoadedModule {
 impl Eq for LoadedModule {}
 
 impl LoadedModule {
+    pub(crate) fn caller_quote_owner(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::syntax::CallerQuoteOwner>> {
+        self.caller_quote_owner.as_ref()
+    }
+
+    fn into_source(mut self) -> SourceFile {
+        // The completed-module association must not keep this module's own
+        // source alive while attempting the existing move into diagnostics.
+        drop(self.caller_quote_owner.take());
+        std::sync::Arc::try_unwrap(self.source).unwrap_or_else(|source| (*source).clone())
+    }
+
     /// Returns this module's graph-local identity.
     #[must_use]
     pub const fn id(&self) -> ModuleId {
@@ -591,9 +606,7 @@ impl ModuleGraph {
         self.modules
             .into_vec()
             .into_iter()
-            .map(|module| {
-                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
-            })
+            .map(LoadedModule::into_source)
             .collect::<Vec<_>>()
             .into_boxed_slice()
     }
@@ -1468,6 +1481,8 @@ pub(crate) struct StagedModuleLoan<'a> {
     dependencies: &'a [ModuleDependency],
     span: Span,
     source_snapshot: &'a std::cell::RefCell<Option<std::sync::Arc<SourceFile>>>,
+    caller_quote_owner:
+        &'a std::cell::RefCell<Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>>,
     quote_projection: Option<&'a std::cell::RefCell<crate::parser::QuoteProjection>>,
 }
 
@@ -1515,6 +1530,35 @@ impl StagedModuleLoan<'_> {
         let result = std::sync::Arc::clone(&retained);
         *self.source_snapshot.borrow_mut() = Some(retained);
         Ok(result)
+    }
+
+    pub(crate) fn retain_caller_quote_owner(
+        &self,
+        source: &SourceFile,
+        selected: &[crate::syntax::SelectedSyntax],
+        budget: &mut SyntaxBudget,
+    ) -> Result<Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>, ResourceFailure> {
+        if source.id() != self.source_id {
+            return Ok(None);
+        }
+        if let Some(owner) = self.caller_quote_owner.borrow().as_ref() {
+            budget.charge()?;
+            return Ok(Some(std::sync::Arc::clone(owner)));
+        }
+        // Selection records, temporary/final slice slots, the record and its
+        // cached and returned Arc retains are paid before any construction.
+        budget.charge_units(selected.len().saturating_mul(2).saturating_add(3))?;
+        for selection in selected {
+            crate::syntax::charge_selected(selection, budget)?;
+        }
+        let retained = self.retained_source(source, budget)?;
+        let owner = std::sync::Arc::new(crate::syntax::CallerQuoteOwner {
+            module: self.id,
+            source: retained,
+            selected: std::sync::Arc::from(selected.to_vec().into_boxed_slice()),
+        });
+        *self.caller_quote_owner.borrow_mut() = Some(std::sync::Arc::clone(&owner));
+        Ok(Some(owner))
     }
 
     #[cfg(test)]
@@ -1613,6 +1657,7 @@ impl StagedModuleLoan<'_> {
             dependencies: self.dependencies.to_vec().into_boxed_slice(),
             quote_sites,
             quote_introduction,
+            caller_quote_owner: None,
         })
     }
 }
@@ -1671,6 +1716,7 @@ impl StagedModule {
         let mut completed_sites = Vec::new();
         let mut completed_quote_introduction = None;
         let source_snapshot = std::cell::RefCell::new(None);
+        let caller_quote_owner = std::cell::RefCell::new(None);
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1684,7 +1730,10 @@ impl StagedModule {
                     syntax,
                 );
                 *budget = retained;
-                if let Err(resource) = budget.charge_units(owners.len()) {
+                if let Err(resource) = budget
+                    .charge_units(owners.len())
+                    .and_then(|()| crate::syntax::charge_caller_owner_retains(owners, budget))
+                {
                     return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
                         lexical: Vec::new(),
                         parser: Vec::new(),
@@ -1735,6 +1784,7 @@ impl StagedModule {
                         dependencies: &self.dependencies,
                         span,
                         source_snapshot: &source_snapshot,
+                        caller_quote_owner: &caller_quote_owner,
                         quote_projection: quote_projection.as_ref(),
                     };
                     let enabled = transformer.is_some();
@@ -1807,6 +1857,7 @@ impl StagedModule {
                 import_span,
             });
         }
+        let caller_quote_owner = caller_quote_owner.into_inner();
         if let Some(staged_owners) = completed_owners {
             *owners = staged_owners;
         }
@@ -1822,6 +1873,7 @@ impl StagedModule {
             dependencies: self.dependencies.into_boxed_slice(),
             quote_sites: completed_sites,
             quote_introduction: completed_quote_introduction,
+            caller_quote_owner,
         })
     }
 }
@@ -1950,10 +2002,7 @@ impl HeaderGraph {
                     failure: Box::new(failure),
                     sources: loaded
                         .into_iter()
-                        .map(|module| {
-                            std::sync::Arc::try_unwrap(module.source)
-                                .unwrap_or_else(|source| (*source).clone())
-                        })
+                        .map(LoadedModule::into_source)
                         .chain(pending.into_iter().map(|module| module.source))
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
@@ -1989,9 +2038,7 @@ impl HeaderGraph {
         }
         self.loaded
             .into_iter()
-            .map(|module| {
-                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
-            })
+            .map(LoadedModule::into_source)
             .chain(self.pending.into_iter().map(|module| module.source))
             .collect::<Vec<_>>()
             .into_boxed_slice()
@@ -3566,11 +3613,12 @@ mod tests {
             .span(crate::source::ByteRange::new(0, 0).unwrap())
             .unwrap();
         let previous = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
             owner: Some(9),
             declaration: selected.declaration.span,
             import_span: selected.import_span,
         };
-        let mut owners = vec![previous];
+        let mut owners = vec![previous.clone()];
         let error = graph
             .next_module_with_syntax(&[selected], &[], &mut owners, None)
             .unwrap_err();
@@ -3818,6 +3866,291 @@ mod tests {
         assert!(!failure.is_source_rejection());
     }
 
+    #[test]
+    fn caller_quote_name_authenticates_completed_module_and_keeps_lexical_precedence() {
+        use crate::{
+            interface::InterfaceConstraintBudget,
+            resolve::{ResolveModuleError, ResolveReason, resolve_module_with_syntax},
+            resolved::{
+                ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
+                ResolvedPatternKind,
+            },
+            surface::{
+                SurfaceDefinitionKind, SurfaceExprKind, SurfaceLocalDeclaration,
+                SurfacePatternKind, SurfaceReference,
+            },
+            syntax::{CallerQuoteOwner, SyntaxExpansion, SyntaxOwner},
+            types::TypeWorkBudget,
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        #[derive(Clone, Copy)]
+        enum Case {
+            Valid,
+            Local,
+            WrongModule,
+            CopiedSource,
+            SwappedRecord,
+            Missing,
+            Clone,
+            Adapter,
+        }
+
+        let run = |case: Case, limit: usize| {
+            let source = Arc::new(SourceFile::new(
+                "caller-quote-auth.ash",
+                "value : Unit -> Int\nvalue () = 42\nmain : Unit -> Int\nmain () = {\n    let value = 99\n    value\n}\n",
+            ).unwrap());
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let mut surface = crate::parser::project_module(&source, &tree).unwrap();
+            let span = surface.span;
+            let main = surface
+                .definitions
+                .iter_mut()
+                .find_map(|definition| match &mut definition.kind {
+                    SurfaceDefinitionKind::Equational(global)
+                        if global.interface.name.text == "main" =>
+                    {
+                        Some(global)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let SurfaceExprKind::Block(block) = &mut main.equations[0].body.kind else {
+                panic!("main block")
+            };
+            let SurfaceExprKind::Name(SurfaceReference::Unqualified(reference)) =
+                &mut block.result.kind
+            else {
+                panic!("block reference")
+            };
+            reference.introduction = 1;
+            reference.introduced_at = Some(span);
+            reference.written = false;
+            if matches!(case, Case::Local) {
+                let [SurfaceLocalDeclaration::Binding(binding)] = block.declarations.as_mut_slice()
+                else {
+                    panic!("local binding")
+                };
+                let SurfacePatternKind::Binder(binder) = &mut binding.pattern.kind else {
+                    panic!("local binder")
+                };
+                binder.name.introduction = 1;
+                binder.name.introduced_at = Some(span);
+                binder.name.written = false;
+            }
+            let id = ModuleId::new(90_399);
+            let owner = Arc::new(CallerQuoteOwner {
+                module: if matches!(case, Case::WrongModule) {
+                    ModuleId::new(90_400)
+                } else {
+                    id
+                },
+                source: if matches!(case, Case::CopiedSource) {
+                    Arc::new(source.as_ref().clone())
+                } else {
+                    Arc::clone(&source)
+                },
+                selected: Arc::from([]),
+            });
+            let completed = if matches!(case, Case::SwappedRecord) {
+                Arc::new(CallerQuoteOwner {
+                    module: id,
+                    source: Arc::clone(&source),
+                    selected: Arc::from([]),
+                })
+            } else {
+                Arc::clone(&owner)
+            };
+            let mut loaded = LoadedModule {
+                id,
+                canonical_path: PathBuf::from("caller-quote-auth.ash"),
+                source: Arc::clone(&source),
+                surface,
+                dependencies: Box::new([]),
+                quote_sites: Vec::new(),
+                quote_introduction: None,
+                caller_quote_owner: (!matches!(case, Case::Missing)).then_some(completed),
+            };
+            if matches!(case, Case::Clone) {
+                loaded = loaded.clone();
+            }
+            if matches!(case, Case::Adapter) {
+                let source_slot = RefCell::new(Some(Arc::clone(&source)));
+                let owner_slot = RefCell::new(Some(Arc::clone(&owner)));
+                let loan = StagedModuleLoan {
+                    id,
+                    source_id: source.id(),
+                    canonical_path: &loaded.canonical_path,
+                    imports: &loaded.surface.imports,
+                    dependencies: &loaded.dependencies,
+                    span,
+                    source_snapshot: &source_slot,
+                    caller_quote_owner: &owner_slot,
+                    quote_projection: None,
+                };
+                let definition = loaded.surface.definitions.iter().find(|definition| matches!(&definition.kind,
+                    SurfaceDefinitionKind::Equational(global) if global.interface.name.text == "main")).unwrap().clone();
+                loaded = loan
+                    .no_quote_adapter_view(&source, definition, &mut SyntaxBudget::default())
+                    .unwrap();
+                assert!(Arc::ptr_eq(loaded.retained_source(), &owner.source));
+            }
+            let mut transformer =
+                |_: &crate::syntax::SelectedSyntax,
+                 _: &[crate::surface::SurfaceSyntaxCapture],
+                 span: Span,
+                 _: &crate::surface::SurfaceName,
+                 _: usize,
+                 _: &[Option<usize>],
+                 _: &Arc<crate::syntax::ExpansionFrame>,
+                 _: &mut InterfaceConstraintBudget,
+                 _: Option<crate::syntax::QuoteExpansionLoan<'_>>|
+                 -> Result<(crate::syntax::ExpandedExpression, usize), Span> {
+                    Err(span)
+                };
+            let mut expansion = SyntaxExpansion::new(
+                loaded.source(),
+                &[],
+                &[],
+                vec![SyntaxOwner {
+                    owner: None,
+                    caller_quote_owner: Some(owner),
+                    declaration: span,
+                    import_span: span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let result = resolve_module_with_syntax(
+                &loaded,
+                &[],
+                &mut work,
+                &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+                &[],
+                &[],
+                &[],
+                Some(&mut expansion),
+            );
+            (result, work.used())
+        };
+
+        let (resolved, exact) = run(Case::Valid, usize::MAX);
+        let resolved = resolved.expect("authenticated current caller resolves");
+        let global = resolved
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "value" =>
+                {
+                    Some(global.interface.name.id)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let main = resolved
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "main" =>
+                {
+                    Some(global)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+            panic!("resolved main block")
+        };
+        let [ResolvedLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+            panic!("resolved local")
+        };
+        let ResolvedPatternKind::Binder(local) = &binding.pattern.kind else {
+            panic!("resolved binder")
+        };
+        let ResolvedExprKind::Occurrence(reference) = &block.result.kind else {
+            panic!("resolved reference")
+        };
+        assert_eq!(reference.global_binder(), Some(global));
+        assert_ne!(reference.global_binder(), Some(local.id));
+        let (local, _) = run(Case::Local, usize::MAX);
+        let local = local.unwrap();
+        let main = local
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "main" =>
+                {
+                    Some(global)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+            panic!("resolved main block")
+        };
+        let [ResolvedLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+            panic!("resolved local")
+        };
+        let ResolvedPatternKind::Binder(local) = &binding.pattern.kind else {
+            panic!("resolved binder")
+        };
+        let ResolvedExprKind::Occurrence(reference) = &block.result.kind else {
+            panic!("resolved reference")
+        };
+        assert_eq!(reference.global_binder(), Some(local.id));
+
+        for case in [
+            Case::WrongModule,
+            Case::CopiedSource,
+            Case::SwappedRecord,
+            Case::Missing,
+            Case::Clone,
+            Case::Adapter,
+        ] {
+            let (result, _) = run(case, usize::MAX);
+            assert!(
+                matches!(result, Err(ResolveModuleError::Resolution(error)) if error.reason == ResolveReason::InternalState)
+            );
+        }
+        assert!(matches!(run(Case::Valid, exact - 1).0,
+            Err(ResolveModuleError::Resolution(error)) if error.reason == ResolveReason::TypeResourceExhausted));
+        for _ in 0..2 {
+            let (result, used) = run(Case::Valid, exact);
+            result.expect("fresh exact retry resolves");
+            assert_eq!(used, exact);
+        }
+    }
+
+    #[test]
+    fn completed_caller_record_releases_its_source_before_extraction() {
+        use std::sync::Arc;
+        for external in [false, true] {
+            let mut module = loaded_module_for_lookup(ModuleId::new(90_401), "source-move.ash");
+            let original_pointer = module.source.text().as_ptr();
+            module.caller_quote_owner = Some(Arc::new(crate::syntax::CallerQuoteOwner {
+                module: module.id,
+                source: Arc::clone(&module.source),
+                selected: Arc::from([]),
+            }));
+            let clone = module.clone();
+            assert!(clone.caller_quote_owner.is_none());
+            drop(clone);
+            let outside = external.then(|| Arc::clone(module.caller_quote_owner.as_ref().unwrap()));
+            let weak = Arc::downgrade(module.caller_quote_owner.as_ref().unwrap());
+            let source = module.into_source();
+            assert_eq!(source.text().as_ptr() == original_pointer, !external);
+            assert_eq!(weak.upgrade().is_some(), external);
+            drop(outside);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
     fn loaded_module_for_lookup(id: ModuleId, name: &str) -> LoadedModule {
         let source = SourceFile::new(name, "main : Unit -> Unit\nmain value = value\n")
             .expect("test module source");
@@ -3845,6 +4178,7 @@ mod tests {
             dependencies: Box::new([]),
             quote_sites: Vec::new(),
             quote_introduction: None,
+            caller_quote_owner: None,
         }
     }
 }
