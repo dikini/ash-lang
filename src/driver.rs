@@ -1508,6 +1508,7 @@ fn check_loaded_module(check: impl FnOnce() -> Result<(), FileFailure>) -> Resul
 fn select_imported_syntax<'a>(
     imports: &[SurfaceImport],
     edges: &[crate::module::ModuleDependency],
+    work: &mut TypeWorkBudget,
     mut exports: impl FnMut(
         ModuleId,
     ) -> Result<
@@ -1542,7 +1543,7 @@ fn select_imported_syntax<'a>(
                 .any(|selection: &crate::syntax::SelectedSyntax| selection.name == local.text)
             {
                 return Err(FileFailure::from(PipelineFailure::Resolution(
-                    crate::resolve::duplicate_syntax_import(local),
+                    crate::resolve::duplicate_syntax_import(local, work),
                 )));
             }
             selected.push(crate::syntax::SelectedSyntax {
@@ -1628,7 +1629,7 @@ where
     let mut coverage_work = UsefulnessBudget::default();
     while input.has_next() {
         let selected = if let Some((imports, edges)) = input.next_imports() {
-            select_imported_syntax(imports, edges, |target| {
+            select_imported_syntax(imports, edges, &mut checking_type_work, |target| {
                 let index = *checked_by_module
                     .get(&target)
                     .ok_or_else(internal_file_failure)?;
@@ -3825,7 +3826,7 @@ mod tests {
         dependencies: &[(ModuleId, Vec<crate::surface::SurfaceSyntaxDeclaration>)],
     ) -> Result<Vec<crate::syntax::SelectedSyntax>, FileFailure> {
         let (imports, edges) = graph.next_imports().expect("fixture importer");
-        select_imported_syntax(imports, edges, |target| {
+        select_imported_syntax(imports, edges, &mut TypeWorkBudget::default(), |target| {
             let owner = dependencies
                 .iter()
                 .position(|(module, _)| *module == target)
@@ -3987,7 +3988,95 @@ mod tests {
         };
         assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
         assert_eq!(error.primary.span(), name.span);
+        assert_eq!(error.found.as_deref(), Some("declaration"));
         assert_eq!(name.text, "declaration");
+    }
+
+    #[test]
+    fn i21_collision_spelling_uses_the_continuing_work_budget() {
+        let mut graph = i21_graph("collision.ash");
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, edges) = graph.next_imports().unwrap();
+        let SurfaceImportSelection::Targeted(items) = &imports[1].selection else {
+            panic!("the original collision has a targeted import")
+        };
+        let [SurfaceImportItem::Syntax { name, .. }] = items.as_slice() else {
+            panic!("the original collision selects one syntax")
+        };
+        let choose = |work: &mut TypeWorkBudget| {
+            select_imported_syntax(imports, edges, work, |target| {
+                let owner = dependencies
+                    .iter()
+                    .position(|(module, _)| *module == target)
+                    .ok_or_else(internal_file_failure)?;
+                Ok((owner, dependencies[owner].1.as_slice()))
+            })
+        };
+        let mut measured = TypeWorkBudget::with_limit(100_000);
+        let failure = choose(&mut measured).unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("the original graph rejects the collision")
+        };
+        assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+        assert_eq!(error.primary.span(), name.span);
+        assert_eq!(error.found.as_deref(), Some("declaration"));
+        let cost = measured.used();
+        assert_eq!(cost, name.text.len());
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            let failure = choose(&mut short).unwrap_err();
+            let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+                panic!("the short spelling reservation is a resolution failure")
+            };
+            assert_eq!(
+                error.reason,
+                crate::resolve::ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(error.primary.span(), name.span);
+            assert_eq!(short.used(), prefix);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                let failure = choose(&mut exact).unwrap_err();
+                let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+                    panic!("the paid retry preserves the original conflict")
+                };
+                assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+                assert_eq!(error.primary.span(), name.span);
+                assert_eq!(error.found.as_deref(), Some("declaration"));
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+
+        let mut success_graph = i21_graph("both.ash");
+        let success_dependencies = projected_syntax_dependencies(&mut success_graph);
+        let (success_imports, success_edges) = success_graph.next_imports().unwrap();
+        let mut zero = TypeWorkBudget::with_limit(0);
+        let selected =
+            select_imported_syntax(success_imports, success_edges, &mut zero, |target| {
+                let owner = success_dependencies
+                    .iter()
+                    .position(|(module, _)| *module == target)
+                    .ok_or_else(internal_file_failure)?;
+                Ok((owner, success_dependencies[owner].1.as_slice()))
+            })
+            .unwrap();
+        assert_eq!(zero.used(), 0);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            ["declaration", "make_value"]
+        );
+        for (selection, import) in selected.iter().zip(success_imports) {
+            assert_eq!(
+                selection.declaration,
+                success_dependencies[selection.owner].1[0]
+            );
+            assert_eq!(selection.import_span, import.span);
+        }
     }
 
     #[test]
@@ -4017,10 +4106,11 @@ mod tests {
         let _dependencies = projected_syntax_dependencies(&mut graph);
         let (imports, edges) = graph.next_imports().unwrap();
         assert!(imports.is_empty());
-        let selected = select_imported_syntax(imports, edges, |_| {
-            panic!("an unimported local definition must not be looked up")
-        })
-        .unwrap();
+        let selected =
+            select_imported_syntax(imports, edges, &mut TypeWorkBudget::default(), |_| {
+                panic!("an unimported local definition must not be looked up")
+            })
+            .unwrap();
         assert!(selected.is_empty());
     }
 

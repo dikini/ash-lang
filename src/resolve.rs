@@ -16691,12 +16691,28 @@ pub(crate) fn unsupported_syntax_template(span: Span) -> ResolveError {
     )
 }
 
-pub(crate) fn duplicate_syntax_import(name: &SurfaceName) -> ResolveError {
-    error(
+pub(crate) fn duplicate_syntax_import(
+    name: &SurfaceName,
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "syntax import diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(
+            ResolveReason::TypeResourceExhausted,
+            name.span,
+            RESOURCE_MESSAGE,
+        );
+    }
+    let found = match try_clone_resolution_string(&name.text, name.span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(
         ResolveReason::ImportConflict,
-        name.span,
-        "this syntax spelling is already imported",
-    )
+        SourceLabel::new(name.span, "this syntax spelling is already imported"),
+    );
+    diagnostic.found = Some(found);
+    diagnostic.into()
 }
 
 fn lookup_error(
