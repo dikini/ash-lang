@@ -7212,169 +7212,202 @@ fn substitute_contents_at(
             continue;
         }
         let node = &mut contents[position];
-        match node {
-            MacroOutputNode::Splice(name) => {
-                if let Some(generator) = generator.as_deref_mut()
-                    && let Some(replacement) = generator.read(
-                        name,
-                        budget
-                            .as_deref_mut()
-                            .expect("generator substitution has a budget"),
-                    )?
-                {
-                    *node = replacement;
-                    position += 1;
-                    continue;
+        if let MacroOutputNode::Group(_, children, _) = node {
+            substitute_contents_at(
+                children,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+                indices,
+                budget,
+                generator_names,
+                generator.as_deref_mut(),
+                escapes,
+                admission_identifiers.as_deref_mut(),
+                escape_placeholders.as_deref_mut(),
+            )?;
+        } else {
+            substitute_leaf(
+                node,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+                indices,
+                budget,
+                generator.as_deref_mut(),
+                escapes,
+                admission_identifiers.as_deref_mut(),
+                escape_placeholders.as_deref_mut(),
+            )?;
+        }
+        position += 1;
+    }
+    Ok(())
+}
+
+// Leaf substitutions can carry large protected fragments. Keep their temporary
+// values out of every recursive group/repetition frame on the bounded stack.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn substitute_leaf(
+    node: &mut MacroOutputNode,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+    indices: &[usize],
+    budget: &mut Option<&mut SyntaxBudget>,
+    mut generator: Option<&mut GeneratorPlanner>,
+    escapes: Option<&Arc<[crate::surface::SurfaceTemplateEscape]>>,
+    mut admission_identifiers: Option<&mut Vec<SurfaceName>>,
+    mut escape_placeholders: Option<&mut Vec<SurfaceName>>,
+) -> Result<(), TemplateSubstitutionFailure> {
+    match node {
+        MacroOutputNode::Splice(name) => {
+            if let Some(generator) = generator.as_deref_mut()
+                && let Some(replacement) = generator.read(
+                    name,
+                    budget
+                        .as_deref_mut()
+                        .expect("generator substitution has a budget"),
+                )?
+            {
+                *node = replacement;
+                return Ok(());
+            }
+            let capture = match capture_by_name_at(name, matcher, captures, indices) {
+                Ok(capture) => capture,
+                Err(CaptureLookupFailure::Unknown(name)) => {
+                    return Err(TemplateSubstitutionFailure::Syntax(
+                        name.span,
+                        unknown_capture_failure(name, budget.as_deref_mut()),
+                    ));
                 }
-                let capture = match capture_by_name_at(name, matcher, captures, indices) {
-                    Ok(capture) => capture,
-                    Err(CaptureLookupFailure::Unknown(name)) => {
-                        return Err(TemplateSubstitutionFailure::Syntax(
-                            name.span,
-                            unknown_capture_failure(name, budget.as_deref_mut()),
-                        ));
-                    }
-                    Err(CaptureLookupFailure::Invalid(span)) => {
-                        return Err(TemplateSubstitutionFailure::Invalid(span));
-                    }
-                };
-                *node = match capture {
-                    SurfaceSyntaxCapture::Expression(capture) => {
-                        MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
-                    }
-                    SurfaceSyntaxCapture::Identifier(capture) => {
-                        MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
-                    }
-                    SurfaceSyntaxCapture::Type(capture) => MacroOutputNode::ForwardedType(
-                        capture.clone(),
-                        capture.ty.diagnostic.as_ref().map_or_else(
-                            || capture.ty.span.into(),
-                            |location| location.primary.clone(),
-                        ),
+                Err(CaptureLookupFailure::Invalid(span)) => {
+                    return Err(TemplateSubstitutionFailure::Invalid(span));
+                }
+            };
+            *node = match capture {
+                SurfaceSyntaxCapture::Expression(capture) => {
+                    MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
+                }
+                SurfaceSyntaxCapture::Identifier(capture) => {
+                    MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
+                }
+                SurfaceSyntaxCapture::Type(capture) => MacroOutputNode::ForwardedType(
+                    capture.clone(),
+                    capture.ty.diagnostic.as_ref().map_or_else(
+                        || capture.ty.span.into(),
+                        |location| location.primary.clone(),
                     ),
-                    SurfaceSyntaxCapture::Pattern(capture) => MacroOutputNode::ForwardedPattern(
-                        capture.clone(),
-                        capture.pattern.diagnostic.as_ref().map_or_else(
-                            || capture.pattern.span.into(),
-                            |location| location.primary.clone(),
-                        ),
+                ),
+                SurfaceSyntaxCapture::Pattern(capture) => MacroOutputNode::ForwardedPattern(
+                    capture.clone(),
+                    capture.pattern.diagnostic.as_ref().map_or_else(
+                        || capture.pattern.span.into(),
+                        |location| location.primary.clone(),
                     ),
-                    SurfaceSyntaxCapture::Declaration(capture) => {
-                        MacroOutputNode::ForwardedDeclaration(
-                            capture.clone(),
-                            declaration_capture_origin(capture)
-                                .cloned()
-                                .unwrap_or_else(|| invocation.into()),
-                        )
-                    }
-                    SurfaceSyntaxCapture::Repeated(_) => {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    }
-                };
-            }
-            MacroOutputNode::Identifier(name, _) => {
-                if introduction != 0 {
-                    name.introduction = introduction;
-                    name.introduced_at = Some(invocation);
-                    name.written = false;
+                ),
+                SurfaceSyntaxCapture::Declaration(capture) => {
+                    MacroOutputNode::ForwardedDeclaration(
+                        capture.clone(),
+                        declaration_capture_origin(capture)
+                            .cloned()
+                            .unwrap_or_else(|| invocation.into()),
+                    )
                 }
-            }
-            MacroOutputNode::Group(_, children, _) => {
-                substitute_contents_at(
-                    children,
-                    matcher,
-                    captures,
-                    introduction,
-                    invocation,
-                    indices,
-                    budget,
-                    generator_names,
-                    generator.as_deref_mut(),
-                    escapes,
-                    admission_identifiers.as_deref_mut(),
-                    escape_placeholders.as_deref_mut(),
-                )?;
-            }
-            MacroOutputNode::TemplateEscape(name) => {
-                if let Some(planner) = generator.as_deref_mut() {
-                    let Some(escapes) = escapes else {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    };
-                    let Some(budget) = budget.as_deref_mut() else {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    };
-                    *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
-                    position += 1;
-                    continue;
+                SurfaceSyntaxCapture::Repeated(_) => {
+                    return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 }
-                let Some(identifiers) = admission_identifiers.as_deref_mut() else {
+            };
+        }
+        MacroOutputNode::Identifier(name, _) => {
+            if introduction != 0 {
+                name.introduction = introduction;
+                name.introduced_at = Some(invocation);
+                name.written = false;
+            }
+        }
+        MacroOutputNode::TemplateEscape(name) => {
+            if let Some(planner) = generator.as_deref_mut() {
+                let Some(escapes) = escapes else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
                 let Some(budget) = budget.as_deref_mut() else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
-                let resource = |error| {
-                    TemplateSubstitutionFailure::Syntax(
-                        name.span,
-                        crate::parser::MacroParseFailure::Syntax {
-                            diagnostics: Vec::new(),
-                            resource: Some(error),
-                        },
-                    )
-                };
-                let span = name.span;
-                let index = identifiers.len();
-                let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
-                let bytes = "__ash_escape_admission_".len().saturating_add(digits);
-                // The temporary name and its list copy both own text.
+                *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
+                return Ok(());
+            }
+            let Some(identifiers) = admission_identifiers.as_deref_mut() else {
+                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+            };
+            let Some(budget) = budget.as_deref_mut() else {
+                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+            };
+            let resource = |error| {
+                TemplateSubstitutionFailure::Syntax(
+                    name.span,
+                    crate::parser::MacroParseFailure::Syntax {
+                        diagnostics: Vec::new(),
+                        resource: Some(error),
+                    },
+                )
+            };
+            let span = name.span;
+            let index = identifiers.len();
+            let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+            let bytes = "__ash_escape_admission_".len().saturating_add(digits);
+            // The temporary name and its list copy both own text.
+            budget
+                .charge_units(bytes.saturating_mul(2).saturating_add(2))
+                .map_err(resource)?;
+            if identifiers.len() == identifiers.capacity() {
+                let live = identifiers.len();
                 budget
-                    .charge_units(bytes.saturating_mul(2).saturating_add(2))
+                    .charge_units(live.saturating_mul(2).saturating_add(1))
                     .map_err(resource)?;
-                if identifiers.len() == identifiers.capacity() {
-                    let live = identifiers.len();
+                identifiers.reserve_exact(1);
+            } else {
+                budget.charge().map_err(resource)?;
+            }
+            let placeholder = SurfaceName {
+                text: format!("__ash_escape_admission_{index}"),
+                span,
+                introduction: usize::MAX - index,
+                introduced_at: Some(span),
+                written: false,
+                diagnostic: None,
+            };
+            identifiers.push(placeholder.clone());
+            if let Some(escapes) = escape_placeholders.as_deref_mut() {
+                charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
+                if escapes.len() == escapes.capacity() {
                     budget
-                        .charge_units(live.saturating_mul(2).saturating_add(1))
+                        .charge_units(escapes.len().saturating_mul(2).saturating_add(1))
                         .map_err(resource)?;
-                    identifiers.reserve_exact(1);
+                    escapes.reserve_exact(1);
                 } else {
                     budget.charge().map_err(resource)?;
                 }
-                let placeholder = SurfaceName {
-                    text: format!("__ash_escape_admission_{index}"),
-                    span,
-                    introduction: usize::MAX - index,
-                    introduced_at: Some(span),
-                    written: false,
-                    diagnostic: None,
-                };
-                identifiers.push(placeholder.clone());
-                if let Some(escapes) = escape_placeholders.as_deref_mut() {
-                    charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
-                    if escapes.len() == escapes.capacity() {
-                        budget
-                            .charge_units(escapes.len().saturating_mul(2).saturating_add(1))
-                            .map_err(resource)?;
-                        escapes.reserve_exact(1);
-                    } else {
-                        budget.charge().map_err(resource)?;
-                    }
-                    escapes.push(placeholder.clone());
-                }
-                *node = MacroOutputNode::Identifier(placeholder, span.into());
+                escapes.push(placeholder.clone());
             }
-            MacroOutputNode::TemplateRepeat(repeat) => {
-                return Err(TemplateSubstitutionFailure::Invalid(
-                    repeat.origin.primary(),
-                ));
-            }
-            MacroOutputNode::Token(_, _, _)
-            | MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedType(_, _)
-            | MacroOutputNode::ForwardedDeclaration(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _) => {}
+            *node = MacroOutputNode::Identifier(placeholder, span.into());
         }
-        position += 1;
+        MacroOutputNode::TemplateRepeat(repeat) => {
+            return Err(TemplateSubstitutionFailure::Invalid(
+                repeat.origin.primary(),
+            ));
+        }
+        MacroOutputNode::Group(_, _, _) => unreachable!("groups are handled by the caller"),
+        MacroOutputNode::Token(_, _, _)
+        | MacroOutputNode::Expression(_, _)
+        | MacroOutputNode::ForwardedExpression(_, _)
+        | MacroOutputNode::ForwardedType(_, _)
+        | MacroOutputNode::ForwardedDeclaration(_, _)
+        | MacroOutputNode::ForwardedPattern(_, _) => {}
     }
     Ok(())
 }
