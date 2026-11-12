@@ -25596,7 +25596,7 @@ mod tests {
         // An empty syntax-term map must pay the reached growth and rehash
         // charge before it reserves storage for the retained method.
         for prefix in [0, 17] {
-            let mut short_map = HashMap::new();
+            let mut short_map = HashMap::<(String, usize), ResolvedTermBinding>::new();
             let mut short = TypeWorkBudget::with_limit(prefix + 4);
             short.charge(prefix).unwrap();
             assert_eq!(
@@ -25607,7 +25607,7 @@ mod tests {
             );
             assert_eq!(short_map.capacity(), 0);
             for _ in 0..2 {
-                let mut map = HashMap::new();
+                let mut map = HashMap::<(String, usize), ResolvedTermBinding>::new();
                 let mut exact = TypeWorkBudget::with_limit(prefix + 5);
                 exact.charge(prefix).unwrap();
                 Resolver::prepare_method_head_insertion(&mut map, &mut exact, owner.span())
