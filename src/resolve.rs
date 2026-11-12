@@ -23526,6 +23526,290 @@ mod tests {
         (module, owners)
     }
 
+    fn staged_diagnostic_fixture(
+        template: &str,
+        invocation: &str,
+    ) -> (SurfaceModule, SourceFile, SourceFile) {
+        use crate::parser::{
+            finish_module_from_checkpoint_with_syntax, parse_module_header,
+            project_declaration_expansions, project_module_retaining_templates,
+        };
+        use crate::syntax::SelectedSyntax;
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new("diagnostic-forms.ash", template).unwrap();
+        let tree = parse(lex(&forms).unwrap());
+        let selected: Vec<_> = project_module_retaining_templates(&forms, &tree)
+            .unwrap()
+            .syntax_declarations
+            .into_iter()
+            .map(|declaration| SelectedSyntax {
+                name: declaration.name.text.clone(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            })
+            .collect();
+        let caller = SourceFile::new("diagnostic-caller.ash", invocation).unwrap();
+        let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) =
+            finish_module_from_checkpoint_with_syntax(checkpoint, budget, Some(&caller), &selected);
+        assert!(tree.parse_diagnostics().is_empty());
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut Vec::new(),
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .unwrap();
+        (module, forms, caller)
+    }
+
+    #[test]
+    fn diagnostic_location_copy_is_paid_flat_and_drops_retained_frames() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin};
+        let source = SourceFile::new("location-work.ash", "source").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut location = DiagnosticLocation::new(MacroOrigin::Combined {
+            inputs: Arc::from([MacroOrigin::Source(span)]),
+            frame: Arc::clone(&frame),
+            span_count: 1,
+            depth: 1,
+        });
+        location.related.push(MacroOrigin::Source(span));
+        location.add_frame(&frame);
+        location.add_frame(&frame);
+        assert_eq!(location.frames.len(), 1);
+        let original_count = Arc::strong_count(&frame);
+        let mut absent = TypeWorkBudget::with_limit(0);
+        prepay_diagnostic_location(&mut absent, None, span).unwrap();
+        assert_eq!(absent.used(), 0);
+
+        const COPY_WORK: usize = 9;
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + COPY_WORK - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                prepay_diagnostic_location(&mut short, Some(&location), span)
+                    .unwrap_err()
+                    .reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(Arc::strong_count(&frame), original_count);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + COPY_WORK);
+                exact.charge(prefix).unwrap();
+                prepay_diagnostic_location(&mut exact, Some(&location), span).unwrap();
+                assert_eq!(exact.used(), prefix + COPY_WORK);
+                let label = SourceLabel::new(span, "original input")
+                    .with_location_preserving_span(Some(&location));
+                assert_eq!(label.span(), span);
+                assert_eq!(Arc::strong_count(&frame), original_count + 2);
+                drop(label);
+                assert_eq!(Arc::strong_count(&frame), original_count);
+            }
+        }
+        if let MacroOrigin::Combined { depth, .. } = &mut location.primary {
+            *depth = crate::parser::STRUCTURAL_DEPTH_LIMIT;
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        assert_eq!(
+            prepay_diagnostic_location(&mut work, Some(&location), span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(Arc::strong_count(&frame), original_count);
+    }
+
+    #[test]
+    fn contextual_unknown_lookup_forms_keep_name_scope_and_paid_retries() {
+        let (surface, _) = staged_module_constructor_fixture();
+        let member = surface.type_declarations[0].name.clone();
+        let qualifier = surface.type_declarations[4].name.clone();
+        assert_ne!(member.introduction, 0);
+        assert_ne!(qualifier.introduction, 0);
+        let references = [
+            SurfaceReference::Unqualified(member.clone()),
+            SurfaceReference::Qualified(crate::surface::SurfaceQualifiedName {
+                span: member.span,
+                qualifier,
+                member: member.clone(),
+            }),
+        ];
+        for reference in &references {
+            for constructor in [false, true] {
+                let run = |limit: usize, prefix: usize| {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(7_104),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    resolver.type_work.charge(prefix).unwrap();
+                    let failure = if constructor {
+                        resolver.constructor_reference(reference).unwrap_err()
+                    } else {
+                        resolver.nominal_reference(reference).unwrap_err()
+                    };
+                    (failure, resolver.type_work.used())
+                };
+                let (failure, work) = run(usize::MAX, 0);
+                let expected = if constructor {
+                    ResolveReason::UnknownConstructor
+                } else {
+                    ResolveReason::UnknownType
+                };
+                assert_eq!(failure.reason, expected);
+                assert_eq!(failure.found.as_deref(), Some(member.text.as_str()));
+                assert_eq!(
+                    failure.lookup_scope_name(),
+                    Some(if constructor { "constructor" } else { "type" })
+                );
+                assert!(work >= member.text.len());
+                for prefix in [0, 7] {
+                    let (short, _) = run(prefix + work - 1, prefix);
+                    assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                    for _ in 0..2 {
+                        let (retry, used) = run(prefix + work, prefix);
+                        assert_eq!(retry.reason, expected);
+                        assert_eq!(retry.found.as_deref(), Some(member.text.as_str()));
+                        assert_eq!(used, prefix + work);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_diagnostic_labels_preserve_sources_and_retry_paid_failures() {
+        use crate::presentation::{PresentationError, compile_resolve_diagnostic};
+
+        let fixtures = [
+            (
+                "pub syntax declaration: (ops) $name:ident first $first:ident second $second:ident => {\n    pub effect $name {\n        $first : Unit -> Int\n        $second : Unit -> Int\n    }\n}\n",
+                "ops Ask first ask second ask\n",
+                ResolveReason::DuplicateGlobal,
+            ),
+            (
+                "pub syntax declaration: (box) $name:ident constructor $ctor:ident => {\n    pub newtype $name = $ctor(Int)\n}\n",
+                "box Box constructor Wrap\n",
+                ResolveReason::NewtypeConstructorName,
+            ),
+            (
+                "pub syntax declaration: (foreign) $name:ident symbol $symbol:ident => {\n    pub foreign library $name {\n        symbol $symbol : Unit -> Unit { name \"stop\" }\n    }\n}\n",
+                "foreign Fixture symbol Stop\n",
+                ResolveReason::ForeignContract,
+            ),
+        ];
+        for (index, (template, invocation, expected)) in fixtures.into_iter().enumerate() {
+            let (surface, forms, caller) = staged_diagnostic_fixture(template, invocation);
+            let original = match index {
+                0 => &surface.effects[0].operations[1].name,
+                1 => &surface.type_declarations[0].constructors[0].name,
+                _ => &surface.foreign_libraries[0].name,
+            };
+            let frame = Arc::clone(&original.diagnostic.as_ref().unwrap().frames[0]);
+            let base_count = Arc::strong_count(&frame);
+            let run = |limit: usize, prefix: usize| {
+                let mut resolver = Resolver::with_type_work(
+                    ModuleId::new(7_105),
+                    TypeWorkBudget::with_limit(limit),
+                );
+                resolver.type_work.charge(prefix).unwrap();
+                let failure = match index {
+                    0 => resolver.validate_local_namespaces(&surface).unwrap_err(),
+                    1 => validate_newtype_shape(
+                        &surface.type_declarations[0],
+                        &mut resolver.type_work,
+                    )
+                    .unwrap_err(),
+                    _ => match resolver.prepare_source_foreign(&surface) {
+                        Ok(_) => panic!("the missing profile must fail"),
+                        Err(failure) => failure,
+                    },
+                };
+                (failure, resolver.type_work.used())
+            };
+            let (failure, work) = run(usize::MAX, 0);
+            assert_eq!(failure.reason, expected);
+            let primary_span = if index == 2 {
+                surface.foreign_libraries[0].span
+            } else {
+                original.span
+            };
+            assert_eq!(failure.primary.span(), primary_span);
+            assert!(failure.primary.diagnostic_location().is_some());
+            assert!(Arc::strong_count(&frame) > base_count);
+            let view = compile_resolve_diagnostic(&failure, &[&forms, &caller]).unwrap();
+            assert_eq!(
+                view.related
+                    .iter()
+                    .filter(|label| label.relationship == "syntax_invocation")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                view.related
+                    .iter()
+                    .filter(|label| label.relationship == "syntax_definition")
+                    .count(),
+                1
+            );
+            assert!(matches!(
+                compile_resolve_diagnostic(&failure, &[&caller]),
+                Err(PresentationError::MissingSource)
+            ));
+            drop(view);
+            drop(failure);
+            assert_eq!(Arc::strong_count(&frame), base_count);
+            for prefix in [0, 11] {
+                let (short, _) = run(prefix + work - 1, prefix);
+                assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                drop(short);
+                assert_eq!(Arc::strong_count(&frame), base_count);
+                for _ in 0..2 {
+                    let (retry, used) = run(prefix + work, prefix);
+                    assert_eq!(retry.reason, expected);
+                    assert_eq!(retry.primary.span(), primary_span);
+                    assert_eq!(used, prefix + work);
+                    drop(retry);
+                    assert_eq!(Arc::strong_count(&frame), base_count);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_untagged_and_resource_failures_keep_existing_classification() {
+        let surface = declaration_fixture(
+            "foreign-untagged.ash",
+            "foreign library Fixture {\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Stop : Unit -> Unit { name \"\" }\n}\n",
+        );
+        let run = |limit| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(7_106), TypeWorkBudget::with_limit(limit));
+            match resolver.prepare_source_foreign(&surface) {
+                Ok(_) => panic!("the invalid native name must fail"),
+                Err(failure) => failure,
+            }
+        };
+        let failure = run(usize::MAX);
+        assert_eq!(failure.reason, ResolveReason::ForeignContract);
+        assert_eq!(failure.foreign_contract_cause(), None);
+        assert!(failure.primary.diagnostic_location().is_none());
+        let short = run(0);
+        assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.foreign_contract_cause(), None);
+    }
+
     #[test]
     fn introduced_module_constructors_resolve_actual_staged_ids_and_restore_scopes() {
         let (surface, owners) = staged_module_constructor_fixture();
