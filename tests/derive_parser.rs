@@ -9,11 +9,14 @@ use ash::{
     lexer::{TokenKind, lex},
     module::{LoadGraphError, ModuleRoots, load_module_graph},
     parser::{
-        ConcreteElement, ConcreteNode, ConcreteTree, Event, InternalReason, NodeKind,
+        ConcreteElement, ConcreteNode, ConcreteTree, Event, InternalReason, NodeKind, ParseReason,
         ProjectionError, ResourceFailure, STRUCTURAL_DEPTH_LIMIT, parse, project_module,
     },
     source::SourceFile,
-    surface::SurfaceSyntaxCategory,
+    surface::{
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory, SurfaceSyntaxImplementation,
+        SurfaceSyntaxMatcherPart,
+    },
 };
 
 fn parsed(text: &str) -> (SourceFile, ConcreteTree) {
@@ -103,6 +106,39 @@ fn deriving_clause(subject: &ConcreteNode) -> &ConcreteNode {
     clause
 }
 
+fn assert_unselected_derive(failure: &LoadGraphError, name: &str, expected_subject: &str) {
+    let LoadGraphError::Syntax(syntax) = failure else {
+        panic!("expected a staged derive-selection syntax failure: {failure:?}");
+    };
+    assert!(syntax.source.display_path().ends_with("entry.ash"));
+    assert_eq!(syntax.import_span, None);
+    assert!(syntax.lexical.is_empty());
+    assert_eq!(syntax.resource, None);
+    let [diagnostic] = syntax.parser.as_slice() else {
+        panic!("expected exactly one derive-selection diagnostic: {syntax:?}");
+    };
+    assert_eq!(diagnostic.reason, ParseReason::UnexpectedToken);
+    assert_eq!(diagnostic.expected.as_deref(), Some("derive syntax"));
+    assert_eq!(diagnostic.found.as_deref(), Some(name));
+    let primary = diagnostic.primary.span();
+    assert_eq!(primary.source(), syntax.source.id());
+    let range = primary.range();
+    assert_eq!(
+        &syntax.source.text()[range.start() as usize..range.end() as usize],
+        name
+    );
+    let [subject] = diagnostic.related.as_slice() else {
+        panic!("expected the original derive subject as the sole related cause: {diagnostic:?}");
+    };
+    assert_eq!(subject.message(), "derive subject");
+    assert_eq!(subject.span().source(), syntax.source.id());
+    let range = subject.span().range();
+    assert_eq!(
+        &syntax.source.text()[range.start() as usize..range.end() as usize],
+        expected_subject.trim_end()
+    );
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -185,8 +221,33 @@ fn derive_headers_retain_the_contextual_form_and_optional_fixed_binding() {
             usize::from(template),
             "{text:?}"
         );
-        // Derive category admission is not part of this parser-only delivery.
-        assert!(project_module(&source, &tree).is_err(), "{text:?}");
+        let module = project_module(&source, &tree)
+            .expect("a complete derive definition projects without invoking its body");
+        let [syntax] = module.syntax_declarations.as_slice() else {
+            panic!("expected one projected derive definition: {text:?}");
+        };
+        assert_eq!(syntax.category, SurfaceSyntaxCategory::Derive);
+        assert_eq!(syntax.name.text, "marker");
+        assert_eq!(syntax.name.span.source(), source.id());
+        assert_eq!(syntax.matcher.len(), usize::from(binding));
+        if binding {
+            let [SurfaceSyntaxMatcherPart::Capture { name, kind }] = syntax.matcher.as_slice()
+            else {
+                panic!("expected the optional fixed identifier binding: {syntax:?}");
+            };
+            assert_eq!(name.text, "target");
+            assert_eq!(*kind, SurfaceSyntaxCaptureKind::Identifier);
+        }
+        if template {
+            assert_eq!(syntax.implementation, SurfaceSyntaxImplementation::Template);
+        } else {
+            let SurfaceSyntaxImplementation::Transformer(transformer) = &syntax.implementation
+            else {
+                panic!("expected the written checked-transformer reference: {syntax:?}");
+            };
+            assert_eq!(transformer.text, "expand");
+            assert_eq!(transformer.span.source(), source.id());
+        }
     }
 }
 
@@ -309,7 +370,7 @@ fn deriving_uses_the_written_local_import_name() {
 }
 
 #[test]
-fn fixed_derive_fixtures_reach_only_the_cst_boundary() {
+fn fixed_derive_fixtures_preserve_subject_refusal_and_definition_packets() {
     let cases: &[(&str, &str, &[&[&str]])] = &[
         (
             "I09 main",
@@ -388,21 +449,41 @@ fn fixed_derive_fixtures_reach_only_the_cst_boundary() {
         assert!(!tree.parse_diagnostics().is_empty());
         assert!(project_module(&source, &tree).is_err());
     }
-    // These definition bodies are intentionally not admitted or validated here.
-    for text in [
-        include_str!("../docs/design/macros/fixtures/diagnostics/malformed_derive_forms.ash"),
-        include_str!("../docs/design/macros/fixtures/diagnostics/free_derive_forms.ash"),
+    // Projection retains raw packets; template admission validates their declaration syntax.
+    for (text, expected_name) in [
+        (
+            include_str!("../docs/design/macros/fixtures/diagnostics/malformed_derive_forms.ash"),
+            "broken_derive",
+        ),
+        (
+            include_str!("../docs/design/macros/fixtures/diagnostics/free_derive_forms.ash"),
+            "missing_derive_free",
+        ),
     ] {
         let (source, tree) = valid(text);
+        let declarations = children(tree.root().unwrap(), NodeKind::SyntaxDeclaration);
+        let [declaration] = declarations.as_slice() else {
+            panic!("expected one original definition packet: {expected_name}");
+        };
+        assert_eq!(children(declaration, NodeKind::TemplateBody).len(), 1);
+        let module = project_module(&source, &tree)
+            .expect("raw derive definitions retain their original template packets");
+        let [syntax] = module.syntax_declarations.as_slice() else {
+            panic!("expected one projected definition packet: {expected_name}");
+        };
+        assert_eq!(syntax.category, SurfaceSyntaxCategory::Derive);
+        assert_eq!(syntax.name.text, expected_name);
+        assert_eq!(syntax.implementation, SurfaceSyntaxImplementation::Template);
+        let [SurfaceSyntaxMatcherPart::Capture { name, kind }] = syntax.matcher.as_slice() else {
+            panic!("expected the fixed target binding: {syntax:?}");
+        };
+        assert_eq!(name.text, "target");
+        assert_eq!(*kind, SurfaceSyntaxCaptureKind::Identifier);
+        assert_eq!(syntax.span.source(), source.id());
+        let range = syntax.span.range();
         assert_eq!(
-            children(tree.root().unwrap(), NodeKind::SyntaxDeclaration).len(),
-            1
-        );
-        assert_eq!(
-            project_module(&source, &tree),
-            Err(ProjectionError::MalformedTree(
-                InternalReason::UnexpectedShape
-            ))
+            &source.text()[range.start() as usize..range.end() as usize],
+            node_text(&source, &tree, declaration)
         );
     }
 }
@@ -469,7 +550,7 @@ fn derive_header_preserves_nested_quote_escape_and_mode_restoration() {
 }
 
 #[test]
-fn source_sink_executes_without_clause_and_refuses_complete_clause() {
+fn source_sink_discards_captured_subjects_with_or_without_clauses() {
     let fixture = Fixture::new();
     fixture.write(
         "forms.ash",
@@ -485,19 +566,9 @@ fn source_sink_executes_without_clause_and_refuses_complete_clause() {
             fixture.write("entry.ash", &format!(
                 "import forms (syntax sink)\nsink {{\n{declaration}{suffix}\n}}\nmain : Unit -> Int\nmain () = 42\n"
             ));
-            let result = compile_path(fixture.configuration());
-            if has_clause {
-                let failure =
-                    result.expect_err("an unconsumed subject must not enter the packet path");
-                assert!(
-                    matches!(failure.graph_failure(), Some(LoadGraphError::Projection { source, .. })
-                    if source.display_path().ends_with("entry.ash")),
-                    "{failure:?}"
-                );
-            } else {
-                let program = result.expect("an ordinary source capture executes");
-                assert_eq!(execute(&program).unwrap().value_display(), "42");
-            }
+            let program = compile_path(fixture.configuration())
+                .expect("sink discards the entire declaration capture before nested expansion");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
         }
     }
 }
@@ -685,10 +756,13 @@ fn unconsumed_clauses_stop_complete_and_staged_loading() {
     ));
     let failure = compile_path(fixture.configuration())
         .expect_err("the staged fast path must not discard the clause");
-    assert!(matches!(
-        failure.graph_failure(),
-        Some(LoadGraphError::Projection { .. })
-    ));
+    assert_unselected_derive(
+        failure
+            .graph_failure()
+            .expect("the staged loader rejects the clause"),
+        "marker",
+        subject,
+    );
 
     fixture.write(
         "forms.ash",
@@ -708,10 +782,13 @@ fn unconsumed_clauses_stop_complete_and_staged_loading() {
     fixture.write("entry.ash", &format!("{prefix}{subject}{body}"));
     let failure = compile_path(fixture.configuration())
         .expect_err("staged collection must not discard the handwritten clause");
-    assert!(matches!(
-        failure.graph_failure(),
-        Some(LoadGraphError::Projection { source, .. }) if source.display_path().ends_with("entry.ash")
-    ));
+    assert_unselected_derive(
+        failure
+            .graph_failure()
+            .expect("staged collection rejects the clause"),
+        "marker",
+        subject,
+    );
 }
 
 #[test]
@@ -749,14 +826,13 @@ fn deriving_clause_cst_and_selected_import_refusal() {
     );
     assert!(children(root, NodeKind::DeclarationSyntaxInvocation).is_empty());
     fixture.write("entry.ash", &conflict);
-    // This refusal alone does not distinguish the selected parser's paths.
     let failure = compile_path(fixture.configuration())
         .expect_err("the entry must stop before ordinary checking");
-    assert!(
-        matches!(
-            failure.graph_failure(),
-            Some(LoadGraphError::Projection { source, .. }) if source.display_path().ends_with("entry.ash")
-        ),
-        "expected an entry projection failure: {failure:?}"
+    assert_unselected_derive(
+        failure
+            .graph_failure()
+            .expect("the selected parser rejects the derive name"),
+        "answer",
+        "type Subject = Subject\nderiving (answer)",
     );
 }
