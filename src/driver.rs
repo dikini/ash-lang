@@ -1348,6 +1348,7 @@ impl CompilationInput<'_> {
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut crate::module::StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
+        redundant_quote_dependency: Option<crate::module::ModuleDependency>,
     ) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
@@ -1371,6 +1372,7 @@ impl CompilationInput<'_> {
                         owners,
                         transformer,
                         quote_owner,
+                        redundant_quote_dependency,
                     )
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
@@ -1646,14 +1648,16 @@ where
             Vec::new()
         };
         let mut syntax_owners = Vec::new();
-        let quote_owner = input
-            .next_quote_dependency()
+        let quote_dependency = input.next_quote_dependency();
+        let quote_owner = quote_dependency
             .map(|edge| {
                 let owner = *checked_by_module
                     .get(&edge.target())
                     .ok_or_else(internal_file_failure)?;
                 let dependency = checked.get(owner).ok_or_else(internal_file_failure)?;
-                if !dependency.module().is_builtin_compiler_syntax() {
+                if dependency.module() != edge.target()
+                    || !dependency.module().is_builtin_compiler_syntax()
+                {
                     return Err(internal_file_failure());
                 }
                 Ok(crate::syntax::SyntaxOwner {
@@ -1664,6 +1668,37 @@ where
                 })
             })
             .transpose()?;
+        let redundant_quote_dependency =
+            if let Some(edge) = quote_dependency.filter(|edge| edge.is_compiler_private()) {
+                let type_resource = || {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                    )))
+                };
+                checking_type_work
+                    .charge(selected.len())
+                    .map_err(|()| type_resource())?;
+                let mut redundant = None;
+                for selection in &selected {
+                    let owner = checked
+                        .get(selection.owner)
+                        .ok_or_else(internal_file_failure)?;
+                    checking_type_work
+                        .charge(owner.direct_dependencies().len())
+                        .map_err(|()| type_resource())?;
+                    if owner
+                        .direct_dependencies()
+                        .iter()
+                        .any(|route| route.target() == edge.target())
+                    {
+                        redundant = Some(edge);
+                        break;
+                    }
+                }
+                redundant
+            } else {
+                None
+            };
         let mut declaration_failure = None;
         let advanced = {
             let mut transformer =
@@ -1756,6 +1791,7 @@ where
                 &mut syntax_owners,
                 Some(&mut transformer),
                 quote_owner,
+                redundant_quote_dependency,
             )
         };
         let advanced = match (advanced, declaration_failure) {
@@ -2820,8 +2856,20 @@ std::thread_local! {
     static ORDINARY_QUOTE_OWNER_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteOwnerObserver>> = const { std::cell::Cell::new(None) };
     static LOADED_QUOTE_OBSERVER: std::cell::Cell<Option<fn(&crate::module::LoadedModule)>> = const { std::cell::Cell::new(None) };
     static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_ADAPTER_OBSERVER: std::cell::Cell<Option<GeneratorAdapterObserver>> = const { std::cell::Cell::new(None) };
     static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
 }
+
+#[cfg(test)]
+type GeneratorAdapterObserver = fn(
+    &crate::module::LoadedModule,
+    &[crate::module::ModuleDependency],
+    &crate::syntax::SelectedSyntax,
+    &[Arc<crate::resolved::CheckedModule>],
+    usize,
+    &[crate::syntax::SyntaxOwner],
+    usize,
+);
 
 #[cfg(test)]
 enum OrdinaryQuoteResourceEvent<'a> {
@@ -2931,6 +2979,9 @@ fn evaluate_generator_transformer(
     let builtin = checked
         .get(builtin_index)
         .ok_or_else(internal_file_failure)?;
+    if builtin.module() != route.target() {
+        return Err(internal_file_failure());
+    }
     let live = owners.len();
     budget
         .charge_units(if live == owners.capacity() {
@@ -3052,8 +3103,27 @@ fn evaluate_generator_transformer(
         )
     };
     let module = staged
-        .adapter_view(source, definition, quote_sites, quote_introduction, budget)
+        .adapter_view(
+            source,
+            definition,
+            quote_sites,
+            quote_introduction,
+            Some(builtin.module()),
+            budget,
+        )
         .map_err(quote_resource_failure)?;
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_ADAPTER_OBSERVER.get() {
+        observe(
+            &module,
+            staged.dependencies(),
+            selection,
+            checked,
+            builtin_index,
+            owners,
+            builtin_introduction,
+        );
+    }
     budget
         .charge_units(module.dependencies().len())
         .map_err(quote_resource_failure)?;
@@ -6222,6 +6292,14 @@ mod tests {
         active_drops: usize,
     }
 
+    #[derive(Debug)]
+    struct GeneratorAdapterObservation {
+        quote_sites: usize,
+        original_private: bool,
+        adapter_private: bool,
+        adapter_explicit: bool,
+    }
+
     std::thread_local! {
         static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
         static DERIVE_INPUTS: RefCell<Vec<Vec<crate::surface::SurfaceSyntaxCapture>>> = const { RefCell::new(Vec::new()) };
@@ -6254,6 +6332,98 @@ mod tests {
         static ORDINARY_QUOTE_ENTRY: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
         static ORDINARY_QUOTE_ENTRIES: RefCell<Vec<OrdinaryQuoteEntryObservation>> = const { RefCell::new(Vec::new()) };
         static ORDINARY_QUOTE_OUTPUTS: RefCell<Vec<OrdinaryQuoteOutputObservation>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_ADAPTER_OBSERVATIONS: RefCell<Vec<GeneratorAdapterObservation>> = const { RefCell::new(Vec::new()) };
+        static CAPTURED_ONLY_CALLER: Cell<bool> = const { Cell::new(false) };
+        static CAPTURED_ONLY_TRANSFORM: Cell<bool> = const { Cell::new(false) };
+        static EARLY_FINAL_HANDOFF: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn observe_generator_adapter_dependencies(
+        module: &crate::module::LoadedModule,
+        original: &[crate::module::ModuleDependency],
+        selection: &crate::syntax::SelectedSyntax,
+        checked: &[Arc<crate::resolved::CheckedModule>],
+        builtin_index: usize,
+        owners: &[crate::syntax::SyntaxOwner],
+        builtin_introduction: usize,
+    ) {
+        let builtin = &checked[builtin_index];
+        let builtin_id = builtin.module();
+        assert!(builtin_id.is_builtin_compiler_syntax());
+        assert!(
+            checked[selection.owner]
+                .direct_dependencies()
+                .iter()
+                .any(|edge| edge.target() == builtin_id)
+        );
+        assert_eq!(owners[builtin_introduction - 1].owner, Some(builtin_index));
+        let canonical_source = &builtin
+            .exports()
+            .defining_sources()
+            .iter()
+            .find(|(owner, _)| *owner == builtin_id)
+            .expect("the checked builtin retains its source")
+            .1;
+        assert!(
+            module.dependencies().iter().any(|edge| {
+                checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .is_some_and(|dependency| {
+                        dependency
+                            .exports()
+                            .defining_sources()
+                            .iter()
+                            .any(|(owner, source)| {
+                                *owner == builtin_id && Arc::ptr_eq(source, canonical_source)
+                            })
+                    })
+            }),
+            "the actual remaining dependency closure retains the canonical builtin source"
+        );
+        let private = |edge: &crate::module::ModuleDependency| {
+            edge.is_compiler_private() && edge.target() == builtin_id
+        };
+        let original_private = original.iter().any(private);
+        let adapter_private = module.dependencies().iter().any(private);
+        let adapter_explicit = module
+            .dependencies()
+            .iter()
+            .any(|edge| !edge.is_compiler_private() && edge.target() == builtin_id);
+        let mut expected = original.to_vec();
+        if module.quote_sites().is_empty()
+            && module.quote_introduction().is_none()
+            && let Some(index) = expected
+                .iter()
+                .position(|edge| edge.is_compiler_private() && edge.target() == builtin_id)
+        {
+            expected.remove(index);
+        }
+        assert_eq!(module.dependencies(), expected);
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            slot.borrow_mut().push(GeneratorAdapterObservation {
+                quote_sites: module.quote_sites().len(),
+                original_private,
+                adapter_private,
+                adapter_explicit,
+            });
+        });
+    }
+
+    struct GeneratorAdapterObserverGuard;
+
+    impl GeneratorAdapterObserverGuard {
+        fn install() -> Self {
+            GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+            GENERATOR_ADAPTER_OBSERVER.set(Some(observe_generator_adapter_dependencies));
+            Self
+        }
+    }
+
+    impl Drop for GeneratorAdapterObserverGuard {
+        fn drop(&mut self) {
+            GENERATOR_ADAPTER_OBSERVER.set(None);
+        }
     }
 
     fn observe_h4_public_names(source: &SourceFile, module: &crate::surface::SurfaceModule) {
@@ -6581,10 +6751,23 @@ mod tests {
         source.write_sibling("forms.ash", FORMS);
         source.write_sibling("api.ash", "pub number : Unit -> Int\nnumber () = 42\n");
         hooks::reset();
+        let _adapter_guard = GeneratorAdapterObserverGuard::install();
         CALLER_QUOTE_REFERENCES.with(|slot| slot.borrow_mut().clear());
         TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_caller_quote_reference));
         let compiled = compile_path(source.configuration()).expect("both caller quotes compile");
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 2);
+            assert!(
+                observations.iter().all(|observation| {
+                    observation.quote_sites > 0
+                        && observation.original_private
+                        && observation.adapter_private
+                }),
+                "{observations:?}"
+            );
+        });
         let references =
             CALLER_QUOTE_REFERENCES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
         assert_eq!(references.len(), 2);
@@ -6653,6 +6836,129 @@ mod tests {
         assert_eq!(execute(&compiled).unwrap().value_display(), "84");
         assert_generator_cleanup(1);
         hooks::reset();
+    }
+
+    #[test]
+    fn generator_adapter_keeps_an_explicit_compiler_syntax_import() {
+        let source = TestSource::write(
+            "import @builtin.compiler.syntax as Syntax\nimport forms (syntax make)\n\nmake answer\nmain : Unit -> Int\nmain () = answer(())\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            "import @builtin.compiler.syntax as Syntax\npub syntax declaration: (make) $name:ident => {\n    pub $name : Unit -> Int\n    $name () = ${ syntax { 42 } }\n}\n",
+        );
+        let _guard = GeneratorAdapterObserverGuard::install();
+        let compiled = compile_path(source.configuration()).expect("explicit import compiles");
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 1);
+            let observed = &observations[0];
+            assert_eq!(observed.quote_sites, 0);
+            assert!(!observed.original_private && !observed.adapter_private);
+            assert!(observed.adapter_explicit, "{observed:?}");
+        });
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
+
+    #[test]
+    fn generator_adapter_uses_nested_alias_and_facade_sources() {
+        let source = TestSource::write(
+            "import forms (syntax make as build)\n\nbuild answer\nmain : Unit -> Int\nmain () = answer(())\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            "import inner (syntax identity as inner)\nimport facade (renamed)\npub syntax declaration: (make) $name:ident => {\n    pub $name : Unit -> Int\n    $name () = ${ inner (renamed(())) }\n}\n",
+        );
+        source.write_sibling(
+            "inner.ash",
+            "pub syntax identity $value:expr => {\n    $value\n}\n",
+        );
+        source.write_sibling("facade.ash", "pub import helper (fragment as renamed)\n");
+        source.write_sibling(
+            "helper.ash",
+            "import @builtin.compiler.syntax as Syntax\npub fragment : Unit -> Syntax.ExpressionFragment\nfragment () = syntax { 42 }\n",
+        );
+        let _guard = GeneratorAdapterObserverGuard::install();
+        let compiled = compile_path(source.configuration()).expect("nested adapter compiles");
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 1);
+            let observed = &observations[0];
+            assert_eq!(observed.quote_sites, 0);
+            assert!(
+                observed.original_private && !observed.adapter_private,
+                "{observed:?}"
+            );
+        });
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
+
+    #[test]
+    fn captured_only_generated_quote_keeps_the_callers_private_edge() {
+        use crate::surface::{CapturedQuoteSites, SurfaceSyntaxCapture};
+
+        fn inspect_caller(module: &crate::module::LoadedModule) {
+            if !module.source().text().contains("make_quote retained\n") {
+                return;
+            }
+            assert!(
+                !crate::lexer::lex(module.source())
+                    .unwrap()
+                    .needs_quote_dependency()
+            );
+            assert!(module.quote_sites().is_empty());
+            assert!(module.quote_introduction().is_some());
+            assert!(module.dependencies().iter().any(|edge| {
+                edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax()
+            }));
+            CAPTURED_ONLY_CALLER.set(true);
+        }
+        fn inspect_capture(
+            selection: &crate::syntax::SelectedSyntax,
+            captures: &[SurfaceSyntaxCapture],
+            _output: &[crate::syntax::MacroOutputNode],
+        ) {
+            if selection.declaration.name.text != "identity" {
+                return;
+            }
+            let [SurfaceSyntaxCapture::Expression(capture)] = captures else {
+                panic!("identity receives the generated quoted expression")
+            };
+            assert!(
+                matches!(&capture.quote_sites, CapturedQuoteSites::Owned(sites) if !sites.is_empty())
+            );
+            CAPTURED_ONLY_TRANSFORM.set(true);
+        }
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                LOADED_QUOTE_OBSERVER.set(None);
+                TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            }
+        }
+
+        let source = TestSource::write(
+            "import forms (syntax make_quote)\n\nmake_quote retained\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            include_str!(
+                "../tests/fixtures/surface-macros/quote-constructed/captured_only_forms.ash"
+            ),
+        );
+        source.write_sibling(
+            "identity.ash",
+            include_str!("../tests/fixtures/surface-macros/identity-roundtrip/identity.ash"),
+        );
+        CAPTURED_ONLY_CALLER.set(false);
+        CAPTURED_ONLY_TRANSFORM.set(false);
+        let _guard = Guard;
+        LOADED_QUOTE_OBSERVER.set(Some(inspect_caller));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(inspect_capture));
+        let compiled = compile_path(source.configuration()).expect("captured quote compiles");
+        assert!(CAPTURED_ONLY_CALLER.get());
+        assert!(CAPTURED_ONLY_TRANSFORM.get());
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
     }
 
     fn observe_caller_quote_roles(
@@ -7226,7 +7532,32 @@ main () = one(()) + two(())
     fn original_escape_categories_retain_captures_after_host_teardown() {
         use crate::eval::machine_test_hooks as hooks;
 
+        fn observe_handoff(module: &crate::module::LoadedModule) {
+            if !module
+                .canonical_path()
+                .ends_with("escapes/early_categories.ash")
+            {
+                return;
+            }
+            assert!(module.quote_sites().is_empty());
+            assert!(module.quote_introduction().is_some());
+            assert!(!module.dependencies().iter().any(|edge| {
+                edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax()
+            }));
+            EARLY_FINAL_HANDOFF.set(true);
+        }
+        struct HandoffGuard;
+        impl Drop for HandoffGuard {
+            fn drop(&mut self) {
+                LOADED_QUOTE_OBSERVER.set(None);
+            }
+        }
+
         hooks::reset();
+        let _adapter_guard = GeneratorAdapterObserverGuard::install();
+        let _handoff_guard = HandoffGuard;
+        EARLY_FINAL_HANDOFF.set(false);
+        LOADED_QUOTE_OBSERVER.set(Some(observe_handoff));
         ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
         ESCAPE_CHECKED_HELPERS.set(0);
         GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
@@ -7242,6 +7573,19 @@ main () = one(()) + two(())
         GENERATOR_OWNER_OBSERVER.set(None);
         GENERATOR_LIFECYCLE_OBSERVER.set(None);
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert!(EARLY_FINAL_HANDOFF.get());
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 6);
+            assert!(
+                observations.iter().all(|observation| {
+                    observation.quote_sites == 0
+                        && observation.original_private
+                        && !observation.adapter_private
+                }),
+                "{observations:?}"
+            );
+        });
         assert_eq!(ESCAPE_CHECKED_HELPERS.get(), 8);
         assert_eq!(
             ESCAPE_OBSERVATIONS.with(|slot| slot.borrow().clone()),
