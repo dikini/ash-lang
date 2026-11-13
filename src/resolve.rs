@@ -14816,14 +14816,14 @@ impl Resolver<'_, '_> {
                                 "advance-site matching exceeded its work budget",
                             )
                         })?;
-                        if site.binding == std::ptr::from_ref(binding) as usize {
-                            if matched.replace(index).is_some() {
-                                return Err(error(
-                                    ResolveReason::InternalState,
-                                    binding.span,
-                                    "an advance binding was issued more than once",
-                                ));
-                            }
+                        if site.binding == std::ptr::from_ref(binding) as usize
+                            && matched.replace(index).is_some()
+                        {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                binding.span,
+                                "an advance binding was issued more than once",
+                            ));
                         }
                     }
                 }
@@ -22042,7 +22042,7 @@ mod tests {
                 short.unwrap_err().reason,
                 ResolveReason::TypeResourceExhausted
             );
-            assert!(used <= prefix + exact_work - 1);
+            assert!(used < prefix + exact_work);
             for _ in 0..2 {
                 let (result, used) = resolve_import_fixture_with_type_prefix(
                     ENTRY,
@@ -25093,8 +25093,8 @@ mod tests {
         let mut unrelated = source[1].name.clone();
         unrelated.introduction = 0;
         assert_eq!(resolver.contextual_type_variable(&unrelated), None);
-        resolver.type_scopes.truncate(0);
-        resolver.syntax_type_scopes.truncate(0);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
         assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
 
         resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
@@ -25106,8 +25106,8 @@ mod tests {
             Some(parameters[1].id)
         );
         assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
-        resolver.type_scopes.truncate(0);
-        resolver.syntax_type_scopes.truncate(0);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
 
         resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
         let failure = resolver
@@ -26249,6 +26249,7 @@ mod tests {
 
     #[test]
     fn implementation_head_requires_the_complete_owner_source_and_paid_lookup() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
         fn unused_transformer(
             _: &crate::syntax::SelectedSyntax,
             _: &[crate::surface::SurfaceSyntaxCapture],
@@ -26584,6 +26585,7 @@ mod tests {
 
     #[test]
     fn contextual_free_type_retention_preserves_authority_and_work_limits() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
         fn unused_transformer(
             _: &crate::syntax::SelectedSyntax,
             _: &[crate::surface::SurfaceSyntaxCapture],

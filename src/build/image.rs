@@ -4985,7 +4985,10 @@ mod tests {
 
     #[test]
     fn generated_foreign_symbol_origins_survive_checked_image_and_wrong_source_refuses() {
-        fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32, String) {
+        type SourcePlace = (String, u32, u32, String);
+        type ForeignSymbolFact = (String, u32, SourcePlace, Vec<SourcePlace>);
+
+        fn place(span: Span, sources: &[&SourceFile]) -> SourcePlace {
             let source = sources
                 .iter()
                 .find(|source| source.id() == span.source())
@@ -5002,12 +5005,7 @@ mod tests {
         fn facts(
             program: &crate::core::ValidatedEffectProgram,
             sources: &[&SourceFile],
-        ) -> Vec<(
-            String,
-            u32,
-            (String, u32, u32, String),
-            Vec<(String, u32, u32, String)>,
-        )> {
+        ) -> Vec<ForeignSymbolFact> {
             ["Make", "Other"]
                 .into_iter()
                 .map(|name| {
@@ -5335,11 +5333,12 @@ mod tests {
     fn checked_image_restores_declared_method_originals_and_bounds() {
         use crate::core::dialect::checked_owner_anchors::OriginalOwner;
 
-        fn origin_shape(
-            origin: &Origin,
-            sources: &[&SourceFile],
-        ) -> (u8, String, u32, u32, Option<(String, u32, u32)>) {
-            fn place(span: Span, sources: &[&SourceFile]) -> (String, u32, u32) {
+        type SourcePlace = (String, u32, u32);
+        type OriginShape = (u8, String, u32, u32, Option<SourcePlace>);
+        type OriginalMethodRow = (bool, String, OriginShape);
+
+        fn origin_shape(origin: &Origin, sources: &[&SourceFile]) -> OriginShape {
+            fn place(span: Span, sources: &[&SourceFile]) -> SourcePlace {
                 let source = sources
                     .iter()
                     .find(|source| source.id() == span.source())
@@ -5369,11 +5368,7 @@ mod tests {
         fn rows(
             program: &crate::core::ValidatedEffectProgram,
             sources: &[&SourceFile],
-        ) -> Vec<(
-            bool,
-            String,
-            (u8, String, u32, u32, Option<(String, u32, u32)>),
-        )> {
+        ) -> Vec<OriginalMethodRow> {
             let mut result = Vec::new();
             let mut interface = None;
             let mut method = None;

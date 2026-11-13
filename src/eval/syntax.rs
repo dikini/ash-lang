@@ -8913,7 +8913,7 @@ mod tests {
         let (short, paid) = run(&fixture, &packet, 2, cost - 1, true);
         assert!(matches!(short, Err(RuntimeFailure::Report(report))
             if report.primary.reason_code() == "internal.resource.syntax-work"));
-        assert!(paid <= 17 + cost - 1);
+        assert!(paid < 17 + cost);
         assert_eq!(Arc::strong_count(&packet), retained);
         for _ in 0..2 {
             let (exact, paid) = run(&fixture, &packet, 2, cost, true);

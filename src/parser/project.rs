@@ -690,10 +690,9 @@ fn validate_shallow_shape(
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             } else {
                 shape.node(NodeKind::TemplateBody)?;
-                if declaration || derive {
-                    if shape.peek_node_is(NodeKind::TemplateGeneratorClause) {
-                        shape.node(NodeKind::TemplateGeneratorClause)?;
-                    }
+                if (declaration || derive) && shape.peek_node_is(NodeKind::TemplateGeneratorClause)
+                {
+                    shape.node(NodeKind::TemplateGeneratorClause)?;
                 }
             }
         }
@@ -5106,10 +5105,10 @@ fn charge_declaration_invocation(
                 selection.declaration.implementation,
                 SurfaceSyntaxImplementation::Transformer(_)
             );
-    if let Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) = token.original {
-        if staged_identifier_transformer {
-            charge_staged_transformer_name(token, name, origin, budget)?;
-        }
+    if let Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) = token.original
+        && staged_identifier_transformer
+    {
+        charge_staged_transformer_name(token, name, origin, budget)?;
     }
     let generator_capture = executing
         && template
@@ -8328,18 +8327,18 @@ fn capture_contents_and_type(
     capture_contents_with_escapes(source, node, tokens, originals, None, None, false)
 }
 
+type CapturedTemplateGenerator = (
+    usize,
+    std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
+);
+
 fn capture_contents_with_escapes(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     escapes: Option<&[(usize, SurfaceName)]>,
-    generators: Option<
-        &[(
-            usize,
-            std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
-        )],
-    >,
+    generators: Option<&[CapturedTemplateGenerator]>,
     allow_repetition: bool,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
@@ -8476,12 +8475,7 @@ fn capture_contents_with_escapes(
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         escapes: Option<&[(usize, SurfaceName)]>,
-        generators: Option<
-            &[(
-                usize,
-                std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
-            )],
-        >,
+        generators: Option<&[CapturedTemplateGenerator]>,
         closing: Option<TokenKind>,
         allow_repetition: bool,
     ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {

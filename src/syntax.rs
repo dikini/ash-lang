@@ -2846,6 +2846,13 @@ fn generator_resource(error: ResourceFailure, span: Span) -> TemplateSubstitutio
     )
 }
 
+type GeneratorAdapterDefinition = (
+    crate::surface::SurfaceDefinition,
+    Vec<SyntaxNameUse>,
+    Vec<SurfaceQuoteSite>,
+    Vec<SurfaceAdvanceSite>,
+);
+
 /// Construct the ordinary private entry consumed by the staged caller view.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generator_adapter_definition(
@@ -2861,15 +2868,7 @@ pub(crate) fn generator_adapter_definition(
     owners: &[SyntaxOwner],
     frame: &Arc<ExpansionFrame>,
     budget: &mut SyntaxBudget,
-) -> Result<
-    (
-        crate::surface::SurfaceDefinition,
-        Vec<SyntaxNameUse>,
-        Vec<SurfaceQuoteSite>,
-        Vec<SurfaceAdvanceSite>,
-    ),
-    crate::parser::MacroParseFailure,
-> {
+) -> Result<GeneratorAdapterDefinition, crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
     use crate::surface::*;
     let span = frame.invocation;
@@ -6193,7 +6192,7 @@ pub(crate) fn prepare_escape_probes(
                 diagnostic: None,
             },
         };
-        function.domain = Box::new(domain);
+        *function.domain = domain;
         equation.patterns[0] = pattern;
         definitions.push(definition);
     }
@@ -6504,18 +6503,19 @@ pub(crate) fn finish_escape_probes(
                 diagnostic: None,
             };
         }
-        function.codomain = Box::new(ty);
+        *function.codomain = ty;
         if pure {
             // The ordinary probe finalized this initializer as effect-free;
             // the complete final module check verifies the narrower shell.
             function.effects = None;
         }
-        block.result = Box::new(returned);
+        *block.result = returned;
     }
     Ok(())
 }
 
 /// Inspect all splice uses, including those nested in another repetition.
+#[allow(clippy::too_many_arguments)] // Matcher, scope, and work inputs remain independent.
 fn repetition_length<'a>(
     repeat: &'a TemplateRepeat,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -6726,6 +6726,7 @@ fn charge_declaration_template(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // Keep the independent template and work inputs explicit.
 fn charge_template_inner(
     template: &[MacroOutputNode],
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -7259,6 +7260,7 @@ pub(crate) fn normalize_declaration_line_ends(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Recursive scope, substitutions, and work remain separate.
 fn substitute_contents_at(
     contents: &mut Vec<MacroOutputNode>,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -7418,8 +7420,8 @@ fn substitute_leaf(
     budget: &mut Option<&mut SyntaxBudget>,
     mut generator: Option<&mut GeneratorPlanner>,
     escapes: Option<&Arc<[crate::surface::SurfaceTemplateEscape]>>,
-    mut admission_identifiers: Option<&mut Vec<SurfaceName>>,
-    mut escape_placeholders: Option<&mut Vec<SurfaceName>>,
+    admission_identifiers: Option<&mut Vec<SurfaceName>>,
+    escape_placeholders: Option<&mut Vec<SurfaceName>>,
 ) -> Result<(), TemplateSubstitutionFailure> {
     match node {
         MacroOutputNode::Splice(name) => {
@@ -7488,7 +7490,7 @@ fn substitute_leaf(
             }
         }
         MacroOutputNode::TemplateEscape(name) => {
-            if let Some(planner) = generator.as_deref_mut() {
+            if let Some(planner) = generator {
                 let Some(escapes) = escapes else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
@@ -7498,7 +7500,7 @@ fn substitute_leaf(
                 *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
                 return Ok(());
             }
-            let Some(identifiers) = admission_identifiers.as_deref_mut() else {
+            let Some(identifiers) = admission_identifiers else {
                 return Err(TemplateSubstitutionFailure::Invalid(name.span));
             };
             let Some(budget) = budget.as_deref_mut() else {
@@ -7539,7 +7541,7 @@ fn substitute_leaf(
                 diagnostic: None,
             };
             identifiers.push(placeholder.clone());
-            if let Some(escapes) = escape_placeholders.as_deref_mut() {
+            if let Some(escapes) = escape_placeholders {
                 charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
                 if escapes.len() == escapes.capacity() {
                     budget

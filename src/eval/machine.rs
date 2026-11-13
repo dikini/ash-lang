@@ -3147,10 +3147,10 @@ impl<'runtime> Machine<'runtime> {
                                 .verify_advance_guard(&guard)?;
                             return_match(arms, environment, value, &self.heap)
                         })();
-                        if result.is_err() {
-                            if let Some(host) = &mut self.syntax_host {
-                                host.snapshot_advance_guard(&guard);
-                            }
+                        if result.is_err()
+                            && let Some(host) = &mut self.syntax_host
+                        {
+                            host.snapshot_advance_guard(&guard);
                         }
                         drop(guard);
                         self.apply(result?);

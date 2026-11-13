@@ -2243,7 +2243,6 @@ where
                 );
                 let template_parse_failure = syntax_expansion.take_parse_failure();
                 drop(syntax_expansion);
-                drop(transformer);
                 if let Some(failure) = template_parse_failure {
                     return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
                 }
@@ -2855,10 +2854,16 @@ std::thread_local! {
     static ORDINARY_QUOTE_RESOURCE_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteResourceObserver>> = const { std::cell::Cell::new(None) };
     static ORDINARY_QUOTE_OWNER_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteOwnerObserver>> = const { std::cell::Cell::new(None) };
     static LOADED_QUOTE_OBSERVER: std::cell::Cell<Option<fn(&crate::module::LoadedModule)>> = const { std::cell::Cell::new(None) };
-    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<GeneratorOwnerObserver>> = const { std::cell::Cell::new(None) };
     static GENERATOR_ADAPTER_OBSERVER: std::cell::Cell<Option<GeneratorAdapterObserver>> = const { std::cell::Cell::new(None) };
-    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<GeneratorLifecycleObserver>> = const { std::cell::Cell::new(None) };
 }
+
+#[cfg(test)]
+type GeneratorOwnerObserver = fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan);
+
+#[cfg(test)]
+type GeneratorLifecycleObserver = fn([usize; 5], [usize; 5]);
 
 #[cfg(test)]
 type GeneratorAdapterObserver = fn(
@@ -3708,9 +3713,7 @@ fn prepare_transformer_entry(
         }
     }
     if !quote_sites.is_empty() {
-        let budget = syntax_work
-            .as_deref_mut()
-            .ok_or_else(internal_file_failure)?;
+        let budget = syntax_work.ok_or_else(internal_file_failure)?;
         budget
             .charge_units(quote_sites.len())
             .map_err(quote_resource_failure)?;
@@ -6247,6 +6250,15 @@ mod tests {
         }
     }
 
+    type ConstructedQuoteSite = (usize, usize, bool, String);
+    type ConstructedQuoteDefinition = (String, bool, bool, Vec<ConstructedQuoteSite>);
+    type H4PublicName = (
+        String,
+        usize,
+        crate::source::Span,
+        Option<crate::source::Span>,
+    );
+
     #[derive(Debug)]
     struct ConstructedQuoteObservation {
         no_lexical_quote: bool,
@@ -6254,7 +6266,7 @@ mod tests {
         has_quote_owner: bool,
         distinct_callees: bool,
         site_count: usize,
-        definitions: Vec<(String, bool, bool, Vec<(usize, usize, bool, String)>)>,
+        definitions: Vec<ConstructedQuoteDefinition>,
     }
 
     #[derive(Debug)]
@@ -6327,7 +6339,7 @@ mod tests {
         static ADVANCE_CAPTURE_RANGES: RefCell<Vec<crate::eval::machine_test_hooks::AdvanceCaptureObservation>> = const { RefCell::new(Vec::new()) };
         static ADVANCE_TRACE: RefCell<Vec<(&'static str, usize, usize, usize)>> = const { RefCell::new(Vec::new()) };
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
-        static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
+        static H4_PUBLIC_NAMES: RefCell<Vec<H4PublicName>> = const { RefCell::new(Vec::new()) };
         static CONSTRUCTED_QUOTE_OBSERVATIONS: RefCell<Vec<ConstructedQuoteObservation>> = const { RefCell::new(Vec::new()) };
         static ORDINARY_QUOTE_ENTRY: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
         static ORDINARY_QUOTE_ENTRIES: RefCell<Vec<OrdinaryQuoteEntryObservation>> = const { RefCell::new(Vec::new()) };
@@ -9362,6 +9374,79 @@ main () = one(()) + two(())
         if !names.is_empty() {
             GENERATOR_ORDER.with(|slot| *slot.borrow_mut() = names);
         }
+    }
+
+    fn observe_generator_shapes_and_actions(
+        _owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        GENERATOR_PLAN.with(|record| {
+            let mut record = record.borrow_mut();
+            record.extend(plan.shapes.iter().map(|(generators, binding)| {
+                ("shape".to_owned(), generators[*binding].name.text.clone())
+            }));
+            record.extend(plan.actions.iter().map(|action| match action {
+                crate::syntax::GeneratorAction::Enter {
+                    generators,
+                    binding,
+                    ..
+                } => ("enter".to_owned(), generators[*binding].name.text.clone()),
+                crate::syntax::GeneratorAction::Advance {
+                    generators,
+                    binding,
+                    ..
+                } => ("step".to_owned(), generators[*binding].name.text.clone()),
+                crate::syntax::GeneratorAction::Escape { .. } => {
+                    ("escape".to_owned(), String::new())
+                }
+            }));
+        });
+    }
+
+    #[test]
+    fn zero_iteration_checks_generator_shape_without_creating_an_instance() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        for (entry, value) in [("main.ash", "310"), ("zero_iterations.ash", "42")] {
+            hooks::reset();
+            GENERATOR_PLAN.with(|record| record.borrow_mut().clear());
+            GENERATOR_LIFECYCLES.with(|record| record.borrow_mut().clear());
+            ADVANCE_SELECTED_COUNT.set(0);
+            ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+            GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_shapes_and_actions));
+            GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+            hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+
+            let compiled = compile_path(RunConfiguration {
+                entry: fixtures.join(entry),
+                roots: ModuleRoots::empty(),
+            })
+            .expect("the unchanged generator graph compiles");
+            GENERATOR_OWNER_OBSERVER.set(None);
+            GENERATOR_LIFECYCLE_OBSERVER.set(None);
+            hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+
+            let plan = GENERATOR_PLAN.with(|record| record.borrow().clone());
+            let lifecycles = GENERATOR_LIFECYCLES.with(|record| record.borrow().clone());
+            assert_eq!(lifecycles, [[1, 0, 1, 1, 0]]);
+            assert_generator_cleanup(0);
+            assert_eq!(execute(&compiled).unwrap().value_display(), value);
+            assert_generator_cleanup(1);
+            if entry == "main.ash" {
+                assert!(plan.iter().any(|(kind, _)| kind == "enter"));
+                assert!(plan.iter().any(|(kind, _)| kind == "step"));
+                assert!(ADVANCE_SELECTED_COUNT.get() > 0);
+            } else {
+                // The step shape is checked, but the empty repetition never
+                // creates a state or executes the fixture's diverging seed.
+                assert_eq!(plan, [("shape".to_owned(), "number".to_owned())]);
+                assert_eq!(ADVANCE_SELECTED_COUNT.get(), 0);
+            }
+            drop(compiled);
+        }
+        hooks::reset();
     }
 
     #[test]

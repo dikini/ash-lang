@@ -503,7 +503,6 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     ));
     let weak = Arc::downgrade(view.retained_source());
     drop(view);
-    drop(loan);
     drop(slot);
     assert!(weak.upgrade().is_none());
 
@@ -701,7 +700,6 @@ fn caller_quote_record_snapshot_is_prepaid_shared_and_retryable() {
                 assert_eq!(Arc::strong_count(retained_generators), baseline + 1);
                 let weak = Arc::downgrade(&owner);
                 drop(owner);
-                drop(loan);
                 drop(owner_slot);
                 drop(source_slot);
                 assert!(weak.upgrade().is_none());

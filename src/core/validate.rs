@@ -33653,8 +33653,7 @@ mod tests {
             );
             let error = validator
                 .validate_module_registry(None)
-                .err()
-                .expect("the restored fixed-original pair refuses");
+                .expect_err("the restored fixed-original pair refuses");
             assert_eq!(error.reason(), ValidationReason::Registry);
             assert_eq!(
                 validator.nominal_overlap_refusal.get(),
@@ -34047,8 +34046,7 @@ mod tests {
             );
             let error = validator
                 .validate_module_registry(None)
-                .err()
-                .expect("the fixed-original overlap must refuse");
+                .expect_err("the fixed-original overlap must refuse");
             assert_eq!(error.reason(), ValidationReason::Registry);
             assert_eq!(
                 validator.nominal_overlap_refusal.get(),
@@ -34882,8 +34880,7 @@ mod tests {
                 assert_eq!(
                     result
                         .as_ref()
-                        .err()
-                        .expect("one-short linked preparation refuses")
+                        .expect_err("one-short linked preparation refuses")
                         .reason(),
                     ValidationReason::Resource
                 );

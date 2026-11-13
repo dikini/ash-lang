@@ -984,23 +984,25 @@ mod presentation_tests {
             definition,
         }));
         let mut graph = GraphDiagnostic {
-            failure: Box::new(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
-                source,
-                import_span: None,
-                lexical: Vec::new(),
-                parser: Vec::new(),
-                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
-            }))),
+            failure: Box::new(GraphFailure {
+                failure: LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    source,
+                    import_span: None,
+                    lexical: Vec::new(),
+                    parser: Vec::new(),
+                    resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                })),
+                resource_location: Some(location),
+            }),
             sources: Box::default(),
             compilation_work: None,
-            resource_location: Some(location),
         };
         assert!(matches!(
             compile_graph_diagnostics(&graph),
             Err(PresentationError::MissingSource)
         ));
 
-        graph.resource_location = None;
+        graph.failure.resource_location = None;
         let diagnostics = compile_graph_diagnostics(&graph).unwrap();
         assert_eq!(diagnostics.len(), 1);
         let mut output = Vec::new();
@@ -1062,10 +1064,12 @@ mod presentation_tests {
                 "corrupt compiler data must not reject source"
             );
             let context = GraphDiagnostic {
-                failure: Box::new(failure),
+                failure: Box::new(GraphFailure {
+                    failure,
+                    resource_location: None,
+                }),
                 sources: vec![module.source].into_boxed_slice(),
                 compilation_work: None,
-                resource_location: None,
             };
             let diagnostics = crate::presentation::compile_graph_diagnostics(&context).unwrap();
             let mut output = Vec::new();
@@ -1363,15 +1367,22 @@ impl Error for LoadGraphError {}
 /// Sources are moved out of traversal state only after loading fails.
 #[derive(Debug)]
 pub struct GraphDiagnostic {
-    failure: Box<LoadGraphError>,
+    failure: Box<GraphFailure>,
     sources: Box<[SourceFile]>,
     compilation_work: Option<Box<crate::compiler_work::CompilationWork>>,
+}
+
+// Keep the optional context in the existing failure allocation so preserving
+// a paid resource location does not require another allocation on failure.
+#[derive(Debug)]
+struct GraphFailure {
+    failure: LoadGraphError,
     resource_location: Option<crate::syntax::DiagnosticLocation>,
 }
 
 impl GraphDiagnostic {
     pub(crate) fn resource_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
-        self.resource_location.as_ref()
+        self.failure.resource_location.as_ref()
     }
 
     pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
@@ -1389,18 +1400,18 @@ impl GraphDiagnostic {
     /// Borrows the unchanged graph-loading failure.
     #[must_use]
     pub const fn failure(&self) -> &LoadGraphError {
-        &self.failure
+        &self.failure.failure
     }
 
     /// Consumes the diagnostic when only its semantic failure is needed.
     #[must_use]
     pub fn into_failure(self) -> LoadGraphError {
-        *self.failure
+        self.failure.failure
     }
 
     pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
         let mut sources = self.sources.into_vec();
-        match *self.failure {
+        match self.failure.failure {
             LoadGraphError::Syntax(failure) => sources.push(failure.source),
             LoadGraphError::Projection { source, .. } => sources.push(source),
             _ => {}
@@ -1410,7 +1421,7 @@ impl GraphDiagnostic {
 
     /// Borrows all admitted sources, including a rejected syntax source.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
-        let rejected = match &*self.failure {
+        let rejected = match &self.failure.failure {
             LoadGraphError::Syntax(failure) => Some(&failure.source),
             LoadGraphError::Projection { source, .. } => Some(source),
             _ => None,
@@ -1421,25 +1432,25 @@ impl GraphDiagnostic {
     /// Returns the module-stage failure, if present.
     #[must_use]
     pub const fn as_module_failure(&self) -> Option<&ModuleFailure> {
-        self.failure.as_module_failure()
+        self.failure.failure.as_module_failure()
     }
 
     /// Returns the stable module-stage reason, if present.
     #[must_use]
     pub const fn module_reason(&self) -> Option<ModuleReason> {
-        self.failure.module_reason()
+        self.failure.failure.module_reason()
     }
 
     /// Preserves the original source-rejection classification.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        self.failure.is_source_rejection()
+        self.failure.failure.is_source_rejection()
     }
 }
 
 impl fmt::Display for GraphDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.failure.fmt(formatter)
+        self.failure.failure.fmt(formatter)
     }
 }
 
@@ -1448,10 +1459,12 @@ impl Error for GraphDiagnostic {}
 impl From<LoadGraphError> for GraphDiagnostic {
     fn from(failure: LoadGraphError) -> Self {
         Self {
-            failure: Box::new(failure),
+            failure: Box::new(GraphFailure {
+                failure,
+                resource_location: None,
+            }),
             sources: Box::default(),
             compilation_work: None,
-            resource_location: None,
         }
     }
 }
@@ -1782,6 +1795,7 @@ impl StagedSyntax {
 }
 
 impl StagedModule {
+    #[allow(clippy::too_many_arguments)] // Independent staging, quote, and work loans stay explicit.
     fn into_loaded(
         self,
         budget: &mut SyntaxBudget,
@@ -2125,7 +2139,10 @@ impl HeaderGraph {
                 let loaded = std::mem::take(&mut self.loaded);
                 let pending = std::mem::take(&mut self.pending);
                 Err(GraphDiagnostic {
-                    failure: Box::new(failure),
+                    failure: Box::new(GraphFailure {
+                        failure,
+                        resource_location,
+                    }),
                     sources: loaded
                         .into_iter()
                         .map(LoadedModule::into_source)
@@ -2133,7 +2150,6 @@ impl HeaderGraph {
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                     compilation_work: None,
-                    resource_location,
                 })
             }
         }
@@ -2704,14 +2720,16 @@ fn discover_graph_with_budget(
         })
     })();
     result.map_err(|failure| GraphDiagnostic {
-        failure: Box::new(failure),
+        failure: Box::new(GraphFailure {
+            failure,
+            resource_location: None,
+        }),
         sources: staged
             .into_iter()
             .map(|module| module.source)
             .collect::<Vec<_>>()
             .into_boxed_slice(),
         compilation_work: None,
-        resource_location: None,
     })
 }
 
