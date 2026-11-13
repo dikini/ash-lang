@@ -1386,6 +1386,8 @@ messages! {
     syntax_rejection_cause => "syntax-rejection-cause" {},
     syntax_invocation_frame => "syntax-invocation-frame" {},
     syntax_definition_frame => "syntax-definition-frame" {},
+    syntax_generator_step_origin => "syntax-generator-step-origin" {},
+    syntax_generator_step_definition => "syntax-generator-step-definition" {},
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.
     resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },
@@ -1471,6 +1473,10 @@ messages! {
     resolve_unknown_operation => "resolve-unknown-operation" { name: &'a str = "missing" },
     /// A checked name occurrence carrying an unresolved lookup.
     unresolved_name => "unresolved-name" {},
+    /// A foreign library is missing its supported profile.
+    foreign_missing_profile => "foreign-missing-profile" {},
+    /// A foreign library contains a member outside the existing supported set.
+    foreign_unsupported_member => "foreign-unsupported-member" {},
     /// A term or operation name conflicts in its declaration scope.
     resolve_duplicate_global => "resolve-duplicate-global" { name: &'a str = "value" },
     /// Nominal types, interfaces and effects share a declaration namespace.
@@ -1600,6 +1606,13 @@ messages! {
     parse_semicolon => "parse-semicolon" {},
     /// This token is not allowed at this grammar position.
     parse_unexpected_token => "parse-unexpected-token" {},
+    parse_unknown_template_capture => "parse-unknown-template-capture" { capture: &'a str = "$name" },
+    parse_repetition_missing_driver => "parse-repetition-missing-driver" {},
+    parse_repetition_length_mismatch => "parse-repetition-length-mismatch" {},
+    parse_repetition_empty => "parse-repetition-empty" {},
+    parse_matcher_repetition_ambiguous => "parse-matcher-repetition-ambiguous" {},
+    parse_matcher_repetition_empty => "parse-matcher-repetition-empty" {},
+    parse_matcher_trailing_separator => "parse-matcher-trailing-separator" {},
     /// Parsing continues from this position.
     parse_recovery => "parse-recovery" {},
     /// Parsing resumes at this boundary.

@@ -13,6 +13,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
   the capacity repair for [issue #196](https://github.com/dikini/ash-lang/issues/196).
 - [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks
   the correction for [issue #195](https://github.com/dikini/ash-lang/issues/195).
+- [TASK-0068: Top-Level Declaration and Derive Macros](TASK-0068-top-level-declaration-macros.md)
+  tracks the declaration and derive transition and its remaining gates.
+
+## Retained delivery evidence
 
 The expression-macro milestone was retained at `387fdc96` and QA confirmed
 M01–M14. The completed TASK-0067 and its execution plan are preserved in Git at

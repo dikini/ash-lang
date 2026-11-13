@@ -49,7 +49,8 @@ pub(super) fn starts_library(parser: &Parser<'_>) -> bool {
     let offset = usize::from(parser.at(&TokenKind::Pub));
     matches!(parser.nth(offset),Some(TokenKind::Identifier(word)) if word=="foreign")
         && matches!(parser.nth(offset+1),Some(TokenKind::Identifier(word)) if word=="library")
-        && matches!(parser.nth(offset + 2), Some(TokenKind::UpperIdentifier(_)))
+        && (matches!(parser.nth(offset + 2), Some(TokenKind::UpperIdentifier(_)))
+            || parser.nth_is_admission_identifier(offset + 2))
         && parser.nth(offset + 3) == Some(&TokenKind::LeftBrace)
 }
 fn member(parser: &mut Parser<'_>) -> bool {

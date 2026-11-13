@@ -774,9 +774,9 @@ fn projects_literal_separated_expression_matcher() {
 }
 
 #[test]
-fn syntax_imports_are_contextual_and_preserve_ordinary_syntax_names() {
+fn syntax_imports_preserve_other_ordinary_names() {
     let module = parse_valid(
-        "import macros (syntax choose as selected, syntax)\nsyntax : Unit -> Int\nsyntax () = 42\n",
+        "import macros (syntax choose as selected, syntax_value)\nsyntax_value : Unit -> Int\nsyntax_value () = 42\n",
     );
     let SurfaceImportSelection::Targeted(items) = &module.imports[0].selection else {
         panic!("expected targeted selectors");
@@ -789,7 +789,7 @@ fn syntax_imports_are_contextual_and_preserve_ordinary_syntax_names() {
     ));
     assert!(matches!(
         &items[1],
-        SurfaceImportItem::Name { name, alias: None, .. } if name.text == "syntax"
+        SurfaceImportItem::Name { name, alias: None, .. } if name.text == "syntax_value"
     ));
     assert_eq!(module.definitions.len(), 1);
 }

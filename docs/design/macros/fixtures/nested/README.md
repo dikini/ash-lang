@@ -1,7 +1,9 @@
 # Nested declaration syntax fixture
 
-This proposed I20 graph is not executable before CP-0034. `outer_forms.ash`
-imports `inner` from `inner_forms.ash` and emits an invocation of that syntax
+This fixed I20 graph exercises declaration syntax.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates. `outer_forms.ash` imports `inner` from
+`inner_forms.ash` and emits an invocation of that syntax
 from its definition context. The caller imports a different `inner` from
 `caller_forms.ash`. `main.ash` must return `42 : Int`, showing that the
 definition-context invocation was not redirected to the caller's macro, which

@@ -309,6 +309,7 @@ define_kind_site_profiles! {
     FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree => (Field, Borrowed, Transient, InterfaceArgument, InterfaceParameter, EvidenceSelection, EvidenceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, SummaryTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ModuleStaging, Projection, SurfaceTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, SurfaceTree),
     FieldSyntaxOwnerContextBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, CheckedTreeAndSummaryTreeAndTransientWork),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TypeTree),
@@ -353,6 +354,7 @@ define_kind_site_profiles! {
     FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree => (Field, Owned, Summary, ValueType, Value, Resolution, ResolutionType, SummaryTree),
     FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree => (Field, Owned, Surface, CarrierRetention, PreservedCarrier, ModuleStaging, Projection, SurfaceTree),
     FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree => (Field, Owned, Surface, CarrierRetention, PreservedCarrier, Projection, Projection, SurfaceTree),
+    FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, Projection, Projection, TransientWork),
     FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree => (Field, Owned, Surface, DeclaredKind, Declared, Projection, Projection, SurfaceTree),
     FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree => (Field, Owned, Surface, ProjectionOnly, DeferredProjection, Projection, Projection, SurfaceTree),
     FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, CoreAdmission, CoreType, TransientWork),
@@ -451,10 +453,75 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Current physical carriers: original image owners, ordinary escape results,
+    // bounded generator frames, and authenticated caller syntax loans.
+    kind_site!("src/build/image.rs::AdmittedImageEffectProgram.program", FieldBuildProgramShared, Mixed),
+    kind_site!("src/build/mod.rs::AdmittedImageEffectProgram.$alias", FieldBuildProgramShared, Mixed),
+    kind_site!("src/driver.rs::GeneratorDiagnosticCapsule.entry", FieldNativeProgramBorrow),
+    kind_site!("src/elaborate.rs::CheckedEscapeResult.effects", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CheckedEscapeResult.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CoreElaborator.escape_results", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/eval/machine.rs::AdvanceFrame.ApplyArgument.function", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::AdvanceFrame.ApplyFunction.caller_environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::AdvanceFrame.Match.arms", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/eval/machine.rs::AdvanceFrame.Match.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.GeneratorAdvance.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/syntax.rs::$impl_SyntaxHost::$fn_repeated_capture_result::Frame.rest", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/syntax.rs::$impl_SyntaxHost::$fn_repeated_capture_result::Frame.values", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Borrowed),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.staged_owners", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Borrowed),
+    kind_site!("src/module.rs::LoadedModule.caller_quote_owner", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Shared),
+    kind_site!("src/module.rs::StagedModuleLoan.caller_quote_owner", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/module.rs::StagedModuleLoan.quote_projection", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/parser/project.rs::CapturedTemplateGenerator.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/resolve.rs::DeclarationEffectOwner.Admitted.loaded", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::EffectSource.$alias", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::Resolver.current_caller", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceTemplateGenerator.seed_contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::CallerQuoteOwner.selected", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorAdapterDefinition.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::GeneratorPlan.captures", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::PreparedQuoteSite.caller_quote_owner", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/syntax.rs::QuoteExpansionLoan.owners", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/syntax.rs::SyntaxContextOwner.CurrentCaller.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::SyntaxContexts.owners", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::SyntaxExpansion.owners", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::SyntaxOwner.caller_quote_owner", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     // Staged syntax retains surface fragments, checked owners and compile-time
     // evaluation state through the same ordinary projection and Core paths.
     // ValidatedCheckedRegistries.modules is now a borrowed generic &[M]; its
     // checked owners are inventoried at their concrete retention sites below.
+    // Quote sites carry the existing structured syntax and its authenticated owners.
+    kind_site!("src/core/validate.rs::ValidatedMacroEntry.quote_sites", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/driver.rs::TransformerContexts.Quote.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Borrowed),
+    kind_site!("src/driver.rs::TransformerContexts.Shared.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/elaborate.rs::CheckedQuoteSite.template", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.quote_sites", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.checked_quote_sites", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.quote_sites", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
+    kind_site!("src/elaborate.rs::QuoteSynthesisSite.template", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
+    kind_site!("src/eval/syntax.rs::$impl_SyntaxHost::$fn_fill_quote_contents::Group.nodes", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Borrowed),
+    kind_site!("src/eval/syntax.rs::$impl_SyntaxHost::$fn_fill_quote_contents::Group.output", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.quote_sites", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/module.rs::LoadedModule.quote_sites", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/mod.rs::QuoteProjection.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::$fn_project_expression_with_escape_reads::CaptureQuotes.sites", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::$fn_project_quote_contents::Group.children", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::ExpressionTask.FinishQuote.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::ProjectionTokens.quote_sites", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/parser/project.rs::QuoteProjection.sites", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/resolve.rs::ResolvedModuleAdmission.quote_sites", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree, Shared),
+    kind_site!("src/resolve.rs::Resolver.quote_sites", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Shared),
+    kind_site!("src/resolve.rs::Resolver.replacement_quote_sites", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Shared),
+    kind_site!("src/resolve.rs::Resolver.surface_quote_sites", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Borrowed),
+    kind_site!("src/resolved.rs::ResolvedModule.quote_sites", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
+    kind_site!("src/surface.rs::CapturedQuoteSites.Owned.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceExpressionCapture.quote_sites", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::ExpandedExpression.expression", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::ExpandedExpression.quote_sites", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::PreparedQuoteSite.nodes", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/syntax.rs::QuoteTemplate.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::ResolvedQuoteSite.template", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
+    kind_site!("src/syntax.rs::SurfaceQuoteSite.template", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/core/validate.rs::ValidatedMacroEntry.program", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
     kind_site!("src/driver.rs::CompilationInput.cfg.graph", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Borrowed),
     kind_site!("src/driver.rs::CompilationInput.Staged.0", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Borrowed),
@@ -463,15 +530,39 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/syntax.rs::SyntaxHost.contexts", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/syntax.rs::SyntaxHost.captures", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     kind_site!("src/eval/syntax.rs::SyntaxHost.expressions", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.declarations", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.types", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.patterns", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/module.rs::StagedSyntax.body", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::ModuleBody.Parsed.0", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.pending", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.loaded", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.completed", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/mod.rs::ParsedMacroTree.original_nodes", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/parser/mod.rs::Parser.syntax", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/mod.rs::Parser.syntax_selections", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/parser/mod.rs::Parser.declaration_output_nodes", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/parser/project.rs::DeclarationFrame.contexts", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::DeclarationFrame.deferred", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::DeclarationFrame.tree", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::PendingDeclarationOutput.contexts", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::PendingDeclarationOutput.output", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::DeclarationTree.Output.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::$fn_capture_source_declaration_contents_selected::GroupFrame.children", FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork),
+    kind_site!("src/parser/project.rs::$fn_project_structured_items::Frame.Items.captures", FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork),
+    kind_site!("src/parser/project.rs::$fn_project_structured_items::Frame.Repeat.columns", FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork),
+    kind_site!("src/parser/project.rs::ModuleProjection.definitions", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::ModuleProjection.effects", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/parser/project.rs::ModuleProjection.foreign_libraries", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/parser/project.rs::ModuleProjection.implementations", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::ModuleProjection.interfaces", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/parser/project.rs::ModuleProjection.resources", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/project.rs::ModuleProjection.syntax_declarations", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::ModuleProjection.type_declarations", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::ProjectionTokens.originals", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/project.rs::ProjectionToken.original", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/parser/project.rs::ProjectedDeclarationInvocation.selection", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::ProjectedDeclarationInvocation.captures", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/parser/project.rs::ExpressionTask.FinishSyntaxInvocation.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/resolve.rs::SyntaxInputs.owners", FieldSyntaxOwnerContextBorrow),
     kind_site!("src/resolve.rs::SyntaxInputs.terms", FieldSyntaxOwnerContextBorrow),
@@ -484,18 +575,55 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ImportedFacts.syntax_facts", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Mixed),
     kind_site!("src/surface.rs::SurfaceModule.syntax_declarations", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/surface.rs::SurfaceSyntaxDeclaration.template_contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceSyntaxDeclaration.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceTemplateGenerator.seed", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/surface.rs::SurfaceExprKind.SyntaxInvocation.captures", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/surface.rs::SurfaceSyntaxCapture.Expression.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/surface.rs::SurfaceSyntaxCapture.Type.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/surface.rs::SurfaceSyntaxCapture.Pattern.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceSyntaxCapture.Declaration.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceSyntaxCapture.Repeated.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceRepeatedCapture.values", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/surface.rs::SurfaceExpressionCapture.expression", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/surface.rs::SurfaceExpressionCapture.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfaceTypeCapture.ty", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceTypeCapture.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/surface.rs::SurfacePatternCapture.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::$fn_charge_type_value_inner::Pending.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::$fn_charge_type_value_inner::Pending.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::$fn_copy_fragment_output_inner::GroupFrame.nodes", FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork, Borrowed),
+    kind_site!("src/syntax.rs::$fn_copy_fragment_output_inner::GroupFrame.output", FieldMixedTransientCarrierRetentionPreservedCarrierProjectionProjectionTransientWork),
+    kind_site!("src/syntax.rs::OwnedSyntax.Block.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::OwnedSyntax.Contents.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::OwnedSyntax.Equation.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::OwnedSyntax.Expression.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::OwnedSyntax.Kind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/syntax.rs::OwnedSyntax.Local.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceDeclarationCapture.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::MacroOutputNode.Expression.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::MacroOutputNode.ForwardedExpression.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::MacroOutputNode.ForwardedType.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::MacroOutputNode.ForwardedPattern.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::MacroOutputNode.ForwardedDeclaration.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::MacroOutputNode.TemplateRepeat.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::TemplateRepeat.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::TemplateRepeat.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorAction.Enter.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorAction.Advance.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorPlan.shapes", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorPlan.actions", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::ActiveGenerator.generators", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::GeneratorPlanner.plan", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::GeneratorPlanner.active", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::DeclarationAdapter.Generators.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/syntax.rs::MacroOutputNode.Group.1", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::TransformerOutput.Expanded.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SelectedSyntax.declaration", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::SyntaxContexts.caller", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::SyntaxContexts.owner_imports", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::DeclarationTransformer.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SyntaxTransformer.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/module.rs::StagedDeclarationTransformer.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SyntaxExpansion.selected", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/syntax.rs::SyntaxExpansion.owner_imports", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/syntax.rs::SyntaxExpansion.transformer", FieldSyntaxOwnerContextBorrow),
@@ -506,8 +634,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.FinishTuple.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.FinishConstructor.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_175_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_175_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_181_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_181_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
     kind_site!("src/build/image.rs::ArgumentBuffer.0", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::DecodedRow.value", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::Decoder.decoded_rows", FieldBuildTypeOwned),
@@ -897,8 +1025,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_inner::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_inner::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::ResolvedOwnerOccurrenceBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::$fn_same_summary_type_after_substitutions::OwnedSubstitutions.rows", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::$fn_same_summary_type_after_substitutions::OwnedSubstitutions.types", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -1760,11 +1888,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/pattern.rs::OwnedTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork),
     kind_site!("src/pattern.rs::State.2", FieldTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork),
     kind_site!("src/pattern.rs::TypeReplacementMap.0", FieldTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork),
-    kind_site!("src/resolve.rs::$fn_collect_free_type_names::Task.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$fn_collect_free_type_names::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_collect_free_type_names::Task.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_collect_free_type_names::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$fn_surface_kind_to_kind::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_inner::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_inner::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::DependencyExports.summary", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
     kind_site!("src/resolve.rs::ImportedConstructorFactBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
     kind_site!("src/resolve.rs::ImportedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -7480,7 +7608,11 @@ fn current_source_exposes_only_one_source_pipeline() {
 
 #[test]
 fn resolved_modules_have_one_ordered_representation_and_kind_gate_before_construction() {
-    const CONSTRUCTION: [&str; 5] = ["ResolvedModule", ":", ":", "new", "("];
+    const CONSTRUCTIONS: [[&str; 5]; 3] = [
+        ["ResolvedModule", ":", ":", "new", "("],
+        ["ResolvedModule", ":", ":", "new_with_quote_sites", "("],
+        ["ResolvedModule", ":", ":", "new_with_sites", "("],
+    ];
     const GATES: [[&str; 2]; 3] = [
         ["prepare_module_representation_kinds", "("],
         ["check_newtype_representation_cycles", "("],
@@ -7500,8 +7632,8 @@ fn resolved_modules_have_one_ordered_representation_and_kind_gate_before_constru
             .replace('\\', "/");
         let source = fs::read_to_string(&path).expect("production source should be readable");
         let tokens = production_rust_code_tokens(&source);
-        for (index, window) in tokens.windows(CONSTRUCTION.len()).enumerate() {
-            if window == CONSTRUCTION {
+        for (index, window) in tokens.windows(CONSTRUCTIONS[0].len()).enumerate() {
+            if CONSTRUCTIONS.iter().any(|call| window == call.as_slice()) {
                 constructors.push((relative.clone(), index));
             }
         }
@@ -7509,34 +7641,98 @@ fn resolved_modules_have_one_ordered_representation_and_kind_gate_before_constru
             resolve_tokens = Some(tokens.into_iter().map(str::to_owned).collect::<Vec<_>>());
         }
     }
-    assert_eq!(
-        constructors.len(),
-        1,
-        "production ResolvedModule construction must remain a single fail-closed gate: {constructors:?}",
-    );
-    assert_eq!(constructors[0].0, "src/resolve.rs");
-    let tokens = resolve_tokens.expect("resolution production source should be scanned");
-    let gates = GATES.map(|gate| {
-        let calls = tokens
-            .windows(gate.len())
-            .enumerate()
-            .filter_map(|(index, window)| (window == gate).then_some(index))
-            .collect::<Vec<_>>();
+    let assert_admission = |tokens: &[&str], constructors: &[(String, usize)]| {
         assert_eq!(
-            calls.len(),
+            constructors.len(),
             1,
-            "resolution must invoke each admission stage exactly once: {gate:?}: {calls:?}"
+            "production ResolvedModule construction must remain a single fail-closed gate: {constructors:?}",
         );
-        calls[0]
+        assert_eq!(constructors[0].0, "src/resolve.rs");
+        let finish = tokens
+            .windows(3)
+            .position(|window| window == ["fn", "finish_module_resolution", "("])
+            .expect("the ordered module admission helper must exist");
+        let finish_open = tokens[finish..]
+            .iter()
+            .position(|token| *token == "{")
+            .map(|offset| finish + offset)
+            .expect("the ordered module admission helper must have a body");
+        let finish_close = matching_token(tokens, finish_open, "{", "}");
+        let gates = GATES.map(|gate| {
+            let calls = tokens
+                .windows(gate.len())
+                .enumerate()
+                .filter_map(|(index, window)| (window == gate).then_some(index))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                calls.len(),
+                1,
+                "resolution must invoke each admission stage exactly once: {gate:?}: {calls:?}"
+            );
+            calls[0]
+        });
+        let construction = tokens
+            .windows(CONSTRUCTIONS[0].len())
+            .position(|window| CONSTRUCTIONS.iter().any(|call| window == call.as_slice()))
+            .expect("resolution must publish the checked module once");
+        assert!(
+            finish_open < gates[0]
+                && gates[0] < gates[1]
+                && gates[1] < gates[2]
+                && gates[2] < construction
+                && construction < finish_close,
+            "representation kinds, cycles and remaining kinds must complete in order before construction in the admission helper",
+        );
+    };
+    let tokens = resolve_tokens.expect("resolution production source should be scanned");
+    let tokens = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    assert_admission(&tokens, &constructors);
+
+    let assert_rejected = |label: &str, trial: Vec<&str>| {
+        let trial_constructors = trial
+            .windows(CONSTRUCTIONS[0].len())
+            .enumerate()
+            .filter(|(_, window)| CONSTRUCTIONS.iter().any(|call| *window == call.as_slice()))
+            .map(|(index, _)| ("src/resolve.rs".to_owned(), index))
+            .collect::<Vec<_>>();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_admission(&trial, &trial_constructors);
+            }))
+            .is_err(),
+            "the actual admission guard must reject {label}",
+        );
+    };
+    for name in ["new", "new_with_quote_sites", "new_with_sites"] {
+        let mut duplicate = tokens.clone();
+        duplicate.extend_from_slice(&["ResolvedModule", ":", ":", name, "(", "parts", ")", ";"]);
+        assert_rejected(name, duplicate);
+    }
+    let gate_positions = GATES.map(|gate| {
+        tokens
+            .windows(gate.len())
+            .position(|window| window == gate)
+            .expect("the actual ordered gate exists")
     });
-    let construction = tokens
-        .windows(CONSTRUCTION.len())
-        .position(|window| window == CONSTRUCTION)
-        .expect("resolution must publish the checked module once");
-    assert!(
-        gates[0] < gates[1] && gates[1] < gates[2] && gates[2] < construction,
-        "representation kinds, cycles and remaining kinds must complete in order before construction",
-    );
+    let mut reordered = tokens.clone();
+    reordered.swap(gate_positions[0], gate_positions[1]);
+    assert_rejected("reordered kind stages", reordered);
+    let mut outside = tokens.clone();
+    outside[gate_positions[2]] = "omitted_kind_gate";
+    outside.extend_from_slice(&[
+        "fn",
+        "outside_admission",
+        "(",
+        ")",
+        "{",
+        "check_remaining_module_kinds",
+        "(",
+        "parts",
+        ")",
+        ";",
+        "}",
+    ]);
+    assert_rejected("kind stage outside the admission helper", outside);
 }
 
 #[test]
@@ -7651,7 +7847,7 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
     let dialect = production_rust_code_tokens(dialect_source);
     let parameter_anchors_handoff = [
         "fn",
-        "from_linked",
+        "prepare_from_linked",
         "(",
         "linked",
         ":",
@@ -7664,14 +7860,68 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
         ":",
         "ValidatedInterfaceProgram",
     ];
-    assert_eq!(
-        dialect
+    let assert_anchor = |dialect: &[&str]| {
+        assert_eq!(
+            dialect
+                .windows(parameter_anchors_handoff.len())
+                .filter(|window| *window == parameter_anchors_handoff)
+                .count(),
+            1,
+            "generated parameter anchors must borrow the checked linked program"
+        );
+        let anchor = dialect
             .windows(parameter_anchors_handoff.len())
-            .filter(|window| *window == parameter_anchors_handoff)
-            .count(),
-        1,
-        "generated parameter anchors must borrow the checked linked program"
-    );
+            .position(|window| window == parameter_anchors_handoff)
+            .expect("the borrowed linked-anchor preparation must exist");
+        let parameters_close = matching_token(dialect, anchor + 2, "(", ")");
+        assert!(
+            dialect[anchor + 3..parameters_close]
+                .windows(5)
+                .any(|window| window == ["work", ":", "&", "mut", "TypeWorkBudget"]),
+            "linked-anchor preparation must borrow its continuing work budget",
+        );
+        assert!(
+            dialect[parameters_close + 1..].starts_with(&[
+                ">",
+                "Result",
+                "<",
+                "Self",
+                ",",
+                "OwnerAnchorPreparationError",
+                ">",
+            ]),
+            "linked-anchor preparation must remain fallible before anchor publication",
+        );
+    };
+    assert_anchor(&dialect);
+    let assert_rejected = |label: &str, trial: Vec<&str>| {
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_anchor(&trial);
+            }))
+            .is_err(),
+            "the actual linked-anchor guard must reject {label}",
+        );
+    };
+    let anchor = dialect
+        .windows(parameter_anchors_handoff.len())
+        .position(|window| window == parameter_anchors_handoff)
+        .expect("the actual linked-anchor signature exists");
+    let mut owned = dialect.clone();
+    owned.remove(anchor + 5);
+    assert_rejected("owned linked evidence", owned);
+    let parameters_close = matching_token(&dialect, anchor + 2, "(", ")");
+    let work = dialect[anchor + 3..parameters_close]
+        .windows(5)
+        .position(|window| window == ["work", ":", "&", "mut", "TypeWorkBudget"])
+        .map(|offset| anchor + 3 + offset)
+        .expect("the actual mutable work loan exists");
+    let mut immutable_work = dialect.clone();
+    immutable_work.remove(work + 3);
+    assert_rejected("missing mutable work loan", immutable_work);
+    let mut infallible = dialect.clone();
+    infallible.splice(parameters_close + 1..parameters_close + 8, [">", "Self"]);
+    assert_rejected("infallible anchor publication", infallible);
     for name in ["evidence_validation", "ValidatedInterfaceProgram"] {
         assert_eq!(
             dialect.iter().filter(|token| **token == name).count(),

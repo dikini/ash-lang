@@ -1,12 +1,16 @@
 # Top-level declaration and derive macros: working design
 
-This companion develops [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md).
-It is a proposed design and prospective delivery map, not an active task,
-accepted grammar, implementation plan, or current Ash. The expression slice
-is implemented and retained. Recheck its contract before fixing declaration
-producer/consumer interfaces or dispatching work.
-Use the [working issue-planning rules](../../project/issue-planning.md) when
-revising the delivery breakdown.
+> This design records the transition as it was developed. References below to
+> proposed work, current behavior, implementation and evidence describe that
+> historical stage. The [specification](../../../spec/syntax-expansion.md)
+> describes the language; [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
+> records delivery and remaining verification.
+
+This companion develops [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+It preserves the design and prospective delivery map that accompanied the
+proposal. It is informative rather than a task or language specification.
+The [working issue-planning rules](../../project/issue-planning.md) govern
+current delivery planning.
 
 ## Objective and difficulty
 
@@ -32,9 +36,10 @@ appear below; predicted and actual difficulty remain separate. The independent
 review identified grant-specific work not required by the retained expression
 slice and implementation choices that remain open. The 95 points are the
 recorded pre-review prediction, not a fresh estimate for the revised contract.
-The [local delivery plan](slice2-delivery-plan.md) records the later 126-point
-prediction and the revised 130-point forecast, including four points of already
-recorded planning work.
+The [local delivery plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md)
+records the later 126-point
+prediction, the later 130-point forecast and the current 150-point scope
+prediction, including 142 points of remaining delivery work.
 
 | Functionality | Points | Counted once |
 | --- | ---: | --- |
@@ -157,8 +162,8 @@ exhaustive source matches is assumed.
 The retained expression slice checks template syntax at definition, then
 resolves surviving free names at expansion in their definition context. Issued
 contexts and ordinary resolution enforce access without separate per-reference
-grant objects. CP-0034 follows that baseline; declaration-specific additions
-remain proposed and must be checked against the retained contract.
+grant objects. CP-0034 follows that baseline; its accepted declaration-specific
+additions still need implementation and connected evidence.
 
 | Slice 1 boundary | Reuse and slice 2 addition | Initial evidence |
 | --- | --- | --- |
@@ -171,14 +176,14 @@ remain proposed and must be checked against the retained contract.
 The [current syntax expansion specification](../../../spec/syntax-expansion.md)
 and the QA-confirmed slice 1 delivery establish the expression baseline in
 this table. `Node` has token, identifier, group and expression cases; `Capture`
-has expression and identifier cases. The declaration-specific cases remain
-proposed; generators return syntax directly without a conversion interface. The public
-token constructors and spellings are now specified in
+has expression and identifier cases. The declaration-specific cases are
+accepted but unimplemented; generators return syntax directly without a
+conversion interface. The public token constructors and spellings are specified in
 [lexical structure](../../../spec/lexical-structure.md#public-token-kinds).
 The expression host checks `Input -> MacroResult`, not an arbitrary generator
 step. Declaration staging, an adapter for steps and top-level identity behavior
 still require evidence. Slice 1 does not prove those additions work unchanged.
-The [local plan](slice2-delivery-plan.md#readiness-questions-before-implementation)
+The [local plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md#readiness-questions-before-implementation)
 records the outstanding checks and the syntax-only implementation boundary.
 
 ### Declaration syntax service
@@ -188,6 +193,10 @@ The following proposed additions extend the slice 1 public types in
 `DeclarationFragment` are opaque, compiler-issued handles like slice 1's
 `ExpressionFragment`. The alternatives shown are added to the existing sums;
 the existing alternatives and their meaning remain unchanged.
+
+Add `SyntaxKeyword` and `Dollar` to `TokenKind`, with fixed spellings `syntax`
+and `$`. The existing token operations and exhaustive-match migration rules
+apply; this extends the closed sum rather than adding a separate syntax API.
 
 ```text
 pub type Captures = NoCaptures
@@ -238,7 +247,7 @@ generators to the immediately preceding template or template repetition. Each
 binding uses `from` for its initial state and `step` for an ordinary Ash
 function. The clause is a template directive, not emitted Ash, and is distinct
 from slice 1's `=> using transformer` form. The proposed grammar is specified
-in [declaration grammar](declaration-grammar.md); it is not accepted behavior.
+in [declaration grammar](declaration-grammar.md); it is not yet current Ash.
 
 ```text
 pub syntax declaration: (make_constants) $( $name:ident ),+ => {
@@ -364,9 +373,10 @@ add no generator-specific effect rule.
 Any ordinary Ash function with the required type can be used as the step.
 The macro machinery threads its state and substitutes the fragment; it does not
 inspect the function body or add a type checker. Reuse existing syntax admission
-and diagnostics, and leave semantic checking to the ordinary compiler. Revise
-I17 to use the selected fragment result type; the current wrapper-based graph
-predates this decision.
+and diagnostics, and leave semantic checking to the ordinary compiler. I17
+provides a subtemplate graph and a procedural graph that selects quote-created
+fragments using the syntax service. It does not demonstrate fresh fragment
+construction from raw syntax.
 
 Check and execute the seed and step through the retained slice 1 host. Preserve
 its checked entry, bounded execution, syntax services, authenticated handles,
@@ -400,7 +410,8 @@ At invocation, resolve surviving names in their preserved definition context;
 ordinary checking handles generated declarations and propagates their errors.
 An unused template with an unresolved free name is valid, while an unused
 syntactically malformed template is rejected by the parser. This follows the
-retained expression slice; the declaration-specific policy remains proposed.
+retained expression slice; the accepted declaration-specific policy is not yet
+implemented.
 
 Declaration and derive macros have distinct entry forms. Expand them in source
 order before ordinary module resolution. Each derive receives the original
@@ -419,8 +430,9 @@ summaries exist, define incremental admission and invalidation and show that
 already checked opaque bodies are not reopened. Do not create that later
 mechanism merely to share an API.
 
-Until these contracts and every program below are fully written and reviewed,
-CP-0034 is **not implementation-ready**. No work item here authorizes code.
+CP-0034 is accepted. An owning task and authorized delivery base are still
+needed before product implementation. The programs below are acceptance inputs;
+their connected execution remains outstanding.
 
 ## Integration corpus
 
@@ -628,11 +640,12 @@ opacity and malformed-member graphs and their handwritten controls.
 | I19: repetition and captures | Match zero, one and multiple items with `*`, and one and multiple with `+`; reject zero with `+`. Exercise separators, paired equal-length captures in source order, a length mismatch, and each supported identifier, type, expression, pattern and braced multi-line declaration capture. |
 | I20: nested declarations | Generate an invocation of another declaration macro and verify source-order output and definition-versus-caller syntax context. Exercise forward and mutually recursive references, a bounded recursive expansion failure and atomic rejection without partial publication. With two authored expansion failures, verify that a derive preceding a declaration invocation fails first, and vice versa. |
 | I21: contextual declaration | Define `syntax declaration: (name)` in a macro module; separately use `declaration` as an ordinary identifier and as a CP-0033 expression-syntax name with `:` and identifier matcher literals. Verify unchanged parsing and behavior. Check imported syntax-name collision and rename rules and reject a module's use of its own syntax definition. |
+| I22: executable escapes | Exercise all five capture kinds as syntax values, nested quotes and escapes, repetition drivers and cached generators, ordinary helper calls, syntax contexts and origins, zero iterations, atomic failure, ordinary type errors and the reserved `syntax` word. The [escape graphs](fixtures/escapes/README.md) specify the source inputs and assertions. |
 
 The fixed-derive case I09 has these candidate inputs. The derive receives the
 type declaration itself; there is no separate caller-supplied target name.
 Its declarative definition follows the approved working derive authoring
-design; CP-0034 as a whole remains under review.
+design accepted in CP-0034.
 
 `api.ash`:
 
@@ -885,12 +898,15 @@ Review and QA identify their exact candidate; if it changes, refresh the
 affected assessment before counting its gate. The integration owner checks
 the combined production path after the independently progressing units connect.
 
-## Before proposal acceptance
+## Before implementation
 
-1. Review the remaining public-name behavior and corpus obligations recorded in
-   the [local plan](slice2-delivery-plan.md). The generator's ordinary function
+1. Use the recalibrated
+   [local plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md)
+   for the accepted
+   scope. C3 reviewed the public-name contract and corpus; connected public-name
+   behavior remains an implementation gate. The generator's ordinary function
    type is decided; no conversion interface or separate evidence mechanism is
-   required. Keep the revised 130-point forecast and earlier predictions
-   visible as the scope and acceptance evidence are reviewed.
-2. Obtain an explicit acceptance decision. Product implementation, its
-   mutation harness and passing integration evidence follow that decision.
+   required. Preserve the earlier predictions.
+2. Establish an owning task and authorized delivery base. Product
+   implementation, its mutation harness and passing integration evidence
+   remain outstanding.

@@ -3,6 +3,17 @@
 use super::*;
 use crate::types::{Type, TypeVariableId};
 
+#[test]
+fn advance_experiment_frame_layout_probe() {
+    let size = std::mem::size_of::<Frame>();
+    let alignment = std::mem::align_of::<Frame>();
+    assert_ne!(size, 0);
+    assert_eq!(MAX_CAPTURED_FRAME_CELLS, (isize::MAX as usize) / size);
+    println!(
+        "frame_size={size} frame_alignment={alignment} max_captured_frame_cells={MAX_CAPTURED_FRAME_CELLS}"
+    );
+}
+
 fn saved(value: i128) -> Frame {
     Frame::CleanupCompletion {
         saved: Value::SmallInteger(value),

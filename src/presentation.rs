@@ -10,7 +10,10 @@ use crate::{
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
     module::{GraphDiagnostic, LoadGraphError, ModuleSyntaxFailure, io_kind_name},
-    parser::{FoundToken, ParseContext, ParseDiagnostic, ResourceFailure, SynchronizationBoundary},
+    parser::{
+        FoundToken, ParseContext, ParseDiagnostic, ParseReason, ResourceFailure,
+        SynchronizationBoundary,
+    },
     source::{SourceError, SourceFile, Span},
 };
 
@@ -97,7 +100,13 @@ pub fn compile_type_mismatch_diagnostic<'a>(
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let mut result = compile_type_mismatch_diagnostic_inner(mismatch, sources)?;
-    append_diagnostic_locations(&mut result, mismatch.diagnostic_location(), sources)?;
+    append_diagnostic_locations(
+        &mut result,
+        mismatch
+            .diagnostic_location()
+            .map(|location| (location, mismatch.span())),
+        sources,
+    )?;
     Ok(result)
 }
 
@@ -156,7 +165,11 @@ pub fn compile_type_diagnostic<'a>(
         &mut result,
         std::iter::once(&diagnostic.primary)
             .chain(&diagnostic.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -326,11 +339,11 @@ fn compile_type_diagnostic_inner<'a>(
 
 fn append_diagnostic_locations<'a>(
     diagnostic: &mut CompileDiagnostic<'a>,
-    locations: impl IntoIterator<Item = &'a crate::syntax::DiagnosticLocation>,
+    locations: impl IntoIterator<Item = (&'a crate::syntax::DiagnosticLocation, crate::source::Span)>,
     sources: &[&'a SourceFile],
 ) -> Result<(), PresentationError> {
     let mut frames: Vec<std::sync::Arc<crate::syntax::ExpansionFrame>> = Vec::new();
-    for location in locations {
+    for (location, label_span) in locations {
         for frame in &location.frames {
             if !frames
                 .iter()
@@ -346,7 +359,7 @@ fn append_diagnostic_locations<'a>(
             for part in origin.parts() {
                 match part {
                     crate::syntax::MacroOriginPart::Source(span) => {
-                        if skip_primary && first {
+                        if skip_primary && first && span == label_span {
                             first = false;
                             continue;
                         }
@@ -425,7 +438,11 @@ pub fn compile_interface_diagnostic<'a>(
         &mut result,
         std::iter::once(&error.primary)
             .chain(&error.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -1007,6 +1024,13 @@ fn resolve_facts(error: &crate::resolve::ResolveError) -> Vec<Fact<'_>> {
         value: FactValue::Text(value),
     });
     let mut facts: Vec<_> = subject.into_iter().collect();
+    if let Some(cause) = error.foreign_contract_cause() {
+        facts.push(Fact {
+            name: "contract_cause",
+            kind: "foreign-contract-cause",
+            value: FactValue::Text(cause),
+        });
+    }
     if let Some((part, problem)) = error.work_state_context() {
         facts.push(Fact {
             name: "state_part",
@@ -1082,7 +1106,11 @@ pub fn compile_resolve_diagnostic<'a>(
         &mut result,
         std::iter::once(&error.primary)
             .chain(&error.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -1233,6 +1261,18 @@ pub fn compile_parse_diagnostic<'a>(
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let message = diagnostic.message().ok_or(PresentationError::MissingFact)?;
     let mut facts = Vec::new();
+    if diagnostic.reason == ParseReason::UnknownTemplateCapture {
+        facts.push(Fact {
+            name: "capture",
+            kind: "code",
+            value: FactValue::Text(
+                diagnostic
+                    .found
+                    .as_deref()
+                    .ok_or(PresentationError::MissingFact)?,
+            ),
+        });
+    }
     if let Some(expected) = diagnostic.expected_form() {
         facts.push(Fact {
             name: "expected",
@@ -1302,14 +1342,26 @@ pub fn compile_parse_diagnostic<'a>(
             }],
         )?);
     }
-    Ok(CompileDiagnostic {
+    let mut result = CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
         responsibility: "source",
         message,
         primary: Some(primary),
         related,
         facts,
-    })
+    };
+    append_diagnostic_locations(
+        &mut result,
+        std::iter::once(&diagnostic.primary)
+            .chain(&diagnostic.related)
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
+        sources,
+    )?;
+    Ok(result)
 }
 
 /// Dispatches a file failure to its existing compile-time phase adapter.
@@ -1537,6 +1589,13 @@ fn compile_syntax_expansion_failure<'a>(
             value: FactValue::Text(failure.message()),
         }],
     };
+    if let Some(location) = failure.invocation_location.as_deref() {
+        append_diagnostic_locations(
+            &mut diagnostic,
+            std::iter::once((location, failure.primary_span())),
+            sources,
+        )?;
+    }
     add_syntax_teardown(
         &mut diagnostic,
         failure.teardown(),
@@ -1588,6 +1647,20 @@ fn compile_syntax_runtime_failure<'a>(
             value: FactValue::Text(cause),
         }],
     };
+    if let Some(step) = failure.step {
+        diagnostic.related.push(label(
+            step.primary,
+            "generator_step_origin",
+            Message::syntax_generator_step_origin(),
+        )?);
+        if let Some(definition) = step.definition {
+            diagnostic.related.push(label(
+                definition,
+                "generator_step_definition",
+                Message::syntax_generator_step_definition(),
+            )?);
+        }
+    }
     let teardown = match failure.cause() {
         crate::eval::RuntimeFailure::Report(report) => report.teardown.or_else(|| {
             report
@@ -1979,6 +2052,17 @@ fn compile_graph_syntax<'a>(
         &sources,
         Some(failure.source.display_path()),
     )?;
+    if let (Some(_), Some(location), Some(diagnostic)) = (
+        failure.resource,
+        context.resource_location(),
+        diagnostics.first_mut(),
+    ) {
+        append_diagnostic_locations(
+            diagnostic,
+            std::iter::once((location, location.primary.primary())),
+            &sources,
+        )?;
+    }
     for diagnostic in &mut diagnostics {
         if let Some(import) = import_label(context, "import_context")? {
             diagnostic.related.push(import);

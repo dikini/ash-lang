@@ -22,9 +22,12 @@ fn head_word<'a>(node: &'a ConcreteNode, tokens: &'a [Token]) -> Result<&'a str,
         _ => malformed(InternalReason::UnexpectedShape),
     }
 }
-fn first_name(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceName, ProjectionError> {
+fn first_name(
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<SurfaceName, ProjectionError> {
     direct_tokens(node, tokens)
-        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+        .find(ProjectionToken::is_upper_identifier)
         .map(surface_name)
         .transpose()?
         .ok_or(ProjectionError::MalformedTree(
@@ -33,7 +36,7 @@ fn first_name(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceName, Proj
 }
 fn literal_string(
     node: &ConcreteNode,
-    tokens: &[Token],
+    tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceForeignString, ProjectionError> {
     for token in direct_tokens(node, tokens) {
         if let TokenKind::StringLiteral(value) = &token.kind {
@@ -45,8 +48,12 @@ fn literal_string(
     }
     malformed(InternalReason::UnexpectedShape)
 }
-pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), ProjectionError> {
-    let mut shape = ShapeCursor::new(node, tokens);
+pub(super) fn validate_shape(
+    node: &ConcreteNode,
+    tokens: &[Token],
+    admission: Option<&std::collections::HashSet<usize>>,
+) -> Result<(), ProjectionError> {
+    let mut shape = ShapeCursor::with_admission(node, tokens, admission);
     match node.kind {
         NodeKind::ForeignLibrary => {
             shape.optional_token(&TokenKind::Pub)?;

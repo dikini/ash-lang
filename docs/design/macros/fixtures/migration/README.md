@@ -11,8 +11,9 @@ four new cases are absent. It must not silently treat them as an old case.
 
 `new.ash` selects `new_forms.ash`, which explicitly handles all six cases and
 preserves the existing expression transform. Under CP-0034 it must return
-`42 : Int`, with the input origin and context preserved. The expanded cases
-are not implemented yet, so that graph is not represented as passing.
+`42 : Int`, with the input origin and context preserved.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 `fallback.ash` uses `fallback_forms.ash`, which handles expression captures
 and treats every other case as unsupported. It returned 42 under the

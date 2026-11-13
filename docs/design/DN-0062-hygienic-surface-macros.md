@@ -8,13 +8,16 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
-  [DN-0061](DN-0061-effects-and-resources-first-slice.md)
+  [DN-0061](DN-0061-effects-and-resources-first-slice.md),
+  [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md)
 
-> The accepted first expression-macro slice has a reviewed and QA-confirmed
-> implementation and [specification](../../spec/syntax-expansion.md).
-> Broader macro ideas and
-> illustrations in this note remain exploratory. This note does not define
-> current Ash. AD-0005 records the parser amendment.
+> The accepted expression-macro slice and the declaration and derive
+> transition are described in the [syntax expansion specification](../../spec/syntax-expansion.md).
+> [TASK-0068](../tasks/TASK-0068-top-level-declaration-macros.md) records the
+> delivery and remaining gates; [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md)
+> is historical transition evidence. Broader ideas and illustrations in this
+> note remain exploratory. This note does not define current Ash. AD-0005
+> records the parser amendment.
 
 ## Question
 
@@ -716,9 +719,9 @@ This note alone does not authorize a prototype or select an implementation.
 
 ## Open questions
 
-The accepted first slice fixes its own boundaries in the linked design. These
-questions concern later extensions or the broader direction; they do not
-replace the first-slice contract.
+The accepted slices fix their boundaries in the specification and linked
+design. These questions concern later extensions or the broader direction;
+they do not replace those contracts.
 
 - Which natural syntax forms and output categories are essential, and which
   should remain delimited or ordinary functions?

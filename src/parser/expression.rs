@@ -3,7 +3,7 @@
 use crate::lexer::TokenKind;
 
 use super::{
-    ExpectedForm, NodeKind, ParseReason, Parser, SynchronizationBoundary,
+    ExpectedForm, NodeKind, ParseReason, Parser, QuoteMode, SynchronizationBoundary,
     grammar::{self, Associativity, ExpressionDialect, InfixDescriptor, PrimaryForm},
 };
 
@@ -89,12 +89,38 @@ fn parse_precedence(
 fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExpression {
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
+    if parser.at_forwarded_declaration() {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Expression);
+        let _ = parser.bump();
+        parser.finish();
+        return CompletedExpression {
+            start_event,
+            depth: 0,
+        };
+    }
     if parser.in_template && parser.at(&TokenKind::Dollar) {
         let _ = parser.bump();
         if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
             let _ = parser.bump();
         } else {
             parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        parser.finish();
+        return CompletedExpression {
+            start_event,
+            depth: 0,
+        };
+    }
+    if parser.quote_mode != QuoteMode::Ordinary && parser.at(&TokenKind::Dollar) {
+        if parser.nth(1) == Some(&TokenKind::LeftBrace)
+            && matches!(
+                parser.quote_mode,
+                QuoteMode::Template | QuoteMode::DeclarationTemplate | QuoteMode::Quote
+            )
+        {
+            grammar::syntax_escape(parser);
+        } else {
+            grammar::quote_hole(parser);
         }
         parser.finish();
         return CompletedExpression {
@@ -119,6 +145,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         }
         Some(PrimaryForm::Qualified) => grammar::qualified_name(parser, false),
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
+        Some(PrimaryForm::SyntaxQuote) => grammar::syntax_quote(parser),
         Some(PrimaryForm::Perform) => grammar::perform_expression(parser),
         Some(PrimaryForm::Hook) => grammar::hook_expression(parser),
         Some(PrimaryForm::Registration) => grammar::registration_expression(parser),
@@ -211,7 +238,8 @@ pub(super) fn starts_primary(parser: &Parser<'_>) -> bool {
 fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
     !parser.at_syntax_name()
         && !parser.at_syntax_stop()
-        && ((parser.in_template && parser.at(&TokenKind::Dollar))
+        && (((parser.in_template || parser.quote_mode != QuoteMode::Ordinary)
+            && parser.at(&TokenKind::Dollar))
             || primary_form(parser, forms).is_some())
 }
 
@@ -233,6 +261,7 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
             (PrimaryForm::Perform, Some(TokenKind::Perform)) => true,
+            (PrimaryForm::SyntaxQuote, Some(TokenKind::SyntaxKeyword)) => true,
             (PrimaryForm::Discard, Some(TokenKind::Discard)) => true,
             (PrimaryForm::Retain, Some(TokenKind::Retain)) => true,
             (PrimaryForm::Hook, Some(TokenKind::Hook)) => true,
@@ -363,12 +392,15 @@ mod tests {
             syntax_budget: crate::syntax_resource::SyntaxBudget::default(),
             syntax_work_exhausted: false,
             in_template: false,
+            quote_mode: QuoteMode::Ordinary,
+            saw_quote_or_escape: false,
             syntax: &[],
             syntax_source: None,
             syntax_selections: None,
             syntax_spellings: None,
             diagnostic_spans: None,
             admission_identifiers: None,
+            declaration_output_nodes: None,
             syntax_stops: Vec::new(),
         };
 

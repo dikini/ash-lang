@@ -1017,7 +1017,10 @@ pub struct ResolvedModule {
 
     span: Span,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
+    effect_coordinates: Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
     imported_lowerings: Vec<crate::elaborate::SharedModuleLowering>,
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
 }
 
 pub(crate) struct ResolvedModuleParts {
@@ -1106,7 +1109,16 @@ impl ResolvedModule {
         Ok(())
     }
 
-    pub(crate) fn new(mut parts: ResolvedModuleParts) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(parts: ResolvedModuleParts) -> Self {
+        Self::new_with_sites(parts, Vec::new(), Vec::new())
+    }
+
+    pub(crate) fn new_with_sites(
+        mut parts: ResolvedModuleParts,
+        quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+        advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
+    ) -> Self {
         Self {
             module: parts.module,
             registry: std::mem::take(&mut parts.registry),
@@ -1122,8 +1134,19 @@ impl ResolvedModule {
             export_candidate: std::mem::take(&mut parts.export_candidate),
             span: parts.span,
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             imported_lowerings: Vec::new(),
+            quote_sites,
+            advance_sites,
         }
+    }
+
+    pub(crate) fn quote_sites(&self) -> &[crate::syntax::ResolvedQuoteSite] {
+        &self.quote_sites
+    }
+
+    pub(crate) fn advance_sites(&self) -> &[crate::syntax::ResolvedAdvanceSite] {
+        &self.advance_sites
     }
 
     /// Retains the same immutable defining records reached by dependency edges.
@@ -1163,6 +1186,27 @@ impl ResolvedModule {
 
     pub(crate) fn imported_lowerings(&self) -> &[crate::elaborate::SharedModuleLowering] {
         &self.imported_lowerings
+    }
+
+    pub(crate) fn retain_effect_coordinates(
+        &mut self,
+        coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let (module, source) = self
+            .defining_sources
+            .first()
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        if *module != self.module || !coordinates.matches_source(*module, source) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        if self.effect_coordinates.is_some() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        self.effect_coordinates = Some(coordinates);
+        Ok(())
     }
 
     pub(crate) fn retain_defining_sources<'a>(
@@ -2999,6 +3043,77 @@ impl ImportedFacts {
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<PreparedImportedNominalMerge, ImportedNominalMergeFailure> {
         let validated = self.validate_nominal_merge(candidate, constraint_work)?;
+        let prepared = self.materialize_nominal_merge(validated, type_work)?;
+        self.reserve_prepared_nominal_merges(std::slice::from_ref(&prepared))?;
+        Ok(prepared)
+    }
+
+    /// Prepare a hidden fact reached through an authenticated checked capture.
+    /// This path pays the additional metadata copies and reached table growth
+    /// before using the same validation, materialization and merge as imports.
+    pub(crate) fn prepare_checked_capture_nominal_merge(
+        &mut self,
+        candidate: ImportedNominalFactRef<'_>,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<PreparedImportedNominalMerge, ImportedNominalMergeFailure> {
+        let validated = self.validate_nominal_merge(candidate, constraint_work)?;
+        if !matches!(validated.action, ValidatedImportedNominalAction::Noop) {
+            type_work
+                .charge(candidate.display_spelling.map_or(0, str::len))
+                .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+        }
+        if matches!(validated.action, ValidatedImportedNominalAction::Insert) {
+            for parameter in candidate.parameters {
+                type_work
+                    .charge(
+                        parameter
+                            .spelling
+                            .len()
+                            .checked_add(1)
+                            .ok_or(ImportedNominalMergeFailure::TypeResource)?,
+                    )
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                // Pay the reached Kind inspection and the later sizing walk
+                // before that walk constructs the combined clone tariff.
+                type_work
+                    .charge(1)
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                charge_kind_with_charge(&parameter.kind, || type_work.charge(2))
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                if !matches!(parameter.origin, Origin::Source(_)) {
+                    charge_retained_origin(&parameter.origin, type_work)
+                        .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                }
+            }
+            if !matches!(candidate.origin, Origin::Source(_)) {
+                charge_retained_origin(candidate.origin, type_work)
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+            }
+            if let Some(provenance) = candidate.representation_provenance {
+                type_work
+                    .charge(1 + usize::from(provenance.diagnostics.is_some()))
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+            }
+            let order_moves = if self.nominal_order.len() == self.nominal_order.capacity() {
+                self.nominal_order.len()
+            } else {
+                0
+            };
+            let map_moves = if self.nominals.len() == self.nominals.capacity() {
+                self.nominals.len()
+            } else {
+                0
+            };
+            type_work
+                .charge(
+                    order_moves
+                        .checked_add(map_moves)
+                        .and_then(|work| work.checked_add(2))
+                        .ok_or(ImportedNominalMergeFailure::TypeResource)?,
+                )
+                .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+        }
         let prepared = self.materialize_nominal_merge(validated, type_work)?;
         self.reserve_prepared_nominal_merges(std::slice::from_ref(&prepared))?;
         Ok(prepared)
@@ -5641,8 +5756,8 @@ impl ImportedTypeAccess {
 type OriginalEffectMemo<'a> = HashMap<
     ModuleId,
     (
-        &'a crate::source::SourceFile,
-        crate::core::validate::DeclarationCoordinates,
+        &'a Arc<crate::source::SourceFile>,
+        Option<crate::core::validate::DeclarationCoordinates>,
     ),
 >;
 
@@ -5854,6 +5969,7 @@ pub struct ExportSummary {
     withheld: HashMap<String, WithheldExports>,
     withheld_order: Vec<WithheldOrderEntry>,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
+    effect_coordinates: Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
     lowerings: Vec<crate::elaborate::SharedModuleLowering>,
 }
 
@@ -9894,6 +10010,7 @@ impl ExportSummary {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         };
         type_work
@@ -9919,6 +10036,12 @@ impl ExportSummary {
                 .iter()
                 .map(|(module, source)| (*module, Arc::clone(source))),
         );
+        if let Some(coordinates) = &resolved.effect_coordinates {
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            summary.effect_coordinates = Some(Arc::clone(coordinates));
+        }
         // A private declaration still prevents later resource association.
         // Carry only its interface identity, never selection authorization.
         let implementation_count = checked_implementations
@@ -11729,6 +11852,7 @@ impl ExportSummary {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         }
     }
@@ -11918,20 +12042,34 @@ impl ExportSummary {
                 if sources.next().is_some() {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                let coordinates =
-                    crate::core::validate::DeclarationCoordinates::from_source(source, work)
-                        .map_err(original_effect_failure)?;
                 original_effects
                     .try_reserve(1)
                     .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                original_effects.insert(effect.module(), (source, coordinates));
+                original_effects.insert(effect.module(), (source, None));
             }
             let (source, coordinates) = original_effects
-                .get(&effect.module())
+                .get_mut(&effect.module())
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            coordinates
-                .authenticate_effect(effect.module(), source, fact, work)
-                .map_err(original_effect_failure)?;
+            let source = *source;
+            if fact.native_contract.is_none()
+                && let Some(admitted) = &self.effect_coordinates
+            {
+                admitted
+                    .authenticate_effect(effect.module(), source, fact, work)
+                    .map_err(original_effect_failure)?;
+            } else {
+                if coordinates.is_none() {
+                    *coordinates = Some(
+                        crate::core::validate::DeclarationCoordinates::from_source(source, work)
+                            .map_err(original_effect_failure)?,
+                    );
+                }
+                coordinates
+                    .as_ref()
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
+                    .authenticate_effect(effect.module(), source, fact, work)
+                    .map_err(original_effect_failure)?;
+            }
         }
         Ok(())
     }
@@ -12574,6 +12712,7 @@ impl ExportSummary {
             withheld,
             withheld_order,
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         }
     }
@@ -17448,6 +17587,112 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn swap_tied_parameter_owners_for_core_test(
+        &mut self,
+        left: TypeVariableId,
+        right: TypeVariableId,
+    ) -> bool {
+        let (Some(left_record), Some(right_record)) = (
+            self.type_variable(left).cloned(),
+            self.type_variable(right).cloned(),
+        ) else {
+            return false;
+        };
+        if left == right || left.module() != right.module() {
+            return false;
+        }
+        let swap = |id: &mut TypeVariableId| {
+            if *id == left {
+                *id = right;
+            } else if *id == right {
+                *id = left;
+            }
+        };
+        for definition in &mut self.owner_definitions {
+            if definition
+                .parameters
+                .iter()
+                .any(|parameter| parameter.id == left || parameter.id == right)
+            {
+                for parameter in definition.parameters.make_mut_for_test() {
+                    if parameter.id == left {
+                        *parameter = right_record.clone();
+                    } else if parameter.id == right {
+                        *parameter = left_record.clone();
+                    }
+                }
+            }
+        }
+        for signature in self
+            .owner_signatures
+            .effects
+            .iter_mut()
+            .chain(&mut self.owner_signatures.interfaces)
+            .chain(
+                self.owner_signatures
+                    .resources
+                    .iter_mut()
+                    .map(|(_, signature)| signature),
+            )
+        {
+            for id in &mut signature.parameters {
+                swap(id);
+            }
+        }
+        for row in &mut self.global_parameter_rows {
+            for id in &mut row.parameters {
+                swap(id);
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_nominal_invocation_for_core_test(
+        &mut self,
+        id: NominalTypeId,
+        original: Span,
+        replacement: Span,
+    ) -> bool {
+        let Some(position) = self.nominal_positions.get(&id).copied() else {
+            return false;
+        };
+        let Some(nominal) = self.nominals.get(position) else {
+            return false;
+        };
+        if nominal.id != id
+            || !matches!(nominal.origin, Origin::Expansion { invocation, .. } if invocation == original)
+            || nominal.constructors.is_empty()
+            || self.constructors.iter().filter(|constructor| constructor.owner == id).count()
+                != nominal.constructors.len()
+            || self
+                .constructors
+                .iter()
+                .filter(|constructor| constructor.owner == id)
+                .any(|constructor| {
+                    !matches!(constructor.origin, Origin::Expansion { invocation, .. } if invocation == original)
+                })
+        {
+            return false;
+        }
+        let Origin::Expansion { invocation, .. } = &mut self.nominals[position].origin else {
+            unreachable!()
+        };
+        *invocation = replacement;
+        for constructor in self
+            .constructors
+            .iter_mut()
+            .filter(|constructor| constructor.owner == id)
+        {
+            let Origin::Expansion { invocation, .. } = &mut constructor.origin else {
+                unreachable!()
+            };
+            *invocation = replacement;
+        }
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
         let Some(nominal) = self.lexical_nominals.first_mut() else {
             return false;
@@ -20898,6 +21143,321 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn admitted_effect_summary_reauthenticates_and_releases_its_source() {
+        use crate::{
+            elaborate::check_module,
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+        };
+
+        fn authenticate_capture(
+            summary: &ExportSummary,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), ResolvedBuildFailure> {
+            summary.authenticate(
+                work,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+        }
+
+        let (summary, source_weak, record_weak) = {
+            let entry = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/effects/admitted-coordinate-summary/entry.ash");
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let mut checked_dependencies = Vec::<CheckedModule>::new();
+            for module in graph
+                .modules()
+                .iter()
+                .filter(|module| module.id() != graph.entry())
+            {
+                let dependencies = module
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        DependencyExports::new(
+                            edge,
+                            checked_dependencies
+                                .iter()
+                                .find(|checked| checked.module() == edge.target())
+                                .unwrap()
+                                .exports(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                checked_dependencies
+                    .push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+            }
+            let loaded = graph.module(graph.entry()).unwrap();
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked_dependencies
+                            .iter()
+                            .find(|checked| checked.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut resolved = resolve_module(loaded, &dependencies).unwrap();
+            let checked = check_module(resolve_module(loaded, &dependencies).unwrap()).unwrap();
+            let source_weak = Arc::downgrade(loaded.retained_source());
+            let record = resolved.effect_coordinates.take().unwrap();
+            let record_weak = Arc::downgrade(&record);
+            let record_count = Arc::strong_count(&record);
+
+            // The real resolved-module transport pays before accepting its Arc.
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    resolved.retain_effect_coordinates(Arc::clone(&record), &mut short),
+                    Err(ResolvedBuildFailure::TypeResource),
+                );
+                assert!(resolved.effect_coordinates.is_none());
+                assert_eq!(Arc::strong_count(&record), record_count);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + 1);
+                    exact.charge(prefix).unwrap();
+                    resolved
+                        .retain_effect_coordinates(Arc::clone(&record), &mut exact)
+                        .unwrap();
+                    assert_eq!(exact.used(), prefix + 1);
+                    assert!(Arc::ptr_eq(
+                        resolved.effect_coordinates.as_ref().unwrap(),
+                        &record
+                    ));
+                    drop(resolved.effect_coordinates.take());
+                    assert_eq!(Arc::strong_count(&record), record_count);
+                }
+            }
+            let (donor_module, donor) = checked_dependencies
+                .iter()
+                .filter(|dependency| dependency.module() != loaded.id())
+                .find_map(|dependency| {
+                    dependency
+                        .exports
+                        .effect_coordinates
+                        .as_ref()
+                        .map(|record| (dependency.module(), record))
+                })
+                .expect("an actual checked dependency supplies a different owner record");
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(donor), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            let original_source = Arc::clone(&resolved.defining_sources[0].1);
+            resolved.defining_sources[0].1 = Arc::new(original_source.as_ref().clone());
+            assert_eq!(resolved.defining_sources[0].1.id(), original_source.id());
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            resolved.defining_sources[0].1 = Arc::clone(&original_source);
+            let original_module = resolved.defining_sources[0].0;
+            resolved.defining_sources[0].0 = donor_module;
+            assert_eq!(
+                resolved
+                    .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert!(resolved.effect_coordinates.is_none());
+            resolved.defining_sources[0].0 = original_module;
+            resolved
+                .retain_effect_coordinates(Arc::clone(&record), &mut TypeWorkBudget::default())
+                .unwrap();
+            drop(original_source);
+            drop(record);
+
+            let freeze =
+                |work: &mut TypeWorkBudget,
+                 constraints: &mut crate::interface::InterfaceConstraintBudget| {
+                    ExportSummary::freeze(
+                        &resolved,
+                        &checked.schemes,
+                        &checked.interface_facts,
+                        &checked.checked_implementations,
+                        &checked.implementation_facts,
+                        work,
+                        constraints,
+                    )
+                };
+            let mut measured = TypeWorkBudget::default();
+            let mut summary = freeze(
+                &mut measured,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .unwrap();
+            let total = measured.used();
+            let record = resolved.effect_coordinates.as_ref().unwrap();
+            let record_count = Arc::strong_count(record);
+            let source_count = Arc::strong_count(loaded.retained_source());
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    freeze(
+                        &mut short,
+                        &mut crate::interface::InterfaceConstraintBudget::default()
+                    ),
+                    Err(ResolvedBuildFailure::TypeResource)
+                ));
+                assert_eq!(Arc::strong_count(record), record_count);
+                assert_eq!(Arc::strong_count(loaded.retained_source()), source_count);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                    exact.charge(prefix).unwrap();
+                    let retry = freeze(
+                        &mut exact,
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + total);
+                    assert!(Arc::ptr_eq(
+                        retry.effect_coordinates.as_ref().unwrap(),
+                        record
+                    ));
+                    drop(retry);
+                    assert_eq!(Arc::strong_count(record), record_count);
+                    assert_eq!(Arc::strong_count(loaded.retained_source()), source_count);
+                }
+            }
+
+            let first = summary
+                .effects
+                .iter()
+                .position(|effect| effect.spelling == "First")
+                .unwrap();
+            let second = summary
+                .effects
+                .iter()
+                .position(|effect| effect.spelling == "Second")
+                .unwrap();
+            let first_id = summary.effects[first].id;
+            let second_id = summary.effects[second].id;
+            let captured = summary
+                .term("invoke")
+                .unwrap()
+                .capture
+                .effects(&mut TypeWorkBudget::default())
+                .unwrap()
+                .collect::<HashSet<_>>();
+            assert!(captured.contains(&first_id) && captured.contains(&second_id));
+            summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .unwrap();
+            let mut measured = TypeWorkBudget::default();
+            authenticate_capture(&summary, &mut measured).unwrap();
+            let capture_total = measured.used();
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + capture_total - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    authenticate_capture(&summary, &mut short),
+                    Err(ResolvedBuildFailure::TypeResource)
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + capture_total);
+                    exact.charge(prefix).unwrap();
+                    authenticate_capture(&summary, &mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + capture_total);
+                }
+            }
+            for mutation in 0..3 {
+                let saved = summary.effects[first].clone();
+                match mutation {
+                    0 => summary.effects[first].spelling = summary.effects[second].spelling.clone(),
+                    1 => summary.effects[first].span = summary.effects[second].span,
+                    _ => summary.effects[first].origin = summary.effects[second].origin.clone(),
+                }
+                assert_eq!(
+                    authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                    Err(ResolvedBuildFailure::InvalidState)
+                );
+                summary.effects[first] = saved;
+            }
+            let effects = summary.effects.clone();
+            let positions = summary.effect_positions.clone();
+            summary.effects[first].id = second_id;
+            summary.effects[second].id = first_id;
+            for operation in summary.effects[first].operations.iter_mut() {
+                operation.id = OperationId::new(second_id, operation.id.operation());
+            }
+            for operation in summary.effects[second].operations.iter_mut() {
+                operation.id = OperationId::new(first_id, operation.id.operation());
+            }
+            summary.effect_positions.insert(first_id, second);
+            summary.effect_positions.insert(second_id, first);
+            assert_eq!(
+                summary.effects[*summary.effect_positions.get(&first_id).unwrap()].id,
+                first_id
+            );
+            assert_eq!(
+                summary.effects[*summary.effect_positions.get(&second_id).unwrap()].id,
+                second_id
+            );
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.effects = effects;
+            summary.effect_positions = positions;
+
+            let own_source = summary
+                .defining_sources
+                .iter()
+                .position(|(module, _)| *module == summary.module)
+                .unwrap();
+            let source = Arc::clone(&summary.defining_sources[own_source].1);
+            summary.defining_sources[own_source].1 = Arc::new(source.as_ref().clone());
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.defining_sources[own_source].1 = source;
+            let original_record = summary.effect_coordinates.take().unwrap();
+            summary.effect_coordinates = Some(Arc::clone(donor));
+            assert_eq!(
+                authenticate_capture(&summary, &mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            summary.effect_coordinates = Some(original_record);
+            authenticate_capture(&summary, &mut TypeWorkBudget::default()).unwrap();
+            (summary, source_weak, record_weak)
+        };
+        assert!(source_weak.upgrade().is_some());
+        assert!(record_weak.upgrade().is_some());
+        let source = Arc::clone(
+            &summary
+                .defining_sources
+                .iter()
+                .find(|(module, _)| *module == summary.module)
+                .unwrap()
+                .1,
+        );
+        let record = Arc::clone(summary.effect_coordinates.as_ref().unwrap());
+        drop(summary);
+        assert!(source_weak.upgrade().is_some());
+        assert!(record_weak.upgrade().is_some());
+        drop(source);
+        drop(record);
+        assert!(source_weak.upgrade().is_none());
+        assert!(record_weak.upgrade().is_none());
+    }
 
     fn capture_method_fixture() -> ResolvedImplementationMethodGroup {
         let file = SourceFile::new("capture-work.ash", "x + x + y").expect("source");
@@ -30713,6 +31273,7 @@ mod tests {
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
             defining_sources: Vec::new(),
+            effect_coordinates: None,
             lowerings: Vec::new(),
         };
         let checked = CheckedModule::new(

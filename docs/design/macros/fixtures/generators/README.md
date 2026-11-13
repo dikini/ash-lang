@@ -1,14 +1,44 @@
 # Generator fixture
 
-This is a proposed I17 source graph for
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md). It
-uses unimplemented macro syntax. **Revision required:** `forms.ash` and
-`duplicate_forms.ash` still use the superseded `SyntaxFragment` conversion
-interface and do not satisfy the agreed `Int -> (Int, Syntax.ExpressionFragment)`
-step. Revise the fixture to use ordinary Ash functions with the selected
-fragment-returning type and demonstrate both construction paths. The expected outputs and failures below are preserved
-for revising the source graph; they are not passing product tests or complete
-acceptance inputs.
+This is a fixed I17 source graph for historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+`forms.ash` defines the subtemplate variant; `procedural_forms.ash` uses
+ordinary functions and the syntax service to select protected fragments. Both
+use the agreed fragment-returning steps. The expected outputs and failures
+below are acceptance requirements.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
+
+## Construction details needed for transcription
+
+The proposal selected both construction paths and required ordinary state-only
+steps. CP-0034 describes a
+[subtemplate and escape spelling](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
+and describes construction by the macro subsystem. The subtemplate source
+graph and unused malformed-subtemplate cases are written below.
+
+The procedural variant uses quotation to construct its input fragments, then
+uses `Syntax.expression_syntax` and ordinary Ash traversal of `Syntax` nodes to
+select one. The selected fragment keeps its original context and origin. This
+exercises procedural syntax-service traversal, but does not demonstrate
+constructing a fresh fragment from raw `Syntax` nodes. That distinct case has
+a concrete limitation:
+
+- The retained [syntax service](../../../../../spec/syntax-expansion.md#canonical-syntax-interface)
+  and its [source declarations](../../../../../src/compiler_syntax.ash)
+  expose `make_token`, which returns a token result, and `parse_expression`,
+  which returns a fragment result but requires an invocation-owned `Input` and
+  syntax nodes carrying an `Origin`. `Input`, `Origin`, and
+  `ExpressionFragment` are opaque. An `Int` seed supplies none of them.
+  `expression_syntax` can expose origins from an existing quoted fragment,
+  but it does not construct a fragment or supply an `Input`. The listed
+  operations do not show how this state-only step can parse arbitrary raw
+  syntax into a fresh fragment.
+
+This limitation is not an alternative design or an added API requirement.
+Fallible syntax operations are handled by ordinary function code under the
+existing rules; they require no generator-specific error protocol. C3
+independently reviewed this coverage before the later delivery evidence.
 
 ## Fixed generator behavior
 
@@ -35,21 +65,26 @@ listed below:
 - **Subtemplate:** construct the literal fragment, then insert it into a
   subtemplate through a fragment-valued hole. The resulting fragment contains
   that literal. This does not require interpolating an `Int` as syntax.
-- **Procedural:** construct each literal fragment using ordinary Ash syntax
-  operations. The function may use ordinary helpers of any valid type.
+- **Procedural:** build a tuple of quote-created fragments and use ordinary Ash
+  functions and syntax-service operations to select a protected fragment.
+  This does not establish raw-syntax construction from the service alone.
 
 Both variants use the same state, cache, nesting, origin and failure assertions.
 A compiler test must identify the actual syntax-definition and invocation
 origins in a generated-code error; ordinary downstream checking owns that error.
-The two variants are fixed behavioral inputs; their complete Ash source remains
-to be transcribed using the selected construction paths. The old wrapper-based
-`forms.ash` is not that source and must not be counted as a passing fixture.
+The `forms.ash` graph provides the subtemplate source. The matching
+`procedural_*.ash` callers use `procedural_forms.ash` and run the same cases.
+The `zero_iterations`, `duplicate`, `invalid_step`, `diverging`, and malformed
+quote cases are shared because they do not depend on the construction variant.
 
 ## Caller cases
 
 - `main.ash` supplies an inline seed. `imported.ash` supplies the same seed
   through the checked `seeds.ash` dependency. Each must generate functions
   returning `100`, `1`, and `2`, and the weighted result must be `310 : Int`.
+- `all_values.ash` exercises both generators at every state from `0` through
+  `5`. It must produce `100, 1, 2, 3, 4, 5` and return `543310 : Int`, as in
+  `control_all_values.ash`.
 - `local.ash` uses the caller's own `starting_number` global in its seed. It
   must fail at that reference with the declaration-expansion staging cause and
   must publish no generated function.
@@ -60,7 +95,9 @@ to be transcribed using the selected construction paths. The old wrapper-based
   the type position of the generated signature (`pub $name : $wrong`). The
   ordinary declaration parser must reject that syntax without publishing the
   function. `duplicate.ash` must reject the two `$number` declarations in
-  `duplicate_forms.ash` even though the macro is not invoked.
+  `duplicate_forms.ash` even though the macro is not invoked. That file's
+  step has the required return type and diverges if called; the duplicate case
+  must fail at definition before it calls the step.
 - `global.ash` generates `0, 1, 2, 3` and returns `3210 : Int`;
   `reset.ash` generates `0, 1, 0, 1` and returns `1010 : Int`. These distinguish
   a template-level generator from one owned by the outer repetition.
@@ -70,34 +107,47 @@ to be transcribed using the selected construction paths. The old wrapper-based
   and `control_mixed_depth.ash` must be `546210 : Int`.
 - The two generators have independent states; each advances once per name.
   Both references to `$number` in the match body use the same iteration value.
+- `zero_iterations.ash` invokes a `*` repetition with no groups. Its generator
+  belongs to the outer repetition and has a diverging seed, so the program
+  returns `42 : Int` only if zero iterations create no generator instance.
 
-These additional negative variants each start from a fresh copy of `main.ash`
-and `forms.ash`:
+These additional negative cases use the same caller shape:
 
-- Replace `next_number`'s signature with `Int -> Int` and its equation with
-  `next_number state = state`. Ordinary checking must report that the step
-  does not return the required state/value pair.
-- Replace only the equation with `next_number state = next_number(state)`.
-  Checked execution must stop at its configured bound, retain the invocation
-  and step-function origins, and publish no generated declarations.
-- Change `next_number` to return a fragment representing `true` instead of the
-  integer literal, while still returning `state + 1` as the next state. Ordinary
-  checking must reject its use where the generated `Int` function needs an
-  integer. Apply this behavioral mutation to each construction variant.
+- `invalid_step.ash` and `invalid_step_forms.ash` supply a step with signature
+  `Int -> Int`. Ordinary checking must report that it does not return the
+  required state/value pair.
+- `diverging.ash` and `diverging_forms.ash` use the correct fragment-returning
+  step type but recurse indefinitely. Checked execution must stop at its
+  configured bound, retain the invocation and step-function origins, and
+  publish no generated declarations.
+- `generated_type_error.ash` and `generated_type_error_forms.ash` return a
+  fragment representing `true` while still returning `state + 1` as the next
+  state. Ordinary checking must reject its use where the generated `Int`
+  function needs an integer. The diagnostic identifies the actual syntax
+  definition and invocation origins. Apply the same mutation to the procedural
+  variant in `procedural_generated_type_error.ash` using its own `type_error`
+  macro. Its diagnostic must identify the invocation in that file, the macro
+  definition in `procedural_forms.ash`, and the `true` quotation in
+  `boolean_bank`. `control_generated_type_error.ash` is the corresponding
+  handwritten ordinary-Ash type error.
+- `malformed_helper.ash` imports an unused macro whose defining module contains
+  a malformed quote in an ordinary helper. `malformed_generator.ash` imports an
+  unused macro whose generator contains the same malformed quote. Both must
+  fail when their defining modules compile, without invoking a macro.
 
-`control_inline.ash`, `control_global.ash`, and `control_reset.ash` contain the
-handwritten ordinary-Ash outputs. The in-progress expression-slice compiler
-returned `310 : Int`, `3210 : Int`, and `1010 : Int`, respectively.
-It also returned `546210 : Int` for `control_mixed_depth.ash`.
+The inline, global, reset, and mixed-depth controls contain handwritten
+ordinary-Ash outputs. The earlier expression-slice compiler returned `310 : Int`,
+`3210 : Int`, `1010 : Int`, and `546210 : Int`, respectively.
+`control_service.ash` runs on slice 1: its procedural expression
+macro constructs a group containing two protected captures, parses it and uses
+the selector to return the second fragment. It returns `42 : Int`. Its
+transformer uses the `Input` supplied by slice 1; the generator steps in
+`procedural_forms.ash` do not receive one. This control checks the service's
+group and fragment behavior, not the proposed quotation or declaration macros.
 
-`digit` deliberately handles only the values `0` through `5` needed by these
-fixtures; it is not a general integer-formatting library. The syntax service's
-`IntegerLiteral`, `True` and `False` token mappings make `InvalidToken`
-unreachable for the fixed spellings in this fixture. Its explicit fallback
-constructs unit syntax to keep the ordinary Ash match exhaustive; an incorrect
-service mapping would therefore make the generated Int-valued program fail
-ordinary type checking. The final shared public token vocabulary must be
-documented independently of this example, as required by CP-0033.
+The `digit` helper constructs fragments only for the fixed states `0` through
+`5` needed here; it is not a general integer-to-syntax library. The subtemplate
+variant passes each resulting fragment through `as_subtemplate` before use.
 
 The previous ordinary Ash generator and interface-implementation bodies were
 checked using a temporary stand-in for the now-superseded interface. That

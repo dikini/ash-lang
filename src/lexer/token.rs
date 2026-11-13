@@ -74,6 +74,8 @@ pub enum TokenKind {
     Retain,
     /// The `import` reserved word.
     Import,
+    /// The `syntax` reserved word.
+    SyntaxKeyword,
     /// The `as` reserved word.
     As,
     /// The `pub` reserved word.

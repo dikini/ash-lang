@@ -16,15 +16,62 @@ fn token_kinds(source: &SourceFile) -> Vec<TokenKind> {
 }
 
 #[test]
-fn dollar_is_a_token_while_syntax_remains_an_identifier() {
-    let source = SourceFile::new("syntax-punctuation.ash", "syntax $value").unwrap();
+fn syntax_is_a_keyword_and_dollar_is_a_token() {
+    let source = SourceFile::new(
+        "syntax-punctuation.ash",
+        "syntax $value syntax_value declaration",
+    )
+    .unwrap();
     let lexed = lex(&source).unwrap();
     assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
-    assert_eq!(lexed.tokens.len(), 4);
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Identifier("syntax".into()));
+    assert_eq!(lexed.tokens.len(), 6);
+    assert_eq!(lexed.tokens[0].kind, TokenKind::SyntaxKeyword);
     assert_eq!(lexed.tokens[1].kind, TokenKind::Dollar);
     assert_range(&lexed.tokens[1], 7, 8);
     assert_eq!(lexed.tokens[2].kind, TokenKind::Identifier("value".into()));
+    assert_eq!(
+        lexed.tokens[3].kind,
+        TokenKind::Identifier("syntax_value".into())
+    );
+    assert_eq!(
+        lexed.tokens[4].kind,
+        TokenKind::Identifier("declaration".into())
+    );
+}
+
+#[test]
+fn declaration_template_repetition_retains_its_declaration_line_ends() {
+    let text = "pub syntax declaration: (make) $( $name:ident\n ),* => {\n    $(\n        pub $name : Unit -> Int\n        $name () = (40 +\n            2)\n    )*\n}\n";
+    let source = SourceFile::new("template-lines.ash", text).unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty());
+    let line_end_after = |fragment: &str| {
+        let end = text.find(fragment).unwrap() + fragment.len() - 1;
+        lexed.tokens.iter().any(|token| {
+            token.kind == TokenKind::LineEnd && token.span.range().start() as usize == end
+        })
+    };
+    assert!(!line_end_after("$name:ident\n"));
+    assert!(line_end_after("Unit -> Int\n"));
+    assert!(!line_end_after("(40 +\n"));
+}
+
+#[test]
+fn repetition_line_end_policy_stays_with_its_own_declaration_template() {
+    let text = "pub syntax declaration : word => {\n$( x\ny )*\n}\npub syntax declaration: (real) $( $x:ident\n),* => {\n$( ${ syntax { $( a\nb )* } }\n$x\n)*\n}\n";
+    let source = SourceFile::new("template-contexts.ash", text).unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty());
+    let line_end_after = |fragment: &str| {
+        let end = text.find(fragment).unwrap() + fragment.len() - 1;
+        lexed.tokens.iter().any(|token| {
+            token.kind == TokenKind::LineEnd && token.span.range().start() as usize == end
+        })
+    };
+    assert!(!line_end_after("$( x\n"));
+    assert!(!line_end_after("$x:ident\n"));
+    assert!(!line_end_after("$( a\n"));
+    assert!(line_end_after("$x\n"));
 }
 
 #[test]

@@ -6,11 +6,12 @@ mod declaration_closure_tests;
 mod effect_signature_borrow_tests;
 mod network;
 
+mod checked_owner_anchors;
 mod source_declarations;
 
 static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
 
-pub(crate) use source_declarations::DeclarationCoordinates;
+pub(crate) use source_declarations::{AdmittedEffectCoordinates, DeclarationCoordinates};
 
 use std::{
     cell::Cell,
@@ -25,9 +26,10 @@ use super::{
         CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
         GeneratedParameterAnchors, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
         MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
-        PureComputation, PureExprKind, PureOperationFamily, PureProgram, PureValue, StoredNode,
-        TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram, ValidatedCoreProgram,
-        ValidatedProgram, method_evidence_producer_matches, origin_depth_within_limit,
+        OwnerAnchorPreparationError, PureComputation, PureExprKind, PureOperationFamily,
+        PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram,
+        ValidatedCoreProgram, ValidatedProgram, method_evidence_producer_matches,
+        origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -3143,6 +3145,7 @@ pub(crate) struct ValidatedMacroEntry {
     pub(crate) binder: BinderId,
     pub(crate) syntax_module: ModuleId,
     pub(crate) ops: crate::types::EffectId,
+    pub(crate) quote_sites: std::sync::Arc<[crate::syntax::PreparedQuoteSite]>,
 }
 
 #[derive(Clone, Copy)]
@@ -3179,6 +3182,7 @@ pub(crate) fn validate_effect_macro_modules_linked_with_work(
         binder,
         syntax_module,
         ops,
+        quote_sites: std::sync::Arc::from([]),
     })
 }
 
@@ -3197,6 +3201,26 @@ fn validate_effect_modules_internal(
     ),
     ValidationError,
 > {
+    let prepared_anchors = if let Some(linked) = linked {
+        match GeneratedParameterAnchors::prepare_from_linked(linked, sources, module_sources, work)
+            .and_then(|anchors| {
+                work.charge(1)
+                    .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+                Ok(Arc::new(anchors))
+            }) {
+            Ok(anchors) => Some(anchors),
+            Err(error) => {
+                program.discard_iteratively();
+                let reason = match error {
+                    OwnerAnchorPreparationError::Invalid => ValidationReason::Registry,
+                    OwnerAnchorPreparationError::Resource => ValidationReason::Resource,
+                };
+                return Err(ValidationError::new(reason, None));
+            }
+        }
+    } else {
+        None
+    };
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3206,6 +3230,7 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
+    validator.prepared_owner_anchors = prepared_anchors.as_deref();
     let result = validator.run_effect().and_then(|()| {
         macro_entry
             .map(|contract| validator.check_macro_entry(contract))
@@ -3225,9 +3250,7 @@ fn validate_effect_modules_internal(
     drop(validator);
     let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
         program.into_parts();
-    let parameter_anchors = linked.map_or(parameter_anchors, |linked| {
-        Arc::new(GeneratedParameterAnchors::from_linked(linked))
-    });
+    let parameter_anchors = prepared_anchors.unwrap_or(parameter_anchors);
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3527,6 +3550,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     linked: Option<&'program crate::evidence_validation::ValidatedInterfaceProgram>,
+    prepared_owner_anchors: Option<&'program GeneratedParameterAnchors>,
+    checked_owner_anchors_authenticated: Cell<bool>,
     network_api: Option<crate::resolved::NetworkApi>,
     authenticated_network_requests: Cell<[Option<NodeId>; 9]>,
     network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
@@ -3544,6 +3569,9 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     newtype_conversion_parameter_work: Cell<usize>,
     #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
+    #[cfg(test)]
+    nominal_overlap_refusal:
+        Cell<Option<(crate::types::NominalTypeId, crate::types::NominalTypeId)>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -3769,6 +3797,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .collect(),
             module_sources: None,
             linked: None,
+            prepared_owner_anchors: None,
+            checked_owner_anchors_authenticated: Cell::new(false),
             network_api: None,
             authenticated_network_requests: Cell::new([None; 9]),
             network_admissions: std::cell::RefCell::new(Vec::new()),
@@ -3783,6 +3813,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             newtype_conversion_parameter_work: Cell::new(0),
             #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
+            #[cfg(test)]
+            nominal_overlap_refusal: Cell::new(None),
         }
     }
 
@@ -7411,8 +7443,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
-        let mut previous_nominal_end = None;
+        let mut previous_nominal: Option<Span> = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
+            // Retain and compare the complete primary span, including its source.
+            self.charge_type_work(2)?;
             if let Some(api) = crate::resolved::ResourceApi::for_module(nominal.id.module())
                 && (!registry
                     .nominal_parameters(nominal.id)
@@ -7429,7 +7463,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let Some(source) = registry_source else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
-            let nominal_range = nominal.origin.primary_span().range();
+            let nominal_span = nominal.origin.primary_span();
+            let nominal_range = nominal_span.range();
             if nominal.id != crate::types::NominalTypeId::new(module, index)
                 || nominal.origin.primary_span().source() != source
                 || !origin_depth_within_limit(&nominal.origin)
@@ -7438,11 +7473,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !nominal_names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal_end.is_some_and(|previous| nominal_range.start() < previous)
+                || previous_nominal.is_some_and(|previous| {
+                    nominal_range.start() < previous.range().end() && nominal_span != previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_nominal_end = Some(nominal_range.end());
+            previous_nominal = Some(nominal_span);
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
         let owner_parameter_count =
@@ -7458,7 +7495,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let type_variable_count = u32::try_from(registry.type_variable_count())
             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
-        let mut previous_type_variable_start = None;
+        let mut previous_type_variable: Option<(&ResolvedTypeVariable, Span)> = None;
         let resolved_type_variables = registry_module.is_some_and(|module| {
             registry
                 .type_variable(crate::types::TypeVariableId::resolved(module, 0))
@@ -7479,27 +7516,34 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
+            let non_increasing = previous_type_variable
+                .is_some_and(|(_, previous)| parameter_range.start() <= previous.range().start());
             let mut contextual = self.is_lexical_source_parameter(parameter.id)?;
-            if !contextual
-                && previous_type_variable_start
-                    .is_some_and(|previous| parameter_range.start() <= previous)
-            {
+            if !contextual && non_increasing {
                 contextual = self.is_structural_store_identity(parameter.id)?
                     || self.is_structural_region_identity(parameter.id)?;
             }
+            let original_tie = if !contextual && non_increasing {
+                self.allows_original_expansion_tie(
+                    previous_type_variable
+                        .expect("a non-increasing position has a predecessor")
+                        .0,
+                    parameter,
+                )?
+            } else {
+                false
+            };
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || !contextual
-                    && previous_type_variable_start
-                        .is_some_and(|previous| parameter_range.start() <= previous)
+                || !contextual && non_increasing && !original_tie
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             if !contextual {
-                previous_type_variable_start = Some(parameter_range.start());
+                previous_type_variable = Some((parameter, parameter_span));
             }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
@@ -7543,8 +7587,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 &parameter_owners,
             )?;
         }
-        let mut previous_constructor_start = None;
+        let mut previous_constructor: Option<Span> = None;
         for constructor in registry.constructors() {
+            self.charge_type_work(2)?;
             let constructor_span = constructor.origin.primary_span();
             let constructor_range = constructor_span.range();
             let owner_range = registry
@@ -7574,12 +7619,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         || constructor_range.end() > owner.end()
                 })
                 || constructor_range.start() >= constructor_range.end()
-                || previous_constructor_start
-                    .is_some_and(|previous| constructor_range.start() <= previous)
+                || previous_constructor.is_some_and(|previous| {
+                    constructor_range.start() <= previous.range().start()
+                        && constructor_span != previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_constructor_start = Some(constructor_range.start());
+            previous_constructor = Some(constructor_span);
             self.validate_origin(&constructor.origin, self.program.root)?;
         }
         let expected_constructor_order = registry
@@ -7783,7 +7830,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
-        let mut previous_nominal_end = HashMap::new();
+        let mut previous_nominal = HashMap::<ModuleId, (&ResolvedNominalType, Span)>::new();
 
         let source_original = original.is_some();
         let nominals = registry_source_order(
@@ -7804,6 +7851,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         for nominal in nominals {
             let module = nominal.id.module();
+            // Pay for retaining and comparing a full span before growing the map.
+            self.charge_type_work(2)?;
+            if !previous_nominal.contains_key(&module) {
+                let growth = if previous_nominal.len() == previous_nominal.capacity() {
+                    previous_nominal
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(previous_nominal.len())
+                        .saturating_add(1)
+                } else {
+                    1
+                };
+                self.charge_type_work(growth)?;
+                previous_nominal
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            }
             if let Some(api) = crate::resolved::ResourceApi::for_module(module)
                 && (!registry
                     .nominal_parameters(nominal.id)
@@ -7852,16 +7916,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || !nominal_ids.insert(nominal.id)
                 || !names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal_end
-                    .get(&module)
-                    .is_some_and(|previous| nominal_range.start() < *previous)
             {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            if let Some((previous, previous_span)) = previous_nominal.get(&module).copied()
+                && nominal_range.start() < previous_span.range().end()
+                && nominal_span != previous_span
+                && !self.allows_original_nominal_overlap(previous, nominal, source)?
+            {
+                #[cfg(test)]
+                self.nominal_overlap_refusal
+                    .set(Some((previous.id, nominal.id)));
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_nominal_end.insert(module, nominal_range.end());
+            previous_nominal.insert(module, (nominal, nominal_span));
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
 
@@ -7875,7 +7946,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         });
         {
             let mut next_type_variable = HashMap::<ModuleId, u32>::new();
-            let mut previous_type_variable_start = HashMap::new();
+            let mut previous_type_variable: HashMap<ModuleId, (&ResolvedTypeVariable, Span)> =
+                HashMap::new();
             for parameter in &type_variables {
                 let Some(module) = parameter.id.module() else {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -7887,6 +7959,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
+                let previous = previous_type_variable.get(&module).copied();
                 let mut contextual = self.is_lexical_source_parameter(parameter.id)?
                     || generatives.is_some_and(|original| original.contains(&parameter.id));
                 if parameter.id.local() != *expected
@@ -7898,13 +7971,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
                 if !contextual
-                    && previous_type_variable_start
-                        .get(&module)
-                        .is_some_and(|previous| parameter_range.start() <= *previous)
+                    && previous.is_some_and(|(_, previous)| {
+                        parameter_range.start() <= previous.range().start()
+                    })
                 {
                     contextual = self.is_structural_store_identity(parameter.id)?
                         || self.is_structural_region_identity(parameter.id)?;
-                    if !contextual {
+                    if !contextual
+                        && !self.allows_original_expansion_tie(
+                            previous
+                                .expect("a non-increasing position has a predecessor")
+                                .0,
+                            parameter,
+                        )?
+                    {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
                 }
@@ -7912,7 +7992,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .checked_add(1)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
                 if !contextual {
-                    previous_type_variable_start.insert(module, parameter_range.start());
+                    if previous.is_none() {
+                        let growth =
+                            if previous_type_variable.len() == previous_type_variable.capacity() {
+                                previous_type_variable
+                                    .capacity()
+                                    .saturating_mul(2)
+                                    .saturating_add(previous_type_variable.len())
+                                    .saturating_add(1)
+                            } else {
+                                1
+                            };
+                        self.charge_type_work(growth)?;
+                        previous_type_variable
+                            .try_reserve(1)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    }
+                    previous_type_variable.insert(module, (parameter, parameter_span));
                 }
                 self.validate_origin(&parameter.origin, self.program.root)?;
             }
@@ -7962,7 +8058,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let mut constructor_ids = HashSet::new();
         let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
-        let mut previous_constructor_start = HashMap::new();
+        let mut previous_constructor = HashMap::<ModuleId, Span>::new();
         let constructors = registry_source_order(
             registry.constructors(),
             source_original,
@@ -7976,6 +8072,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         )?;
         for constructor in constructors {
             let module = constructor.owner.module();
+            self.charge_type_work(2)?;
+            if !previous_constructor.contains_key(&module) {
+                let growth = if previous_constructor.len() == previous_constructor.capacity() {
+                    previous_constructor
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(previous_constructor.len())
+                        .saturating_add(1)
+                } else {
+                    1
+                };
+                self.charge_type_work(growth)?;
+                previous_constructor
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            }
             let Some(source) = relation.get(&module).copied() else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
@@ -8009,13 +8121,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         || constructor_range.end() > owner.end()
                 })
                 || constructor_range.start() >= constructor_range.end()
-                || previous_constructor_start
-                    .get(&module)
-                    .is_some_and(|previous| constructor_range.start() <= *previous)
+                || previous_constructor.get(&module).is_some_and(|previous| {
+                    constructor_range.start() <= previous.range().start()
+                        && constructor_span != *previous
+                })
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_constructor_start.insert(module, constructor_range.start());
+            previous_constructor.insert(module, constructor_span);
             self.validate_origin(&constructor.origin, self.program.root)?;
         }
 
@@ -17568,6 +17681,13 @@ pub(crate) fn generic_cell_source_fixture_for_test(
 
 #[cfg(test)]
 pub(super) use tests::{registration_proof_check, registration_proof_program};
+
+#[cfg(test)]
+pub(crate) use tests::{
+    exercise_foreign_wrong_source_for_image_test, exercise_restored_global_swap_for_image_test,
+    exercise_restored_nominal_pair_mutation_for_image_test,
+    exercise_restored_owner_swap_for_image_test,
+};
 
 #[cfg(test)]
 mod tests {
@@ -32891,6 +33011,1891 @@ mod tests {
         }
     }
 
+    fn swap_application_type_variables_for_owner_swap_test(
+        application: &mut crate::interface::InterfaceApplication,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        for argument in application.arguments_mut_for_summary_test() {
+            let replacement = crate::types::map_kinded_argument_types_with_budget(
+                argument,
+                &mut |ty, work: &mut TypeWorkBudget| {
+                    let mut copy = clone_type_with_budget(ty, work)?;
+                    swap_type_variable_identities(&mut copy, left, right);
+                    Ok::<Type, ()>(copy)
+                },
+                &mut TypeWorkBudget::unbounded(),
+                &mut |_| (),
+            )
+            .expect("test application arguments remain representable");
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                argument,
+                replacement,
+            ));
+        }
+    }
+
+    fn swap_method_catalog_type_variables_for_owner_swap_test(
+        program: &mut UnvalidatedEffectProgram,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        let catalog = Arc::make_mut(&mut program.method_evidence);
+        assert!(catalog.lexical_owners().is_empty());
+        for method in catalog.methods_mut_for_core_test() {
+            for id in &mut method.interface_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for role in &mut method.inherited_parameters {
+                swap_type_variable_identity(&mut role.binder, left, right);
+            }
+            for (id, _) in &mut method.parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_type_variable_identities(&mut method.value_type, left, right);
+        }
+        for owner in catalog.implementation_owners_mut_for_core_test() {
+            for (id, _) in &mut owner.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut owner.application,
+                left,
+                right,
+            );
+        }
+        for domain in catalog.domains_mut_for_core_test() {
+            for (id, _) in &mut domain.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut domain.application,
+                left,
+                right,
+            );
+        }
+        for occurrence in catalog.occurrences_mut_for_core_test() {
+            // Keep the actual checked selection plan fixed. This concrete
+            // fixture must not hide the swapped variables inside that anchor.
+            for argument in occurrence.selection.arguments() {
+                let mapped = crate::types::map_kinded_argument_types_with_budget(
+                    argument,
+                    &mut |ty, work: &mut TypeWorkBudget| {
+                        let mut copy = clone_type_with_budget(ty, work)?;
+                        swap_type_variable_identities(&mut copy, left, right);
+                        Ok::<Type, ()>(copy)
+                    },
+                    &mut TypeWorkBudget::unbounded(),
+                    &mut |_| (),
+                )
+                .expect("checked argument copy");
+                assert_eq!(&mapped, argument, "checked selection remains fixed");
+                crate::types::discard_kinded_argument_iteratively(mapped);
+            }
+            for index in 0..occurrence.selection.node_count() {
+                let node = occurrence
+                    .selection
+                    .node(crate::interface::EvidenceNodeId::new(index))
+                    .expect("checked selection node");
+                if let crate::interface::EvidenceNode::Implementation { substitution, .. } = node {
+                    for item in substitution {
+                        assert_ne!(item.parameter(), left);
+                        assert_ne!(item.parameter(), right);
+                        let mut argument = item.argument().clone();
+                        swap_type_variable_identities(&mut argument, left, right);
+                        assert_eq!(&argument, item.argument());
+                    }
+                }
+            }
+            swap_application_type_variables_for_owner_swap_test(
+                &mut occurrence.checked_application,
+                left,
+                right,
+            );
+            for ty in &mut occurrence.method_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            if let Some(ty) = &mut occurrence.checked_value_type {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for adapter in catalog.adapters_mut_for_core_test() {
+            for id in &mut adapter.source_parameters {
+                swap_type_variable_identity(id, left, right);
+            }
+            for ty in &mut adapter.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+            for edge in &mut adapter.prerequisites {
+                swap_application_type_variables_for_owner_swap_test(
+                    &mut edge.application,
+                    left,
+                    right,
+                );
+                for id in &mut edge.interface_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                for (id, _) in &mut edge.method_parameters {
+                    swap_type_variable_identity(id, left, right);
+                }
+                swap_type_variable_identities(&mut edge.value_type, left, right);
+            }
+        }
+        for source in catalog.concrete_sources_mut_for_core_test() {
+            for ty in &mut source.head_arguments {
+                swap_type_variable_identities(ty, left, right);
+            }
+        }
+        for anchor in &mut program.method_evidence_anchors {
+            swap_application_type_variables_for_owner_swap_test(
+                &mut anchor.application,
+                left,
+                right,
+            );
+        }
+    }
+
+    #[test]
+    fn core_rejects_coordinated_tied_parameter_owner_swap() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident method $method:ident => {\n    pub interface $name<A> {\n        $method<B> : (A, B) -> B\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose method choose\nimpl Choose<Int> {\n    choose (left, right) = right\n}\nmain : Unit -> Int\nmain () = choose(0, 42)\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original introduced method graph must compile");
+        let (original, provenance) = compiled.effect_build_input().expect("actual effect Core");
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the original checked method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("the original interface owns one parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("the original method owns one Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("canonical A");
+        let b = registry.type_variable(right).expect("canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert_eq!((&a.kind, &b.kind), (&Kind::Type, &Kind::Type));
+        assert!(left.local() < right.local());
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        assert!(
+            registry
+                .nominal_parameter_entries()
+                .all(|(_, parameters)| parameters.iter().all(|p| p.id != left && p.id != right))
+        );
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        assert_eq!(
+            registry.defining_owner_parameters(owner).unwrap()[0].id,
+            left
+        );
+        eprintln!(
+            "original tied A={left:?} B={right:?} span={:?} interface={interface:?}",
+            a.origin.primary_span()
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuild = |folded| {
+            if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+        };
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let untouched = rebuild(folded).expect("rebuild the genuine Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &module_sources)
+                .expect("the untouched transform independently validates");
+            let mut tampered = rebuild(folded).expect("rebuild actual Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &tampered.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut tampered.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut tampered, left, right);
+            coherently_swap_core_type_variables(&mut tampered, left, right);
+
+            let changed = &tampered.registry;
+            assert_eq!(changed.type_variable(left), Some(a));
+            assert_eq!(changed.type_variable(right), Some(b));
+            assert_eq!(
+                changed.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.defining_owner_parameters(owner).unwrap()[0].id,
+                right
+            );
+            assert_eq!(&changed.defining_owner_parameters(owner).unwrap()[0], b);
+            let method = tampered
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            for row in registry.global_parameter_rows() {
+                let expected = row
+                    .parameters()
+                    .iter()
+                    .map(|id| {
+                        let mut id = *id;
+                        swap_type_variable_identity(&mut id, left, right);
+                        id
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed
+                        .global_parameter_row(row.owner())
+                        .unwrap()
+                        .parameters(),
+                    expected
+                );
+                assert_eq!(
+                    changed.global_parameter_position_for_core_test(row.owner()),
+                    registry.global_parameter_position_for_core_test(row.owner())
+                );
+            }
+            assert_eq!(registry.type_variable(left).unwrap().spelling, "A");
+            assert_eq!(registry.type_variable(right).unwrap().spelling, "B");
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!(
+                "canonical A/B records remain fixed; B is now interface-owned and A method-local; roles, rows and actual Core uses are coordinated"
+            );
+
+            let validator = Validator::new_modules(&tampered, &sources, &module_sources)
+                .expect("the fixed-original mutation retains the module relation");
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("the original-owner comparison must reject the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry,
+            );
+            drop(validator);
+            match validate_effect_modules(tampered, &sources, &module_sources) {
+                Ok(_) => panic!("COUNTEREXAMPLE: coordinated wrong parameter ownership validated"),
+                Err(error) => eprintln!("coordinated mutation rejected: {error:?}"),
+            }
+            eprintln!("{name} preserved originals and rejected the owner swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_global_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let registry = original.registry();
+        let find = |name: &str| {
+            registry
+                .global_parameter_rows()
+                .iter()
+                .find_map(|row| {
+                    let [id] = row.parameters() else { return None };
+                    let parameter = registry.type_variable(*id)?;
+                    (parameter.spelling == name).then_some((row.owner(), *id, parameter))
+                })
+                .unwrap_or_else(|| panic!("the original global {name} exists"))
+        };
+        let (first, left, a) = find("A");
+        let (second, right, b) = find("B");
+        assert_ne!(first, second);
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild original global image");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored global Core validates");
+            let mut changed = rebuild().expect("rebuild global Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(first)
+                    .unwrap()
+                    .parameters(),
+                &[right]
+            );
+            assert_eq!(
+                changed
+                    .registry
+                    .global_parameter_row(second)
+                    .unwrap()
+                    .parameters(),
+                &[left]
+            );
+            for (owner, expected) in [(first, right), (second, left)] {
+                let id = linked_global_abstraction(&changed, owner);
+                let node = &changed.nodes[id.index().unwrap()];
+                let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(abstraction),
+                )) = &node.kind
+                else {
+                    panic!("the actual global initializer remains a type abstraction")
+                };
+                assert_eq!(abstraction.parameters()[0].0, expected);
+                let Type::Forall(parameters, _) = &node.ty else {
+                    panic!("the actual abstraction retains its scheme")
+                };
+                assert_eq!(parameters[0].0, expected);
+            }
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original globals refuse the coordinated swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.global_parameter_row(first).unwrap().parameters(),
+                &[left]
+            );
+            assert_eq!(
+                registry.global_parameter_row(second).unwrap().parameters(),
+                &[right]
+            );
+            eprintln!(
+                "restored {name}: fixed original global owners reject the coordinated active swap"
+            );
+        }
+    }
+
+    pub(crate) fn exercise_foreign_wrong_source_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let original_registry = original.registry();
+        let original_effect = original_registry
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Other")
+            .expect("the actual second foreign symbol is retained");
+        let operation = &original_effect.operations[0];
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = operation.origin
+        else {
+            panic!("the literal foreign symbol must carry its expansion")
+        };
+        assert_ne!(invocation.source(), definition.source());
+        let contract = original_registry.native_symbol(operation.id).unwrap();
+        assert!(
+            contract
+                .same_source_provenance(original_effect, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        let relation = module_sources.iter().copied().collect::<HashMap<_, _>>();
+        for folded in [false, true] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original).unwrap()
+            } else {
+                identity_effect_traversal(original).unwrap()
+            };
+            let mut effects = changed.registry.effects().to_vec();
+            let effect = effects
+                .iter_mut()
+                .find(|effect| effect.id == original_effect.id)
+                .unwrap();
+            effect.operations[0].origin = Origin::Source(definition);
+            assert_eq!(effect.operations[0].id, operation.id);
+            assert_eq!(effect.operations[0].span, operation.span);
+            assert_eq!(effect.operations[0].annotation, operation.annotation);
+            assert!(
+                contract
+                    .same_source_provenance(effect, &mut TypeWorkBudget::default())
+                    .unwrap()
+            );
+            changed.registry = Arc::new(
+                changed
+                    .registry
+                    .as_ref()
+                    .clone()
+                    .replace_effects_for_core_test(effects),
+            );
+            assert!(Arc::ptr_eq(
+                contract,
+                changed.registry.native_symbol(operation.id).unwrap()
+            ));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .validate_effect_registry(Some(&relation), &mut HashMap::new())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+        }
+    }
+
+    pub(crate) fn exercise_restored_owner_swap_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let method = original
+            .method_evidence()
+            .methods()
+            .iter()
+            .find(|method| method.spelling.as_ref() == "choose")
+            .expect("the restored original method catalog");
+        let [left] = method.interface_parameters.as_ref() else {
+            panic!("one original interface parameter")
+        };
+        let [(right, Kind::Type)] = method.parameters.as_ref() else {
+            panic!("one original method-local Type parameter")
+        };
+        let (left, right, interface) = (*left, *right, method.id.interface());
+        let registry = original.registry();
+        let a = registry.type_variable(left).expect("fixed canonical A");
+        let b = registry.type_variable(right).expect("fixed canonical B");
+        assert_eq!((&*a.spelling, &*b.spelling), ("A", "B"));
+        assert!(matches!(&a.origin, Origin::Expansion { .. }));
+        assert!(matches!(&b.origin, Origin::Expansion { .. }));
+        assert_eq!(a.origin.primary_span(), b.origin.primary_span());
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        assert_eq!(
+            registry.owner_signature(owner).unwrap().parameters.as_ref(),
+            &[left]
+        );
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild restored original");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, sources, module_sources)
+                .expect("untouched restored Core validates");
+            let mut changed = rebuild().expect("rebuild restored Core for mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry)
+                    .swap_tied_parameter_owners_for_core_test(left, right)
+            );
+            swap_method_catalog_type_variables_for_owner_swap_test(&mut changed, left, right);
+            coherently_swap_core_type_variables(&mut changed, left, right);
+            assert_eq!(changed.registry.type_variable(left), Some(a));
+            assert_eq!(changed.registry.type_variable(right), Some(b));
+            assert_eq!(
+                changed
+                    .registry
+                    .owner_signature(owner)
+                    .unwrap()
+                    .parameters
+                    .as_ref(),
+                &[right]
+            );
+            assert_eq!(
+                changed.registry.defining_owner_parameters(owner).unwrap()[0],
+                *b
+            );
+            let method = changed
+                .method_evidence
+                .methods()
+                .iter()
+                .find(|method| method.id.interface() == interface)
+                .unwrap();
+            assert_eq!(method.interface_parameters.as_ref(), &[right]);
+            assert_eq!(method.inherited_parameters[0].binder, right);
+            assert_eq!(method.parameters[0].0, left);
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert_eq!(
+                validator
+                    .authenticate_checked_originals()
+                    .expect_err("restored original owner comparison refuses the swap")
+                    .reason(),
+                ValidationReason::Registry
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                registry.owner_signature(owner).unwrap().parameters.as_ref(),
+                &[left]
+            );
+            eprintln!("restored {name}: fixed original owners reject the coordinated active swap");
+        }
+    }
+
+    pub(crate) fn exercise_restored_nominal_pair_mutation_for_image_test(
+        original: &super::super::ValidatedEffectProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) {
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the restored original nested pair");
+        assert_eq!(
+            pair.previous_source.range(),
+            ByteRange::new(35, 76).unwrap()
+        );
+        assert_ne!(pair.definition.source(), pair.source);
+        let source = sources
+            .iter()
+            .find(|source| source.id() == pair.source)
+            .unwrap();
+        let changed_span = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+        assert!(changed_span.range().start() >= pair.previous_source.range().start());
+        assert!(changed_span.range().end() <= pair.previous_source.range().end());
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let mut changed = if folded {
+                fold_effect_literal_primitives(original)
+            } else {
+                identity_effect_traversal(original)
+            }
+            .expect("rebuild restored nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            assert!(
+                Arc::make_mut(&mut changed.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed_span,
+                )
+            );
+            let registry = changed.registry.as_ref();
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed_span && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed_span
+            )));
+            let validator = Validator::new_modules(&changed, sources, module_sources).unwrap();
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .expect_err("the restored fixed-original pair refuses");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+            drop(validator);
+            assert!(validate_effect_modules(changed, sources, module_sources).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "restored {name}: original nominal pair rejects the still-contained origin change"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_original_owner_preparation_is_exact_retryable_and_accepts_source_aliases() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let fixture = vector_method_evidence_validation_fixture();
+        let graph = &fixture.graph;
+        let linked = link_modules(checked_linked_validation_graph(graph), graph.entry())
+            .expect("the original graph links");
+        let linked = validate_linked_facts_for_test(linked).expect("the original graph checks");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relations = &fixture.module_sources;
+
+        let mut measured = TypeWorkBudget::unbounded();
+        let anchors = GeneratedParameterAnchors::prepare_from_linked(
+            &linked,
+            &sources,
+            relations,
+            &mut measured,
+        )
+        .expect("the actual checked originals prepare");
+        let exact = measured.used();
+        assert!(exact > 1);
+        let rows = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(
+            |row| matches!(row.owner, OriginalOwner::Interface(_)) && row.parameters.len() == 2
+        ));
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Method(_))
+                    && row.parameters.len() == 1)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        // Equal immutable source identities, held in distinct SourceFile values,
+        // must not acquire a pointer-identity requirement.
+        let aliases = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().clone())
+            .collect::<Vec<_>>();
+        let alias_refs = aliases.iter().collect::<Vec<_>>();
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).expect("short prefix fits");
+            assert!(matches!(
+                GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut short,
+                ),
+                Err(OwnerAnchorPreparationError::Resource)
+            ));
+            for _ in 0..2 {
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).expect("exact prefix fits");
+                let retried = GeneratedParameterAnchors::prepare_from_linked(
+                    &linked,
+                    &alias_refs,
+                    relations,
+                    &mut retry,
+                )
+                .expect("an exact fresh retry fits");
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(
+                    retried.checked_owners().modules().len(),
+                    anchors.checked_owners().modules().len()
+                );
+            }
+        }
+        eprintln!("checked original owner preparation used exactly {exact} work units");
+    }
+
+    #[test]
+    fn checked_original_owners_cover_inherited_methods_and_reject_unissued_ties() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident first $first:ident second $second:ident => {\n    pub interface $name<A> {\n        $first<B> : (A, B) -> B\n        $second : A -> A\n    }\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit Choose first pick second echo\nimpl Choose<Int> {\n    pick (left, right) = right\n    echo value = value\n}\nmain : Unit -> Int\nmain () = pick(echo(0), 42)\n",
+        );
+        let configuration = || crate::driver::RunConfiguration {
+            entry: entry.clone(),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled =
+            crate::driver::compile_path(configuration()).expect("the original graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let methods = original.method_evidence().methods();
+        let first = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "pick")
+            .unwrap();
+        let second = methods
+            .iter()
+            .find(|method| method.spelling.as_ref() == "echo")
+            .unwrap();
+        assert_eq!(first.id.interface(), second.id.interface());
+        let [interface] = first.interface_parameters.as_ref() else {
+            panic!("one interface parameter")
+        };
+        let [(local, Kind::Type)] = first.parameters.as_ref() else {
+            panic!("one local parameter")
+        };
+        let (interface, local) = (*interface, *local);
+        assert_eq!(second.interface_parameters.as_ref(), &[interface]);
+        assert!(second.parameters.is_empty());
+        assert_eq!(first.inherited_parameters[0].binder, interface);
+        assert_eq!(second.inherited_parameters[0].binder, interface);
+        let anchors = original.generated_parameter_anchors();
+        let module = anchors
+            .checked_owners()
+            .modules()
+            .iter()
+            .find(|module| module.module == first.id.interface().module())
+            .unwrap();
+        let row = |owner| module.rows.iter().find(|row| row.owner == owner).unwrap();
+        assert_eq!(
+            row(OriginalOwner::Interface(first.id.interface())).parameters[0].parameter,
+            interface
+        );
+        assert_eq!(
+            row(OriginalOwner::Method(first.id)).parameters[0].parameter,
+            local
+        );
+        assert!(row(OriginalOwner::Method(second.id)).parameters.is_empty());
+        assert!(
+            module
+                .rows
+                .iter()
+                .any(|row| matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.is_empty())
+        );
+
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let validator = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        let a = rebuilt.registry.type_variable(interface).unwrap();
+        let b = rebuilt.registry.type_variable(local).unwrap();
+        assert!(validator.allows_original_expansion_tie(a, b).unwrap());
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = b.origin
+        else {
+            panic!("direct expansion")
+        };
+        let mut changed = b.clone();
+        changed.origin = Origin::Source(invocation);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Generated {
+            cause: Box::new(b.origin.clone()),
+            reason: crate::source::GeneratedReason::TypeChecking,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed.origin = Origin::Related {
+            primary: Box::new(b.origin.clone()),
+            related: Vec::new(),
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        let source = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let range = invocation.range();
+        let unequal = source
+            .span(ByteRange::new(range.start(), range.end() - 1).unwrap())
+            .unwrap();
+        changed.origin = Origin::Expansion {
+            invocation: unequal,
+            definition,
+        };
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        changed = b.clone();
+        changed.id =
+            crate::types::TypeVariableId::resolved(first.id.interface().module(), u32::MAX);
+        assert!(
+            !validator
+                .allows_original_expansion_tie(a, &changed)
+                .unwrap()
+        );
+        drop(validator);
+        validate_effect_modules(rebuilt, &sources, &relations).expect("genuine original validates");
+
+        let donor = crate::driver::compile_path(configuration()).expect("a separate checked donor");
+        let (donor, _) = donor.effect_build_input().unwrap();
+        let mut substituted = identity_effect_traversal(original).unwrap();
+        substituted.generated_parameter_anchors = Arc::clone(donor.generated_parameter_anchors());
+        let validator = Validator::new_modules(&substituted, &sources, &relations).unwrap();
+        assert_eq!(
+            validator
+                .authenticate_checked_originals()
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        drop(validator);
+        assert!(validate_effect_modules(substituted, &sources, &relations).is_err());
+    }
+
+    #[test]
+    fn checked_original_global_row_retains_type_and_effect_row_slots() {
+        use super::super::dialect::checked_owner_anchors::OriginalOwner;
+
+        let directory = LinkedValidationDirectory::create();
+        directory.write(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n    pub $name<E : EffectRow, A> : (Unit -> A ! { | E }) -> A ! { | E }\n    $name action = action ()\n}\n",
+        );
+        let entry = directory.write(
+            "entry.ash",
+            "import forms (syntax emit)\nemit relay\neffect Read {\n    read : Unit -> Int\n}\nread_number : Unit -> Int ! {Read}\nread_number () = perform Read.read ()\nmain : Unit -> Int\nmain () = handle (relay(read_number)) with Read {\n    read ignored => resume 42\n}\n",
+        );
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original effect-row graph compiles");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+        let (original, _) = compiled.effect_build_input().unwrap();
+        let registry = original.registry();
+        let row = original
+            .generated_parameter_anchors()
+            .checked_owners()
+            .modules()
+            .iter()
+            .flat_map(|module| module.rows.iter())
+            .find(|row| {
+                matches!(row.owner, OriginalOwner::Global(_))
+                    && row.parameters.len() == 2
+                    && registry
+                        .type_variable(row.parameters[0].parameter)
+                        .is_some_and(|p| p.spelling == "E")
+                    && registry
+                        .type_variable(row.parameters[1].parameter)
+                        .is_some_and(|p| p.spelling == "A")
+            })
+            .expect("the genuine global has its original E/A row");
+        let e = registry.type_variable(row.parameters[0].parameter).unwrap();
+        let a = registry.type_variable(row.parameters[1].parameter).unwrap();
+        assert_eq!(e.kind, Kind::EffectRow);
+        assert_eq!(a.kind, Kind::Type);
+        assert!(matches!(e.origin, Origin::Expansion { .. }));
+        assert!(matches!(a.origin, Origin::Expansion { .. }));
+        assert_eq!(e.origin.primary_span(), a.origin.primary_span());
+        assert_eq!(
+            row.parameters[0].expansion_primary,
+            Some(e.origin.primary_span())
+        );
+        assert_eq!(
+            row.parameters[1].expansion_primary,
+            Some(a.origin.primary_span())
+        );
+    }
+
+    #[test]
+    fn checked_original_nested_nominal_pair_rejects_contained_origin_mutation() {
+        use super::super::dialect::checked_owner_anchors::OriginalNominalPair;
+
+        fn configuration() -> crate::driver::RunConfiguration {
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/derives/nested.ash"),
+                roots: ModuleRoots::empty(),
+            }
+        }
+
+        fn check_pair(pair: OriginalNominalPair) {
+            assert_eq!(
+                pair.previous_source.range(),
+                ByteRange::new(35, 76).unwrap()
+            );
+            assert_eq!(pair.invocation.range(), ByteRange::new(70, 75).unwrap());
+            assert_ne!(pair.definition.source(), pair.source);
+        }
+
+        fn mutate_and_check(
+            program: &mut UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            prepared: Option<&GeneratedParameterAnchors>,
+            pair: OriginalNominalPair,
+        ) {
+            check_pair(pair);
+            let source = sources
+                .iter()
+                .find(|source| source.id() == pair.source)
+                .unwrap();
+            let changed = source.span(ByteRange::new(69, 75).unwrap()).unwrap();
+            assert!(changed.range().start() >= pair.previous_source.range().start());
+            assert!(changed.range().end() <= pair.previous_source.range().end());
+            assert!(
+                Arc::make_mut(&mut program.registry).replace_nominal_invocation_for_core_test(
+                    pair.current,
+                    pair.invocation,
+                    changed,
+                )
+            );
+            let registry = program.registry.as_ref();
+            let previous = registry.nominal(pair.previous).unwrap();
+            let current = registry.nominal(pair.current).unwrap();
+            assert_eq!(previous.origin, Origin::Source(pair.previous_source));
+            assert!(
+                matches!(current.origin, Origin::Expansion { invocation, definition }
+                if invocation == changed && definition == pair.definition)
+            );
+            assert!(current.constructors.iter().all(|id| matches!(
+                registry.constructor(*id).unwrap().origin,
+                Origin::Expansion { invocation, .. } if invocation == changed
+            )));
+            let mut validator = Validator::new_modules(program, sources, relations).unwrap();
+            validator.prepared_owner_anchors = prepared;
+            assert!(
+                !validator
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap()
+            );
+            let error = validator
+                .validate_module_registry(None)
+                .expect_err("the fixed-original overlap must refuse");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(
+                validator.nominal_overlap_refusal.get(),
+                Some((pair.previous, pair.current))
+            );
+        }
+
+        let original = crate::driver::compile_path(configuration())
+            .expect("the unchanged nested derive graph compiles");
+        assert_eq!(
+            crate::driver::execute(&original).unwrap().value_display(),
+            "42"
+        );
+        let (original, provenance) = original.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .expect("the actual checked nested pair is retained");
+        check_pair(pair);
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        for (name, folded) in [("identity", false), ("fold", true)] {
+            let rebuild = || {
+                if folded {
+                    fold_effect_literal_primitives(original)
+                } else {
+                    identity_effect_traversal(original)
+                }
+            };
+            let untouched = rebuild().expect("rebuild the original nested Core");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &untouched.generated_parameter_anchors
+            ));
+            validate_effect_modules(untouched, &sources, &relations)
+                .expect("the untouched nested transform independently validates");
+            let mut changed = rebuild().expect("rebuild for the fixed-original mutation");
+            assert!(Arc::ptr_eq(
+                original.generated_parameter_anchors(),
+                &changed.generated_parameter_anchors
+            ));
+            mutate_and_check(&mut changed, &sources, &relations, None, pair);
+            assert!(validate_effect_modules(changed, &sources, &relations).is_err());
+            assert_eq!(
+                original
+                    .checked_original_nominal_pairs()
+                    .iter()
+                    .find(|candidate| candidate.current == pair.current),
+                Some(&pair)
+            );
+            eprintln!(
+                "{name}: exact original nominal pair rejected the still-contained 70..75 to 69..75 mutation"
+            );
+        }
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |mut program, sources, relations, linked| {
+                let anchors = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("prepare the actual checked linked originals");
+                let pair = *anchors
+                    .nominal_pairs()
+                    .iter()
+                    .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                    .expect("the actual linked nominal pair is present");
+                mutate_and_check(&mut program, sources, relations, Some(&anchors), pair);
+                reached.set(true);
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        );
+        assert!(reached.get(), "the actual linked guard was reached");
+        assert!(
+            negative.is_err(),
+            "the linked entry must reject the mutation"
+        );
+        eprintln!(
+            "linked: actual checked original pair rejected the coordinated contained mutation"
+        );
+    }
+
+    /// Exercise the checked implementation selected at a real I16 Core call site.
+    #[test]
+    fn i16_actual_indexed_selection_rejects_unrelated_method_binder() {
+        use std::fmt::Write as _;
+
+        #[derive(Clone, Copy, Debug)]
+        struct Site {
+            implementation: ImplMethodId,
+            binder: BinderId,
+            variable: NodeId,
+            application: NodeId,
+            argument: NodeId,
+            span: Span,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        struct Donor {
+            implementation: ImplMethodId,
+            binder: BinderId,
+        }
+
+        struct Inspection {
+            report: String,
+            sites: Vec<Site>,
+            same_graph_donors: Vec<Donor>,
+        }
+
+        fn inspect(
+            program: &UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+            exported_path: &str,
+        ) -> Result<Inspection, String> {
+            fn find_module(
+                suffix: &str,
+                sources: &[&SourceFile],
+                relations: &[(ModuleId, SourceId)],
+            ) -> Result<(ModuleId, SourceId), String> {
+                let matches = sources
+                    .iter()
+                    .filter(|source| std::path::Path::new(source.display_path()).ends_with(suffix))
+                    .collect::<Vec<_>>();
+                let [source] = matches.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source, found {}",
+                        matches.len()
+                    ));
+                };
+                let modules = relations
+                    .iter()
+                    .filter(|(_, source_id)| *source_id == source.id())
+                    .map(|(module, _)| *module)
+                    .collect::<Vec<_>>();
+                let [module] = modules.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source/module relation, found {}",
+                        modules.len()
+                    ));
+                };
+                Ok((*module, source.id()))
+            }
+
+            let (api_id, _) = find_module("indexed/api.ash", sources, relations)?;
+            let (export_id, export_source) = find_module(exported_path, sources, relations)?;
+            let api = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == api_id)
+                .ok_or_else(|| "the linked api group is absent".to_owned())?;
+            let exported = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == export_id)
+                .ok_or_else(|| "the linked exported group is absent".to_owned())?;
+            let interfaces = api
+                .interface_facts()
+                .iter()
+                .filter(|fact| fact.spelling == "Indexed")
+                .collect::<Vec<_>>();
+            let [interface] = interfaces.as_slice() else {
+                return Err(format!(
+                    "expected one checked Indexed interface, found {}",
+                    interfaces.len()
+                ));
+            };
+            let methods = interface
+                .methods
+                .iter()
+                .filter(|method| method.spelling == "index")
+                .collect::<Vec<_>>();
+            let [method] = methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index method, found {}",
+                    methods.len()
+                ));
+            };
+            let colors = program.registry.nominals().iter().filter(|nominal| {
+                nominal.id.module() == export_id && nominal.spelling == "Color"
+                    && matches!(&nominal.origin, Origin::Source(span) if span.source() == export_source)
+            }).collect::<Vec<_>>();
+            let [color] = colors.as_slice() else {
+                return Err(format!(
+                    "expected the original exported Color nominal, found {}",
+                    colors.len()
+                ));
+            };
+            let implementations = exported
+                .implementation_facts()
+                .iter()
+                .filter(|implementation| {
+                    implementation.interface() == interface.id
+                        && matches!(implementation.arguments(),
+                    [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                })
+                .collect::<Vec<_>>();
+            let [implementation] = implementations.as_slice() else {
+                return Err(format!(
+                    "expected the actual Indexed<Color> implementation, found {}",
+                    implementations.len()
+                ));
+            };
+            let implementation_methods = implementation
+                .methods
+                .iter()
+                .filter(|selected| selected.method == method.id)
+                .collect::<Vec<_>>();
+            let [selected] = implementation_methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index implementation method, found {}",
+                    implementation_methods.len()
+                ));
+            };
+            let definitions = exported
+                .definitions()
+                .iter()
+                .filter_map(|definition| match definition.kind() {
+                    crate::resolved::ResolvedDefinitionKind::Equational(global)
+                        if global.interface.name.spelling == "computed" =>
+                    {
+                        Some(global)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [computed] = definitions.as_slice() else {
+                return Err(format!(
+                    "expected one checked computed definition, found {}",
+                    definitions.len()
+                ));
+            };
+            let [equation] = computed.equations.as_slice() else {
+                return Err(format!(
+                    "expected one computed equation, found {}",
+                    computed.equations.len()
+                ));
+            };
+            let mut pending = vec![&equation.body];
+            let mut occurrences = Vec::new();
+            while let Some(expression) = pending.pop() {
+                match &expression.kind {
+                    crate::resolved::ResolvedExprKind::Add(binary) => {
+                        pending.push(&binary.right);
+                        pending.push(&binary.left);
+                    }
+                    crate::resolved::ResolvedExprKind::Apply(application) => {
+                        pending.push(&application.argument);
+                        pending.push(&application.function);
+                    }
+                    crate::resolved::ResolvedExprKind::Occurrence(occurrence)
+                        if occurrence.term
+                            == crate::resolved::ResolvedTermName::Method(method.id) =>
+                    {
+                        occurrences.push(occurrence);
+                    }
+                    crate::resolved::ResolvedExprKind::Constructor(_)
+                    | crate::resolved::ResolvedExprKind::Integer(_) => {}
+                    other => {
+                        return Err(format!("unexpected fixed computed expression: {other:?}"));
+                    }
+                }
+            }
+            if occurrences.is_empty() {
+                return Err("no real resolved index occurrence in computed".to_owned());
+            }
+            let catalog = &program.method_evidence;
+            let mut report = format!(
+                "I16 original: interface={:?} method={:?} Color={:?} implementation={:?} implementation_method={:?} binder={:?}",
+                interface.id, method.id, color.id, implementation.id, selected.id, selected.binder
+            );
+            let mut sites = Vec::new();
+            for occurrence in &occurrences {
+                let [slot] = occurrence.evidence.as_ref() else {
+                    return Err(format!(
+                        "index occurrence has {} evidence slots",
+                        occurrence.evidence.len()
+                    ));
+                };
+                let (checked_method, application, method_arguments, _, selection) = slot
+                    .filled_method()
+                    .ok_or_else(|| "the actual checked index slot is not published".to_owned())?;
+                if checked_method != method.id
+                    || application.interface() != interface.id
+                    || !matches!(application.arguments(),
+                        [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                    || !method_arguments.is_empty()
+                {
+                    return Err(
+                        "the checked index slot is not the original Indexed<Color> occurrence"
+                            .to_owned(),
+                    );
+                }
+                let selection_node = selection.root();
+                let Some(EvidenceNode::Implementation {
+                    implementation: selected_impl,
+                    methods,
+                    ..
+                }) = selection.node(selection_node)
+                else {
+                    return Err(
+                        "the actual root selection is not a concrete implementation".to_owned()
+                    );
+                };
+                if selected_impl != implementation.id || !methods.contains(&selected.id) {
+                    return Err(
+                        "the actual selection does not choose the checked implementation method"
+                            .to_owned(),
+                    );
+                }
+                let slot_id = slot.storage_id();
+                let original_span = occurrence.origin.primary_span();
+                let matching_variables = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable))
+                            if variable.binder() == selected.binder =>
+                        {
+                            let node_id = node_id(program.arena, index).ok()?;
+                            Some((node_id, node.origin.as_ref().map(Origin::primary_span)))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let at_occurrence = matching_variables
+                    .iter()
+                    .filter_map(|(node, origin)| (*origin == Some(original_span)).then_some(*node))
+                    .collect::<Vec<_>>();
+                let [variable] = at_occurrence.as_slice() else {
+                    return Err(format!(
+                        "expected one real variable at {original_span:?}, found {}",
+                        at_occurrence.len()
+                    ));
+                };
+                let applications = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Apply(application),
+                        )) if application.function() == *variable => {
+                            Some((node_id(program.arena, index).ok()?, application.argument()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let [(application, argument)] = applications.as_slice() else {
+                    return Err(format!(
+                        "expected one Apply.function edge for {variable:?}, found {}",
+                        applications.len()
+                    ));
+                };
+                sites.push(Site {
+                    implementation: selected.id,
+                    binder: selected.binder,
+                    variable: *variable,
+                    application: *application,
+                    argument: *argument,
+                    span: original_span,
+                });
+                let retained_occurrences = catalog
+                    .occurrences()
+                    .iter()
+                    .filter(|row| row.slot == slot_id)
+                    .count();
+                let anchors = program.method_evidence_anchors.iter().filter(|anchor| {
+                    anchor.occurrence == Some(slot_id) && anchor.method == method.id
+                        && matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { implementation: actual, selection_node: node }
+                            if actual == selected.id && node == selection_node)
+                }).map(|anchor| anchor.node).collect::<Vec<_>>();
+                writeln!(report, "\nslot={slot_id} span={original_span:?} selection_node={selection_node:?} selected={:?} binder={:?} binder_variables={matching_variables:?} variable={variable:?} application={application:?} argument={argument:?} retained_occurrences={retained_occurrences} matching_adapter_nodes={anchors:?}", selected.id, selected.binder).unwrap();
+            }
+            let checked_occurrences = catalog
+                .occurrences()
+                .iter()
+                .filter(|row| row.checked_method == Some(method.id))
+                .map(|row| {
+                    (
+                        row.slot,
+                        row.checked_application.interface(),
+                        row.selection.root(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let implementation_owners = catalog
+                .implementation_owners()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.binder))
+                .collect::<Vec<_>>();
+            let adapters = catalog
+                .adapters()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.selection_node, row.binder))
+                .collect::<Vec<_>>();
+            let concrete_sources = catalog
+                .concrete_sources()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| {
+                    (
+                        row.occurrence,
+                        row.selection_node,
+                        row.implementation,
+                        row.binder,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expectations = catalog
+                .expectations()
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.method == method.id)
+                .map(|(index, row)| (index, row.occurrence, row.role))
+                .collect::<Vec<_>>();
+            let method_anchors = program
+                .method_evidence_anchors
+                .iter()
+                .filter(|anchor| anchor.method == method.id)
+                .map(|anchor| (anchor.node, anchor.occurrence, anchor.role))
+                .collect::<Vec<_>>();
+            writeln!(report, "\nchecked_occurrences={checked_occurrences:?} implementation_owners={implementation_owners:?} adapters={adapters:?} concrete_sources={concrete_sources:?} method_expectations={expectations:?} method_anchors={method_anchors:?}").unwrap();
+            let same_graph_donors = linked
+                .groups()
+                .iter()
+                .flat_map(|group| group.implementation_facts())
+                .filter(|candidate| candidate.id != implementation.id)
+                .flat_map(|candidate| {
+                    let candidate_id = candidate.id;
+                    candidate
+                        .methods
+                        .iter()
+                        .filter_map(move |candidate_method| {
+                            (candidate_method.id.implementation() == candidate_id
+                                && candidate_method.binder.module() == Some(candidate_id.module())
+                                && candidate_method.binder != selected.binder)
+                                .then_some(Donor {
+                                    implementation: candidate_method.id,
+                                    binder: candidate_method.binder,
+                                })
+                        })
+                })
+                .collect::<Vec<_>>();
+            writeln!(report, "\nsame_graph_donors={same_graph_donors:?}").unwrap();
+            Ok(Inspection {
+                report,
+                sites,
+                same_graph_donors,
+            })
+        }
+
+        fn configuration(entry: &str) -> crate::driver::RunConfiguration {
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/indexed")
+                    .join(entry),
+                roots: ModuleRoots::empty(),
+            }
+        }
+
+        fn positive(entry: &str, exported_path: &str) -> Inspection {
+            let inventory = std::cell::RefCell::new(None);
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                configuration(entry),
+                |program, sources, relations, linked| {
+                    *inventory.borrow_mut() =
+                        Some(inspect(&program, sources, relations, linked, exported_path));
+                    validate_effect_modules_linked_with_work(
+                        program,
+                        sources,
+                        relations,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .unwrap_or_else(|error| panic!("{entry} must independently validate: {error}"));
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            inventory
+                .into_inner()
+                .expect("the actual linked validation callback must run")
+                .unwrap_or_else(|reason| {
+                    panic!("I16 STOP: {entry} actual-site inventory unavailable: {reason}")
+                })
+        }
+
+        let control = positive("control_integrated.ash", "indexed/control_exported.ash");
+        let original = positive("integrated.ash", "indexed/exported.ash");
+        assert_eq!(control.sites.len(), 2, "two actual handwritten index calls");
+        assert_eq!(original.sites.len(), 2, "two actual generated index calls");
+        eprintln!("I16 handwritten control: {}", control.report);
+        eprintln!("I16 unchanged original: {}", original.report);
+        let control_donor = Donor {
+            implementation: control.sites[0].implementation,
+            binder: control.sites[0].binder,
+        };
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration("integrated.ash"),
+            |mut program, sources, relations, linked| {
+                let observed =
+                    inspect(&program, sources, relations, linked, "indexed/exported.ash")
+                        .unwrap_or_else(|reason| {
+                            panic!("I16 STOP: actual-site inventory unavailable: {reason}")
+                        });
+                let [target, other] = observed.sites.as_slice() else {
+                    panic!(
+                        "I16 STOP: expected two actual index calls, found {}",
+                        observed.sites.len()
+                    );
+                };
+                let (donor, donor_kind) = match observed.same_graph_donors.first() {
+                    Some(donor) => (*donor, "same checked graph"),
+                    None => (control_donor, "separately checked handwritten control"),
+                };
+                assert_ne!(donor.implementation, target.implementation);
+                assert_ne!(
+                    donor.implementation.implementation(),
+                    target.implementation.implementation()
+                );
+                assert_ne!(donor.binder, target.binder);
+                assert_eq!(
+                    donor.binder.module(),
+                    Some(donor.implementation.implementation().module())
+                );
+                if observed.same_graph_donors.is_empty() {
+                    assert_ne!(
+                        donor.implementation.implementation().module(),
+                        target.implementation.implementation().module(),
+                        "the independent donor must retain its distinct module identity"
+                    );
+                }
+                assert_ne!(target.variable, other.variable);
+                assert_eq!(target.implementation, other.implementation);
+                assert_eq!(target.binder, other.binder);
+
+                let target_index = target.variable.index().expect("actual variable index");
+                let other_index = other.variable.index().expect("other variable index");
+                let application_index = target.application.index().expect("actual call index");
+                let application = match &program.nodes[application_index].kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                        application,
+                    ))) => *application,
+                    _ => panic!("I16 STOP: selected call is not an Apply"),
+                };
+                assert_eq!(application.function(), target.variable);
+                assert_eq!(application.argument(), target.argument);
+                let node = &program.nodes[target_index];
+                assert_eq!(
+                    node.origin.as_ref().map(Origin::primary_span),
+                    Some(target.span)
+                );
+                let before_type = node.ty.clone();
+                let before_effects = node.effects.clone();
+                let before_origin = node.origin.clone();
+                let before_dialect = node.dialect;
+                let original_registry = Arc::clone(&program.registry);
+                let original_catalog = Arc::clone(&program.method_evidence);
+                let original_owners = Arc::clone(&program.generated_parameter_anchors);
+                let original_anchors = program.method_evidence_anchors.as_ptr();
+                let original_anchor_count = program.method_evidence_anchors.len();
+                let original_root = program.root;
+                let original_arena = program.arena;
+                let original_node_count = program.nodes.len();
+                let variable_binders = |program: &UnvalidatedEffectProgram| {
+                    program
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, node)| match &node.kind {
+                            EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                                Some((index, variable.binder()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let before_binders = variable_binders(&program);
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &mut program.nodes[target_index].kind
+                else {
+                    panic!("I16 STOP: selected Apply.function is not a variable")
+                };
+                assert_eq!(variable.binder(), target.binder);
+                *variable = super::super::variable::VariableNode::new(donor.binder);
+                let after_binders = variable_binders(&program);
+                assert_eq!(before_binders.len(), after_binders.len());
+                let changed = before_binders
+                    .iter()
+                    .zip(&after_binders)
+                    .filter(|(before, after)| before != after)
+                    .map(|(before, after)| (*before, *after))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed,
+                    vec![((target_index, target.binder), (target_index, donor.binder))]
+                );
+                let node = &program.nodes[target_index];
+                assert_eq!(node.ty, before_type);
+                assert_eq!(node.effects, before_effects);
+                assert_eq!(node.origin, before_origin);
+                assert_eq!(node.dialect, before_dialect);
+                assert!(matches!(
+                    &program.nodes[other_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if variable.binder() == other.binder
+                ));
+                assert!(matches!(
+                    &program.nodes[application_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(actual)))
+                        if *actual == application
+                ));
+                assert_eq!(program.root, original_root);
+                assert_eq!(program.arena, original_arena);
+                assert_eq!(program.nodes.len(), original_node_count);
+                assert!(Arc::ptr_eq(&program.registry, &original_registry));
+                assert!(Arc::ptr_eq(&program.method_evidence, &original_catalog));
+                assert!(Arc::ptr_eq(
+                    &program.generated_parameter_anchors,
+                    &original_owners
+                ));
+                assert_eq!(program.method_evidence_anchors.as_ptr(), original_anchors);
+                assert_eq!(program.method_evidence_anchors.len(), original_anchor_count);
+                eprintln!("I16 original linked facts: {}", observed.report);
+                eprintln!(
+                    "I16 selected callee {target:?}; {donor_kind} donor {donor:?}; exactly one binder changed"
+                );
+
+                reached.set(true);
+                let result = validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                );
+                match &result {
+                    Ok(_) => eprintln!("I16 mutated Core was accepted"),
+                    Err(error) => eprintln!(
+                        "I16 mutated Core refused: reason={:?} node={:?} cause={:?}",
+                        error.reason(),
+                        error.node,
+                        error.cause_name()
+                    ),
+                }
+                assert!(
+                    result.is_err(),
+                    "the independent linked Core validator must reject the changed binder"
+                );
+                result
+            },
+        );
+        assert!(
+            reached.get(),
+            "the actual selected call mutation must be reached"
+        );
+        assert!(
+            negative.is_err(),
+            "independent linked Core validation must reject the unrelated selected method binder"
+        );
+    }
+
+    #[test]
+    fn checked_nominal_pair_work_is_exact_retryable_and_last_owner_drops() {
+        let configuration = || crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/derives/nested.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .expect("actual checked originals prepare");
+                assert!(
+                    originals
+                        .nominal_pairs()
+                        .iter()
+                        .any(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+                );
+                let cost = measured.used();
+                assert!(cost > 1);
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                    short.charge(prefix).unwrap();
+                    assert!(matches!(
+                        GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut short,
+                        ),
+                        Err(OwnerAnchorPreparationError::Resource)
+                    ));
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                        exact.charge(prefix).unwrap();
+                        let retry = GeneratedParameterAnchors::prepare_from_linked(
+                            linked, sources, relations, &mut exact,
+                        )
+                        .expect("a fresh exact original-pair retry succeeds");
+                        assert_eq!(exact.used(), prefix + cost);
+                        assert_eq!(retry.nominal_pairs(), originals.nominal_pairs());
+                    }
+                }
+                eprintln!("nested checked-original preparation uses exactly {cost} work units");
+                validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the original checked nested program validates");
+        let (original, provenance) = compiled.effect_build_input().unwrap();
+        let pair = *original
+            .checked_original_nominal_pairs()
+            .iter()
+            .find(|pair| pair.invocation.range() == ByteRange::new(70, 75).unwrap())
+            .unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relations = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let rebuilt = identity_effect_traversal(original).unwrap();
+        let previous = rebuilt.registry.nominal(pair.previous).unwrap();
+        let current = rebuilt.registry.nominal(pair.current).unwrap();
+        let measured = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+        assert!(
+            measured
+                .allows_original_nominal_overlap(previous, current, pair.source)
+                .unwrap()
+        );
+        let cost = measured.type_work.get();
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+            short.type_work_limit = prefix + cost - 1;
+            short.charge_type_work(prefix).unwrap();
+            assert_eq!(
+                short
+                    .allows_original_nominal_overlap(previous, current, pair.source)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = Validator::new_modules(&rebuilt, &sources, &relations).unwrap();
+                exact.type_work_limit = prefix + cost;
+                exact.charge_type_work(prefix).unwrap();
+                assert!(
+                    exact
+                        .allows_original_nominal_overlap(previous, current, pair.source)
+                        .unwrap()
+                );
+                assert_eq!(exact.type_work.get(), prefix + cost);
+            }
+        }
+        eprintln!("original nominal-pair lookup uses exactly {cost} work units");
+        drop(measured);
+        drop(rebuilt);
+        let weak = Arc::downgrade(original.generated_parameter_anchors());
+        let last = identity_effect_traversal(original).unwrap();
+        drop(compiled);
+        assert_eq!(
+            weak.strong_count(),
+            1,
+            "only the transformed Core retains the anchor"
+        );
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || drop(last))
+            .expect("small-stack last owner worker")
+            .join()
+            .expect("last owner drop is bounded");
+        assert!(weak.upgrade().is_none());
+
+        let reached = Cell::new(false);
+        let failure = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration(),
+            |program, sources, relations, linked| {
+                let mut measured = TypeWorkBudget::unbounded();
+                let originals = GeneratedParameterAnchors::prepare_from_linked(
+                    linked,
+                    sources,
+                    relations,
+                    &mut measured,
+                )
+                .unwrap();
+                assert!(!originals.nominal_pairs().is_empty());
+                let weak = Arc::downgrade(&program.generated_parameter_anchors);
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                let result = validate_effect_modules_linked_with_work(
+                    program, sources, relations, linked, &mut short,
+                );
+                assert_eq!(
+                    result
+                        .as_ref()
+                        .expect_err("one-short linked preparation refuses")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+                assert!(
+                    weak.upgrade().is_none(),
+                    "failed preparation disposes the unchecked owner"
+                );
+                reached.set(true);
+                result
+            },
+        );
+        assert!(reached.get());
+        assert!(failure.is_err());
+    }
+
     #[test]
     fn linked_core_rejects_coherent_resolved_binder_owner_swap() {
         let mut fixture = LinkedCoreValidationFixture::compile(
@@ -33945,7 +35950,10 @@ mod tests {
         const SOURCE_PAIR_COUNT: usize = 4;
         const FOREIGN_SOURCE_BYTES: usize = 216;
         const RESERVED_SOURCE_SCAN_WORK: usize = SOURCE_PAIR_COUNT + FOREIGN_SOURCE_BYTES;
-        const CANONICAL_REGISTRY_RECORDS: usize = RESERVED_SOURCE_SCAN_WORK + R;
+        // The first canonical parameter also grows the per-module span map.
+        const CANONICAL_PARAMETER_MAP_GROWTH: usize = 1;
+        const CANONICAL_REGISTRY_RECORDS: usize =
+            RESERVED_SOURCE_SCAN_WORK + R + CANONICAL_PARAMETER_MAP_GROWTH;
         const ROW_STRUCTURE: usize = 2 * S + 2 * R;
         // The seven stored envelopes contain 42 Type/binder-Kind cells:
         // 3 + 7 + 12 for the resolved value/function/scheme, 1 + 3 + 8 for
@@ -34044,7 +36052,7 @@ mod tests {
         let exact_work = EXPECTED.total();
         assert_eq!(
             exact_work,
-            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1
+            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1 + CANONICAL_PARAMETER_MAP_GROWTH
         );
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact module/source relation is canonical");
@@ -39022,12 +41030,26 @@ mod tests {
     fn registry_canonical_binder_kind_authentication_is_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
         const KIND_NODES: usize = 2 * DEPTH + 1;
-        // The canonical registry scan visits one binder record. Authenticating
-        // it against its ordered nominal record visits a second record plus
-        // every pair of Kind nodes. The reserved-source scan also visits
-        // the one materialized nominal before binder authentication.
+        // Both paths scan one source, retain the full nominal and constructor
+        // spans, and authenticate one canonical binder against the ordered
+        // record and every pair of Kind nodes.
         const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        const EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK + KIND_NODES + 2;
+        const NOMINAL_SPAN_WORK: usize = 2;
+        const CONSTRUCTOR_SPAN_WORK: usize = 2;
+        const BINDER_RECORDS_AND_KIND_WORK: usize = KIND_NODES + 2;
+        const SINGLE_SOURCE_EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK
+            + NOMINAL_SPAN_WORK
+            + CONSTRUCTOR_SPAN_WORK
+            + BINDER_RECORDS_AND_KIND_WORK;
+        // The module path also grows one initially empty map for each span
+        // and one for the first canonical parameter of this module.
+        const MODULE_NOMINAL_MAP_GROWTH: usize = 1;
+        const MODULE_CONSTRUCTOR_MAP_GROWTH: usize = 1;
+        const MODULE_PARAMETER_MAP_GROWTH: usize = 1;
+        const MODULE_EXACT_WORK: usize = SINGLE_SOURCE_EXACT_WORK
+            + MODULE_NOMINAL_MAP_GROWTH
+            + MODULE_CONSTRUCTOR_MAP_GROWTH
+            + MODULE_PARAMETER_MAP_GROWTH;
 
         fn deep_kind() -> crate::types::Kind {
             let mut kind = crate::types::Kind::Type;
@@ -39114,7 +41136,7 @@ mod tests {
                 assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - SINGLE_SOURCE_EXACT_WORK)
                     .expect("the exact fixture precharge should fit");
                 exact
                     .validate_registry()
@@ -39124,13 +41146,28 @@ mod tests {
                 let short_program = registry_program(&file, None, None);
                 let short = Validator::new(&short_program, &[&file]);
                 short
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(
+                        CORE_VALIDATION_TYPE_WORK_LIMIT - (SINGLE_SOURCE_EXACT_WORK - 1),
+                    )
                     .expect("the one-short fixture precharge should fit");
                 let error = short
                     .validate_registry()
+                    .expect_err("one missing constructor-span cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                // The two-cell constructor-span charge refuses atomically.
+                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT - 1);
+
+                let kind_short_program = registry_program(&file, None, None);
+                let kind_short = Validator::new(&kind_short_program, &[&file]);
+                let kind_allowance = SINGLE_SOURCE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - 1;
+                kind_short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short Kind fixture precharge should fit");
+                let error = kind_short
+                    .validate_registry()
                     .expect_err("one missing Kind-pair visit must reject validation");
                 assert_eq!(error.reason(), ValidationReason::Resource);
-                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                assert_eq!(kind_short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let mismatched_program =
                     registry_program(&file, None, Some(crate::types::Kind::Type));
@@ -39146,7 +41183,7 @@ mod tests {
                     Validator::new_modules(&module_program, &[&file], &[(module, file.id())])
                         .expect("the module/source relation should be valid");
                 module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - MODULE_EXACT_WORK)
                     .expect("the module fixture precharge should fit");
                 module_validator
                     .validate_registry()
@@ -39161,14 +41198,35 @@ mod tests {
                     Validator::new_modules(&short_module_program, &[&file], &[(module, file.id())])
                         .expect("the one-short module/source relation should be valid");
                 short_module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (MODULE_EXACT_WORK - 1))
                     .expect("the one-short module fixture precharge should fit");
-                let error = short_module_validator.validate_registry().expect_err(
+                let error = short_module_validator
+                    .validate_registry()
+                    .expect_err("one missing module constructor-map cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(
+                    short_module_validator.type_work.get(),
+                    CORE_VALIDATION_TYPE_WORK_LIMIT
+                );
+
+                let kind_short_module_program = registry_program(&file, Some(module), None);
+                let kind_short_module = Validator::new_modules(
+                    &kind_short_module_program,
+                    &[&file],
+                    &[(module, file.id())],
+                )
+                .expect("the one-short module/source relation should be valid");
+                let kind_allowance =
+                    MODULE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - MODULE_CONSTRUCTOR_MAP_GROWTH - 1;
+                kind_short_module
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short module Kind precharge should fit");
+                let error = kind_short_module.validate_registry().expect_err(
                     "one missing module-registry Kind-pair visit must reject validation",
                 );
                 assert_eq!(error.reason(), ValidationReason::Resource);
                 assert_eq!(
-                    short_module_validator.type_work.get(),
+                    kind_short_module.type_work.get(),
                     CORE_VALIDATION_TYPE_WORK_LIMIT
                 );
             })
@@ -41405,6 +43463,391 @@ mod replacement_owner_api_tests {
 mod registry_order_tests {
     use super::*;
     use crate::{core::CoreBuilder, source::ByteRange};
+
+    #[test]
+    fn span_map_growth_is_paid_before_retention_and_validation_can_retry() {
+        type Family = super::super::effect::EffectOperationFamily;
+        fn fixture(
+            count: usize,
+        ) -> (
+            Vec<SourceFile>,
+            UnvalidatedCoreProgram<Family>,
+            Vec<(ModuleId, SourceId)>,
+        ) {
+            let files = (0..count)
+                .map(|index| SourceFile::new(format!("module-{index}.ash"), "Item").unwrap())
+                .collect::<Vec<_>>();
+            let mut nominals = Vec::new();
+            let mut constructors = Vec::new();
+            let mut relation = Vec::new();
+            for file in &files {
+                let module = ModuleId::from(file.id());
+                let span = file.span(ByteRange::new(0, 4).unwrap()).unwrap();
+                let id = crate::types::NominalTypeId::new(module, 0);
+                let constructor = ConstructorId::new(id, 0);
+                relation.push((module, file.id()));
+                nominals.push(ResolvedNominalType {
+                    id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: "Item".into(),
+                    constructors: vec![constructor].into_boxed_slice(),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: Origin::Source(span),
+                });
+                constructors.push(ResolvedConstructor {
+                    id: constructor,
+                    owner: id,
+                    spelling: "Value".into(),
+                    payload: None,
+                    origin: Origin::Source(span),
+                });
+            }
+            let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                nominals,
+                constructors,
+            ));
+            let mut builder = CoreBuilder::<Family>::with_registry_for_family(registry);
+            let root_span = files[0].span(ByteRange::new(0, 1).unwrap()).unwrap();
+            let root = builder.unit(Type::Unit, Origin::Source(root_span)).unwrap();
+            (files, builder.finish(root).unwrap(), relation)
+        }
+        fn check(
+            files: &[SourceFile],
+            program: &UnvalidatedCoreProgram<Family>,
+            relation: &[(ModuleId, SourceId)],
+            limit: usize,
+        ) -> (Result<(), ValidationReason>, usize) {
+            let sources = files.iter().collect::<Vec<_>>();
+            let mut validator = Validator::new_modules(program, &sources, relation).unwrap();
+            validator.type_work_limit = limit;
+            let result = validator
+                .validate_registry()
+                .map(|_| ())
+                .map_err(|error| error.reason());
+            (result, validator.type_work.get())
+        }
+
+        let fixtures = (2..=4).map(fixture).collect::<Vec<_>>();
+        let costs = fixtures
+            .iter()
+            .map(|(files, program, relation)| {
+                let (result, cost) = check(files, program, relation, usize::MAX);
+                result.unwrap();
+                cost
+            })
+            .collect::<Vec<_>>();
+        let mut capacity = HashMap::<u32, u32>::new();
+        for value in 0..3 {
+            capacity.insert(value, value);
+        }
+        assert_eq!(capacity.len(), capacity.capacity());
+        let growth_extra = capacity.capacity() * 2 + capacity.len();
+        assert_eq!(
+            costs[2] - costs[1],
+            costs[1] - costs[0] + 2 * growth_extra,
+            "both reached span maps must pay for moving their live entries"
+        );
+        let (files, program, relation) = &fixtures[2];
+        for limit in 0..costs[2] {
+            let (result, _) = check(files, program, relation, limit);
+            assert_eq!(result, Err(ValidationReason::Resource), "limit {limit}");
+        }
+        let (result, used) = check(files, program, relation, costs[2]);
+        result.expect("the same immutable registry validates at its measured threshold");
+        assert_eq!(used, costs[2]);
+    }
+
+    #[test]
+    fn registry_position_checks_allow_only_exact_primary_span_ties() {
+        let file = SourceFile::new("tied-ranges.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let foreign = SourceFile::new("foreign-ranges.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let foreign_span = foreign.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let first = crate::types::NominalTypeId::new(file.id(), 0);
+        let second = crate::types::NominalTypeId::new(file.id(), 1);
+
+        for expansion in [false, true] {
+            let origin = |primary| {
+                if expansion {
+                    Origin::Expansion {
+                        invocation: primary,
+                        definition: span(11, 12),
+                    }
+                } else {
+                    Origin::Source(primary)
+                }
+            };
+            for constructor_tie in [false, true] {
+                for (second_span, expected) in [
+                    (span(0, 10), true),
+                    (span(0, 9), false),
+                    (span(1, 10), constructor_tie),
+                    (foreign_span, false),
+                ] {
+                    let nominal_span = if constructor_tie {
+                        span(0, 10)
+                    } else {
+                        second_span
+                    };
+                    let constructor_span = if constructor_tie {
+                        second_span
+                    } else {
+                        span(3, 4)
+                    };
+                    let (nominals, constructors) = if constructor_tie {
+                        (
+                            vec![ResolvedNominalType {
+                                id: first,
+                                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                spelling: "First".into(),
+                                constructors: vec![
+                                    ConstructorId::new(first, 0),
+                                    ConstructorId::new(first, 1),
+                                ]
+                                .into_boxed_slice(),
+                                representation: None,
+                                representation_provenance: None,
+                                origin: origin(span(0, 10)),
+                            }],
+                            vec![
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 0),
+                                    owner: first,
+                                    spelling: "FirstValue".into(),
+                                    payload: None,
+                                    origin: origin(span(0, 10)),
+                                },
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 1),
+                                    owner: first,
+                                    spelling: "SecondValue".into(),
+                                    payload: None,
+                                    origin: origin(constructor_span),
+                                },
+                            ],
+                        )
+                    } else {
+                        (
+                            vec![
+                                ResolvedNominalType {
+                                    id: first,
+                                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                    spelling: "First".into(),
+                                    constructors: vec![ConstructorId::new(first, 0)]
+                                        .into_boxed_slice(),
+                                    representation: None,
+                                    representation_provenance: None,
+                                    origin: origin(span(0, 10)),
+                                },
+                                ResolvedNominalType {
+                                    id: second,
+                                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                                    spelling: "Second".into(),
+                                    constructors: vec![ConstructorId::new(second, 0)]
+                                        .into_boxed_slice(),
+                                    representation: None,
+                                    representation_provenance: None,
+                                    origin: origin(nominal_span),
+                                },
+                            ],
+                            vec![
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(first, 0),
+                                    owner: first,
+                                    spelling: "FirstValue".into(),
+                                    payload: None,
+                                    origin: origin(span(1, 2)),
+                                },
+                                ResolvedConstructor {
+                                    id: ConstructorId::new(second, 0),
+                                    owner: second,
+                                    spelling: "SecondValue".into(),
+                                    payload: None,
+                                    origin: origin(constructor_span),
+                                },
+                            ],
+                        )
+                    };
+                    let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                        nominals,
+                        constructors,
+                    ));
+                    let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(registry);
+                    let root = builder
+                        .unit(Type::Unit, Origin::Source(span(0, 1)))
+                        .unwrap();
+                    let program = builder.finish(root).unwrap();
+                    let fallback = Validator::new(&program, &[&file, &foreign]);
+                    let modules = Validator::new_modules(
+                        &program,
+                        &[&file, &foreign],
+                        &[
+                            (first.module(), file.id()),
+                            (ModuleId::from(foreign.id()), foreign.id()),
+                        ],
+                    )
+                    .unwrap();
+                    for result in [fallback.validate_registry(), modules.validate_registry()] {
+                        assert_eq!(
+                            result.is_ok(),
+                            expected,
+                            "expansion={expansion}, constructor_tie={constructor_tie}, second={second_span:?}: {result:?}"
+                        );
+                        if let Err(error) = result {
+                            assert_eq!(error.reason(), ValidationReason::Registry);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_span_ties_keep_registry_identity_owner_order_and_payload_guards() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            None,
+            DuplicateNominal,
+            WrongConstructorOwner,
+            WrongConstructorVector,
+            WrongConstructorSlot,
+            InvalidPayload,
+            DataRepresentation,
+            UnequalNominalOverlap,
+            UnequalConstructorOverlap,
+            ReversedNominals,
+            ReversedConstructors,
+            ForeignSource,
+        }
+        let file = SourceFile::new("tie-guards.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let foreign = SourceFile::new("foreign-tie-guards.ash", "AAAAAAAAAA BBBBBBBBBB").unwrap();
+        let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let foreign_span = foreign.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let first = crate::types::NominalTypeId::new(file.id(), 0);
+        let second = crate::types::NominalTypeId::new(file.id(), 1);
+        for expansion in [false, true] {
+            let origin = |primary| {
+                if expansion {
+                    Origin::Expansion {
+                        invocation: primary,
+                        definition: span(11, 12),
+                    }
+                } else {
+                    Origin::Source(primary)
+                }
+            };
+            for mutation in [
+                Mutation::None,
+                Mutation::DuplicateNominal,
+                Mutation::WrongConstructorOwner,
+                Mutation::WrongConstructorVector,
+                Mutation::WrongConstructorSlot,
+                Mutation::InvalidPayload,
+                Mutation::DataRepresentation,
+                Mutation::UnequalNominalOverlap,
+                Mutation::UnequalConstructorOverlap,
+                Mutation::ReversedNominals,
+                Mutation::ReversedConstructors,
+                Mutation::ForeignSource,
+            ] {
+                let nominal = |id, spelling: &str| ResolvedNominalType {
+                    id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: spelling.into(),
+                    constructors: vec![ConstructorId::new(id, 0)].into_boxed_slice(),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: origin(span(0, 10)),
+                };
+                let constructor = |owner, spelling: &str| ResolvedConstructor {
+                    id: ConstructorId::new(owner, 0),
+                    owner,
+                    spelling: spelling.into(),
+                    payload: None,
+                    origin: origin(span(0, 10)),
+                };
+                let mut nominals = vec![nominal(first, "First"), nominal(second, "Second")];
+                let mut constructors = vec![
+                    constructor(first, "FirstValue"),
+                    constructor(second, "SecondValue"),
+                ];
+                match mutation {
+                    Mutation::None => {}
+                    Mutation::DuplicateNominal => nominals[1].id = first,
+                    Mutation::WrongConstructorOwner => constructors[1].owner = first,
+                    Mutation::WrongConstructorVector => {
+                        nominals[1].constructors =
+                            vec![ConstructorId::new(first, 0)].into_boxed_slice()
+                    }
+                    Mutation::WrongConstructorSlot => {
+                        let wrong = ConstructorId::new(second, 1);
+                        nominals[1].constructors = vec![wrong].into_boxed_slice();
+                        constructors[1].id = wrong;
+                    }
+                    Mutation::InvalidPayload => {
+                        constructors[1].payload =
+                            Some(Type::Variable(crate::types::TypeVariableId::new(777)))
+                    }
+                    Mutation::DataRepresentation => nominals[1].representation = Some(Type::Int),
+                    Mutation::UnequalNominalOverlap => {
+                        nominals[1].origin = origin(span(0, 9));
+                        constructors[1].origin = origin(span(0, 9));
+                    }
+                    Mutation::UnequalConstructorOverlap => {
+                        constructors[1].origin = origin(span(0, 9))
+                    }
+                    Mutation::ReversedNominals => {
+                        nominals[0].origin = origin(span(5, 10));
+                        nominals[1].origin = origin(span(0, 4));
+                        constructors[0].origin = origin(span(5, 6));
+                        constructors[1].origin = origin(span(1, 2));
+                    }
+                    Mutation::ReversedConstructors => {
+                        constructors[0].origin = origin(span(5, 6));
+                        constructors[1].origin = origin(span(1, 2));
+                    }
+                    Mutation::ForeignSource => {
+                        nominals[1].origin = origin(foreign_span);
+                        constructors[1].origin = origin(foreign_span);
+                    }
+                }
+                let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                    nominals,
+                    constructors,
+                ));
+                let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(registry);
+                let root = builder
+                    .unit(Type::Unit, Origin::Source(span(0, 1)))
+                    .unwrap();
+                let program = builder.finish(root).unwrap();
+                let fallback = Validator::new(&program, &[&file, &foreign]);
+                let modules = Validator::new_modules(
+                    &program,
+                    &[&file, &foreign],
+                    &[
+                        (first.module(), file.id()),
+                        (ModuleId::from(foreign.id()), foreign.id()),
+                    ],
+                )
+                .unwrap();
+                for result in [fallback.validate_registry(), modules.validate_registry()] {
+                    if matches!(mutation, Mutation::None) {
+                        assert!(
+                            result.is_ok(),
+                            "expansion={expansion}, {mutation:?}: {result:?}"
+                        );
+                    } else {
+                        assert_eq!(
+                            result.unwrap_err().reason(),
+                            ValidationReason::Registry,
+                            "expansion={expansion}, {mutation:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn contextual_range_checks_preserve_ordinary_order_and_reject_overlap() {

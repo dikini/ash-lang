@@ -15,7 +15,7 @@ pub use foreign::{
 pub struct SurfaceModule {
     /// Imports in source order.
     pub imports: Vec<SurfaceImport>,
-    /// Public expression syntax declarations in source order.
+    /// Public syntax declarations in source order.
     pub syntax_declarations: Vec<SurfaceSyntaxDeclaration>,
     /// Cross-family declaration order using category-local indices.
     pub declaration_order: Vec<SurfaceDeclarationIndex>,
@@ -39,9 +39,11 @@ pub struct SurfaceModule {
     pub span: Span,
 }
 
-/// A source expression syntax declaration.
+/// A source syntax declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceSyntaxDeclaration {
+    /// The syntactic position in which the definition can be invoked.
+    pub category: SurfaceSyntaxCategory,
     /// The exported syntax spelling.
     pub name: SurfaceName,
     /// The literal and capture sequence after the syntax name.
@@ -50,11 +52,48 @@ pub struct SurfaceSyntaxDeclaration {
     pub implementation: SurfaceSyntaxImplementation,
     /// The template's original structured syntax, retained for instantiation.
     pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
+    /// Original lexical reads for each defining-module escape computation.
+    pub(crate) template_escapes: Option<Arc<[SurfaceTemplateEscape]>>,
+    /// State bindings attached to the whole template, in source order.
+    pub(crate) generators: Option<Arc<[SurfaceTemplateGenerator]>>,
+    /// Whether the template contains quote or escape syntax, for budget routing.
+    pub(crate) contains_quote_or_escape: bool,
+    /// Whether the template or one of its repetitions owns generators.
+    pub(crate) contains_generators: bool,
     /// The complete declaration span.
     pub span: Span,
 }
 
-/// The source implementation of an expression syntax declaration.
+/// One defining-module escape and its source-ordered distinct capture reads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceTemplateEscape {
+    pub(crate) adapter: SurfaceName,
+    pub(crate) reads: Arc<[SurfaceName]>,
+}
+
+/// One generator's original seed and definition-context step reference.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceTemplateGenerator {
+    pub(crate) name: SurfaceName,
+    pub(crate) seed: SurfaceExpr,
+    /// The defining source packet for ordinary seed instantiation.
+    pub(crate) seed_contents: Arc<[crate::syntax::MacroOutputNode]>,
+    pub(crate) step: SurfaceReference,
+    pub(crate) span: Span,
+}
+
+/// A source syntax definition's output category.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCategory {
+    /// An expression syntax definition.
+    Expression,
+    /// A top-level declaration syntax definition.
+    Declaration,
+    /// A derive syntax definition producing top-level declarations.
+    Derive,
+}
+
+/// The source implementation of a syntax declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxImplementation {
     /// A template with capture splices.
@@ -63,25 +102,53 @@ pub enum SurfaceSyntaxImplementation {
     Transformer(SurfaceName),
 }
 
-/// One part of an expression syntax matcher.
+/// One part of a syntax matcher.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxMatcherPart {
     /// A literal token, matched by kind and source spelling.
     Literal { kind: TokenKind, spelling: String },
-    /// A named expression or identifier capture.
+    /// A named syntax capture.
     Capture {
         name: SurfaceName,
         kind: SurfaceSyntaxCaptureKind,
     },
+    /// A group or repetition with shared immutable contents.
+    Container(Arc<SurfaceMatcherContainer>),
+    /// A logical line end inside a braced matcher group.
+    LineEnd,
 }
 
-/// A capture admitted by an expression syntax matcher.
+/// One immutable group or repetition in a declaration matcher.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SurfaceMatcherContainer {
+    pub(crate) kind: SurfaceMatcherContainerKind,
+    pub(crate) body: Vec<SurfaceSyntaxMatcherPart>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceMatcherContainerKind {
+    Group {
+        braces: bool,
+    },
+    Repeat {
+        one_or_more: bool,
+        separator: Option<(TokenKind, String)>,
+    },
+}
+
+/// A capture admitted by a syntax matcher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxCaptureKind {
     /// An unexpanded expression fragment.
     Expression,
     /// One identifier.
     Identifier,
+    /// A complete type fragment.
+    Type,
+    /// A complete pattern fragment.
+    Pattern,
+    /// One complete ordinary module declaration.
+    Declaration,
 }
 
 /// One source declaration's category and category-local position.
@@ -146,7 +213,7 @@ pub enum SurfaceImportSelection {
 /// One selected import channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceImportItem {
-    /// A selected public expression syntax declaration and its optional alias.
+    /// A selected public syntax declaration and its optional alias.
     Syntax {
         /// The dependency's public syntax spelling.
         name: SurfaceName,
@@ -500,6 +567,20 @@ pub enum SurfaceSyntaxCapture {
     Expression(SurfaceExpressionCapture),
     /// An identifier with its caller spelling, context and origin.
     Identifier(SurfaceIdentifierCapture),
+    /// A protected, unresolved type.
+    Type(SurfaceTypeCapture),
+    /// A protected, unresolved pattern.
+    Pattern(SurfacePatternCapture),
+    /// A complete declaration's retained source syntax.
+    Declaration(SurfaceDeclarationCapture),
+    /// Ordered captures retained at one repetition level.
+    Repeated(Arc<SurfaceRepeatedCapture>),
+}
+
+/// Values retained at one level of a repeated capture.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SurfaceRepeatedCapture {
+    pub(crate) values: Vec<SurfaceSyntaxCapture>,
 }
 
 /// An identifier and its retained syntax origin.
@@ -509,10 +590,58 @@ pub struct SurfaceIdentifierCapture {
     pub(crate) origin: crate::syntax::MacroOrigin,
 }
 
+/// Quote-site identities owned by one protected expression.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) enum CapturedQuoteSites {
+    #[default]
+    Empty,
+    /// Unissued sites belonging to this capture's own immutable expression.
+    Owned(Vec<crate::syntax::SurfaceQuoteSite>),
+    /// A generic deep copy cannot carry its original callee identities.
+    Lost,
+}
+
 /// An expression and its immutable, protected syntax contents.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct SurfaceExpressionCapture {
     pub(crate) expression: SurfaceExpr,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+    pub(crate) contains_protected_type: bool,
+    pub(crate) quote_sites: CapturedQuoteSites,
+}
+
+impl Clone for SurfaceExpressionCapture {
+    fn clone(&self) -> Self {
+        let quote_sites = match &self.quote_sites {
+            CapturedQuoteSites::Empty => CapturedQuoteSites::Empty,
+            CapturedQuoteSites::Owned(_) | CapturedQuoteSites::Lost => CapturedQuoteSites::Lost,
+        };
+        Self {
+            expression: self.expression.clone(),
+            contents: Arc::clone(&self.contents),
+            contains_protected_type: self.contains_protected_type,
+            quote_sites,
+        }
+    }
+}
+
+/// A type and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceTypeCapture {
+    pub(crate) ty: SurfaceType,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+}
+
+/// A pattern and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfacePatternCapture {
+    pub(crate) pattern: SurfacePattern,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+}
+
+/// One complete declaration's immutable syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceDeclarationCapture {
     pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
 }
 

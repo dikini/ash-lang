@@ -12,8 +12,10 @@ Semantics](static-semantics.md) defines its type requirements.
 
 ## Grammar
 
-The following grammar is the complete Ash surface grammar. Each `;` terminates
-an EBNF production; it is not Ash source punctuation.
+The following grammar describes the core Ash surface grammar and expression
+syntax. [Syntax expansion](syntax-expansion.md) describes the supported
+expression and declaration forms and their boundaries. Each `;` terminates an
+EBNF production; it is not Ash source punctuation.
 
 ```ebnf
 module ::= { import_declaration line_end } { module_declaration line_end } ;
@@ -43,24 +45,61 @@ import_item ::=
 import_name ::= identifier | upper_identifier ;
 
 syntax_declaration ::=
-  "pub" "syntax" identifier matcher_item { matcher_item }
-  "=>" ( template_block | "using" identifier ) ;
+    "pub" "syntax" identifier matcher_item { matcher_item }
+      "=>" ( template_block | "using" identifier )
+  | "pub" "syntax" "declaration" ":" "(" identifier ")"
+      { declaration_matcher_item }
+      "=>" ( declaration_template_block [ generator_clause ]
+           | "using" identifier )
+  | "pub" "syntax" "derive" ":" "(" identifier ")"
+      [ "$" identifier ":" "ident" ]
+      "=>" ( declaration_template_block | "using" identifier ) ;
 matcher_item ::= matcher_literal | "$" identifier ":" ( "expr" | "ident" ) ;
+declaration_capture_name ::= identifier | upper_identifier | reserved_word ;
+declaration_matcher_item ::=
+    matcher_literal
+  | "$" declaration_capture_name ":"
+      ( "ident" | "expr" | "type" | "pattern" | "declaration" )
+  | "(" { declaration_matcher_item } ")"
+  | "{" { declaration_matcher_item | line_end } "}"
+  | "$" "(" { declaration_matcher_item } ")"
+      [ repetition_separator ] ( "*" | "+" ) ;
 template_block ::= "{" { template_element } "}" ;
 template_element ::=
     template_token
   | "$" identifier
   | "(" { template_element } ")"
   | "{" { template_element } "}" ;
+declaration_template_block ::= "{" { declaration_template_element } "}" ;
+declaration_template_element ::=
+    template_token
+  | "$" declaration_capture_name
+  | "$" "(" { declaration_template_element | line_end } ")"
+      [ repetition_separator ] ( "*" | "+" ) [ generator_clause ]
+  | "$" "{" expression "}"
+  | "$" block
+  | "(" { declaration_template_element } ")"
+  | "{" { declaration_template_element | line_end } "}"
+  | line_end ;
+generator_clause ::=
+  "with" "{" [ line_end ] generator_binding
+    { line_end generator_binding } [ line_end ] "}" ;
+generator_binding ::=
+  "$" generator_name "from" generator_seed "step" step_reference ;
+generator_name ::= identifier | upper_identifier ;
+generator_seed ::= /expression-with-in-scope-expression-capture-splices/ ;
+step_reference ::= identifier | qualified_term_reference ;
 syntax_invocation ::= identifier syntax_matcher_input ;
 matcher_literal ::= /one permitted literal token/ ;
+repetition_separator ::= /one permitted non-delimiter token/ ;
 template_token ::= /one token other than a group delimiter or "$"/ ;
+reserved_word ::= /a reserved word listed in lexical structure/ ;
 syntax_matcher_input ::= /input accepted by the selected syntax matcher/ ;
 
 type_declaration ::=
   [ "pub" [ "opaque" ] ]
   "type" upper_identifier [ type_parameters ] "=" [ line_end ] constructor_declaration
-  { line_end "|" constructor_declaration } ;
+  { line_end "|" constructor_declaration } [ line_end deriving_clause ] ;
 type_parameters ::=
   "<" type_parameter { "," type_parameter } ">" ;
 type_parameter ::= upper_identifier [ ":" kind ] ;
@@ -71,7 +110,8 @@ constructor_declaration ::=
 newtype_declaration ::=
   [ "pub" [ "opaque" ] ]
   "newtype" upper_identifier [ type_parameters ] "="
-  upper_identifier "(" type ")" ;
+  upper_identifier "(" type ")" [ line_end deriving_clause ] ;
+deriving_clause ::= "deriving" "(" identifier { "," identifier } [ "," ] ")" ;
 
 effect_declaration ::=
   [ "pub" ] "effect" upper_identifier [ type_parameters ]
@@ -208,7 +248,10 @@ primary_expression ::=
   | hook_expression
   | registration_expression
   | cleanup_expression
-  | parenthesized_expression ;
+  | parenthesized_expression
+  | quotation ;
+quotation ::= "syntax" "{" quoted_expression "}" ;
+quoted_expression ::= /one expression with quotation holes and inner escapes/ ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
 perform_expression ::= "perform" operation_reference primary_expression ;
@@ -270,14 +313,31 @@ line_end ::= /logical-newline-in-module-or-block-context/ ;
 `syntax_invocation` is selected by a locally imported syntax name; the
 remainder is determined by that declaration's matcher, not by a global parser
 extension. A syntax name begins with a lowercase letter and is not a reserved
-word. A matcher occupies one logical line, has at least one uniquely named
-capture, ends in an expression capture, and separates adjacent captures with
-literal tokens. It has no repetition, alternatives, or
+word. An expression matcher occupies one logical line, has at least one
+uniquely named capture, ends in an expression capture, and separates adjacent
+captures with literal tokens. It has no repetition, alternatives, or
 optional items. Group delimiters, logical line ends, `$`, and `=>` are not
 matcher literals. A template retains balanced token groups and named splices;
 its substituted body must parse as one block expression. The definition and
 import restrictions are specified in
 [syntax expansion](syntax-expansion.md#definitions-and-imports).
+
+A declaration matcher can use the five capture kinds, balanced groups and
+repetitions described in [declaration syntax](syntax-expansion.md#imported-declaration-syntax).
+Its expanded output is a sequence of ordinary module declarations. A reserved
+word can be a declaration capture metaname and a read of that capture; this
+does not make it an ordinary identifier, an expression-matcher capture name,
+a generator name, or an ordinary quotation variable.
+
+A generator seed is an Ash expression with available expression-capture
+splices. Generator clauses apply to declaration templates and their
+repetitions; clauses on derive templates remain under development. An escape
+in a declaration template or quotation contains an ordinary block when a
+logical line end follows its opening brace; otherwise it contains exactly one
+result expression and closes before a logical line end at its own level. Nested
+groups follow their ordinary line rules. This inline escape does not change the
+`block` production. The [syntax expansion specification](syntax-expansion.md)
+describes generator scope, quotation and escapes.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

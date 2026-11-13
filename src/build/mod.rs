@@ -11,6 +11,8 @@ mod gas;
 mod host;
 mod image;
 
+pub(crate) use image::AdmittedImageEffectProgram;
+
 pub use host::{
     BuildConfiguration, BuildFailure, BuiltProgram, NATIVE_TARGET, NativeLinkInput,
     PreparedProgramBuild, build_path, build_prepared, prepare_program,
@@ -197,6 +199,7 @@ pub fn __run_private_effect_image(
     bytes: &[u8],
     expected_facts: &'static [u8],
     libraries: &[PrivateNativeLibrary<'_>],
+    quote_guard_coordinates: &[u32],
     tuple_storage: Option<crate::eval::NativeTupleAdapter>,
 ) -> Result<PrivateProgramOutput, PrivateProgramFailure> {
     use crate::foreign::source_bindings::{SourceNativeBindings, admit_source_native_program};
@@ -220,10 +223,9 @@ pub fn __run_private_effect_image(
         .map_err(|()| image_error(image::ImageFailure::Resource))?;
     // Framing, fact comparison and reconstruction consume the same meter.
     let image = image::PureImage::decode_bytes(bytes, &mut work).map_err(image_error)?;
-    image
-        .admit_expected_native_facts(expected_facts, &mut work)
+    let restored = image
+        .restore_effect_checked(expected_facts, quote_guard_coordinates, &mut work)
         .map_err(image_error)?;
-    let restored = image.restore_effect(&mut work).map_err(image_error)?;
     // Reconstructed coordinates connect the compiler-generated bridge entries
     // to their fresh runtime symbols.
     let mut seen_libraries = HashSet::new();
@@ -298,11 +300,12 @@ pub fn __run_private_effect_image(
                 .map_err(runtime_error)?;
         }
     }
-    let program = restored.into_program();
+    let (program, quote_guards) = restored.into_program_and_quote_guards();
     drop(image);
     let admitted =
         admit_source_native_program(&program, &bindings, &mut work).map_err(runtime_error)?;
-    let evaluated = crate::eval::evaluate_effect_with_source_native_program(admitted);
+    let evaluated =
+        crate::eval::evaluate_effect_with_source_native_quote_guards(admitted, &quote_guards);
     evaluated.map(PrivateProgramOutput).map_err(runtime_error)
 }
 

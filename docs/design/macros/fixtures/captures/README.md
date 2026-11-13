@@ -1,7 +1,8 @@
 # Capture and repetition fixtures
 
-These proposed I19 graphs use CP-0034 syntax, which is not implemented. They
-supplement the identifier and type captures in the declaration-form fixtures.
+These fixed I19 graphs supplement the identifier and type captures in the
+declaration-form fixtures. [TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md)
+records the delivery evidence and remaining gates.
 
 - `main.ash` captures an expression, a pattern, and a complete braced
   signature-and-equation declaration; matches an empty `*`; and generates two
@@ -34,5 +35,4 @@ its source; an invocation failure also retains the macro definition as related
 context. Assert the human and JSON source roles, not fixed message wording.
 
 The generator fixtures separately fix nested repetition, per-iteration state,
-and repeated generated-value use. These macro graphs are proposed inputs, not
-passing product tests.
+and repeated generated-value use.

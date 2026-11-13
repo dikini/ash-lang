@@ -77,7 +77,7 @@ use crate::{
 };
 
 mod foreign;
-use foreign::EffectSource;
+pub(crate) use foreign::EffectSource;
 
 struct ResolvedTypeBuffer(Vec<(crate::types::KindedArgument, usize)>);
 
@@ -907,6 +907,7 @@ enum ResolveContext {
     MissingModuleAlias,
     SyntaxNameReservation,
     MixedTypeRowRoles,
+    ForeignContract(crate::foreign::source_contract::ForeignContractCause),
     IdentityExhaustion(ResolveIdentitySpace),
 }
 
@@ -1068,6 +1069,19 @@ impl ResolveError {
         }
     }
 
+    pub(crate) const fn foreign_contract_cause(&self) -> Option<&'static str> {
+        use crate::foreign::source_contract::ForeignContractCause;
+        match self.0.context {
+            Some(ResolveContext::ForeignContract(
+                ForeignContractCause::MissingSupportedProfile,
+            )) => Some("missing-supported-profile"),
+            Some(ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember)) => {
+                Some("unsupported-member")
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn resource_name(&self) -> Option<&'static str> {
         match self.reason {
             ResolveReason::TypeResourceExhausted => Some("type-work"),
@@ -1127,6 +1141,9 @@ impl ResolveError {
             return Some((self.message()?, "resolution_site"));
         }
         match self.reason {
+            ResolveReason::ForeignContract if self.foreign_contract_cause().is_some() => {
+                return Some((self.message()?, "foreign_contract"));
+            }
             ResolveReason::BinderIdExhausted => {
                 return Some((self.message()?, "identity_allocation"));
             }
@@ -1273,6 +1290,7 @@ impl ResolveError {
                 | ResolveContext::MissingLexicalScope
                 | ResolveContext::MissingNominalScope
                 | ResolveContext::MissingConstructorScope
+                | ResolveContext::ForeignContract(_)
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
@@ -1372,6 +1390,18 @@ impl ResolveError {
             return Some(context.message());
         }
         match self.reason {
+            ResolveReason::ForeignContract => {
+                use crate::foreign::source_contract::ForeignContractCause;
+                return Some(match self.0.context? {
+                    ResolveContext::ForeignContract(
+                        ForeignContractCause::MissingSupportedProfile,
+                    ) => crate::message::Message::foreign_missing_profile(),
+                    ResolveContext::ForeignContract(ForeignContractCause::UnsupportedMember) => {
+                        crate::message::Message::foreign_unsupported_member()
+                    }
+                    _ => return None,
+                });
+            }
             ResolveReason::TypeResourceExhausted => {
                 return Some(crate::message::Message::resolve_type_resources());
             }
@@ -1510,6 +1540,7 @@ impl ResolveError {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
             ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::ForeignContract(_)
             | ResolveContext::SyntaxNameReservation
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
@@ -1655,6 +1686,31 @@ pub(crate) fn resolve_module_with_syntax<'a>(
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
     expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
+    resolve_generator_module_with_syntax(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        uses,
+        owners,
+        terms,
+        &[],
+        expansion,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_generator_module_with_syntax<'a>(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    uses: &'a [crate::syntax::SyntaxNameUse],
+    owners: &'a [Arc<crate::resolved::CheckedModule>],
+    terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
+) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
         loaded,
         dependencies,
@@ -1665,6 +1721,7 @@ pub(crate) fn resolve_module_with_syntax<'a>(
             uses,
             owners,
             terms,
+            advance_sites,
         }),
         expansion,
     )
@@ -1675,12 +1732,30 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyntaxTermOutcome {
+    BoundMethod(MethodId),
+    BoundNonMethod,
+    GenuineUnbound,
+    Unavailable,
 }
 
 #[derive(Clone, Copy)]
 struct SyntaxOwnerLookup<'a> {
     owner: &'a crate::resolved::CheckedModule,
     graph: &'a [Arc<crate::resolved::CheckedModule>],
+}
+
+#[cfg(test)]
+type CheckedCaptureObserver =
+    for<'a> fn(&'a ExportedGlobal, SyntaxOwnerLookup<'a>, crate::source::Span);
+
+#[cfg(test)]
+std::thread_local! {
+    static CHECKED_CAPTURE_OBSERVER: std::cell::Cell<Option<CheckedCaptureObserver>> = const { std::cell::Cell::new(None) };
 }
 
 impl<'a> SyntaxOwnerLookup<'a> {
@@ -1773,7 +1848,11 @@ fn finish_module_resolution(
         .map_err(ResolveModuleError::Representation)?;
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
-    let mut resolved = ResolvedModule::new(admission.parts);
+    let mut resolved = ResolvedModule::new_with_sites(
+        admission.parts,
+        admission.quote_sites,
+        admission.advance_sites,
+    );
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1789,6 +1868,19 @@ fn finish_module_resolution(
                 },
                 loaded.surface().span,
                 "defining source provenance could not be retained",
+            ))
+        })?;
+    resolved
+        .retain_effect_coordinates(admission.effect_coordinates, type_work)
+        .map_err(|failure| {
+            ResolveModuleError::Resolution(error(
+                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
+                    ResolveReason::TypeResourceExhausted
+                } else {
+                    ResolveReason::InternalState
+                },
+                loaded.surface().span,
+                "effect syntax provenance could not be retained",
             ))
         })?;
     resolved
@@ -1814,6 +1906,9 @@ struct ResolvedModuleAdmission {
     parts: ResolvedModuleParts,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
+    effect_coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
 }
 
 /// Admission-only origins for malformed written rows. These scalar diagnostics
@@ -1917,7 +2012,7 @@ fn resolve_module_names_with_budget<'a>(
             != loaded
                 .dependencies()
                 .iter()
-                .filter(|edge| !edge.is_region_service())
+                .filter(|edge| !edge.is_compiler_private())
                 .count()
         || dependencies
             .iter()
@@ -1929,18 +2024,27 @@ fn resolve_module_names_with_budget<'a>(
         || loaded
             .dependencies()
             .iter()
-            .filter(|edge| !edge.is_region_service())
+            .filter(|edge| !edge.is_compiler_private())
             .zip(&surface.imports)
             .any(|(edge, import)| edge.import_span() != import.span)
         || loaded
             .dependencies()
             .iter()
-            .filter(|edge| edge.is_region_service())
-            .any(|edge| !edge.target().is_builtin_region() || edge.import_span() != surface.span)
+            .filter(|edge| edge.is_compiler_private())
+            .any(|edge| {
+                (!edge.target().is_builtin_region() && !edge.target().is_builtin_compiler_syntax())
+                    || edge.import_span() != surface.span
+            })
         || loaded
             .dependencies()
             .iter()
             .filter(|edge| edge.is_region_service())
+            .count()
+            > 1
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax())
             .count()
             > 1
     {
@@ -1959,7 +2063,57 @@ fn resolve_module_names_with_budget<'a>(
     );
     resolver.syntax_inputs = syntax;
     resolver.syntax_expansion = expansion;
+    resolver.surface_quote_sites = loaded.quote_sites();
+    resolver.current_caller = Some(loaded);
     let result = (|| {
+        let advance_count = resolver
+            .syntax_inputs
+            .map_or(0, |inputs| inputs.advance_sites.len());
+        let storage = advance_count.checked_mul(3).ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver.type_work.charge(storage).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver
+            .advance_seen
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .pending_advance_bindings
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .advance_sites
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver.advance_seen.resize(advance_count, false);
         resolver
             .constraint_work
             .charge(dependencies.len())
@@ -2018,7 +2172,8 @@ fn resolve_module_names_with_budget<'a>(
                 .iter()
                 .map(|library| Arc::clone(&library.prepared)),
         );
-        let mut declarations = resolver.resolve_declarations(surface)?;
+        let (mut declarations, effect_coordinates) =
+            resolver.resolve_loaded_declarations(loaded)?;
         resolver.bind_source_foreign(
             surface,
             &prepared_foreign,
@@ -2073,6 +2228,25 @@ fn resolve_module_names_with_budget<'a>(
                 })?;
             catalogue.extend(resolver.source_foreign_libraries.iter().map(Arc::clone));
         }
+        resolver
+            .type_work
+            .charge(resolver.advance_seen.len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site completion exceeded its work budget",
+                )
+            })?;
+        if resolver.advance_seen.iter().any(|seen| !seen)
+            || !resolver.pending_advance_bindings.is_empty()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "an issued advance binding did not resolve exactly once",
+            ));
+        }
         Ok(ResolvedModuleAdmission {
             parts: ResolvedModuleParts {
                 module,
@@ -2091,6 +2265,9 @@ fn resolve_module_names_with_budget<'a>(
             },
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
+            quote_sites: std::mem::take(&mut resolver.quote_sites),
+            advance_sites: std::mem::take(&mut resolver.advance_sites),
+            effect_coordinates,
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2542,6 +2719,13 @@ struct Resolver<'state, 'inputs> {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
+    surface_quote_sites: &'state [crate::syntax::SurfaceQuoteSite],
+    current_caller: Option<&'state LoadedModule>,
+    replacement_quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_seen: Vec<bool>,
+    pending_advance_bindings: Vec<[BinderId; 2]>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -2676,9 +2860,53 @@ impl GeneratedParameterOrder {
     }
 }
 
-fn validate_newtype_shape(
-    declaration: &SurfaceTypeDeclaration,
-) -> Result<(&SurfaceConstructorDeclaration, &SurfaceType), ResolveError> {
+// Pay for the actual flat DiagnosticLocation clone before a new label retains
+// it. Combined origins retain two Arcs; their shared inputs are not cloned.
+fn prepay_diagnostic_location(
+    work: &mut TypeWorkBudget,
+    location: Option<&crate::syntax::DiagnosticLocation>,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let Some(location) = location else {
+        return Ok(());
+    };
+    let resource = || {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "diagnostic location retention exceeded its type-work budget",
+        )
+    };
+    work.charge(2).map_err(|()| resource())?;
+    work.charge(location.related.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    work.charge(location.frames.len())
+        .map_err(|()| resource())?;
+    for origin in std::iter::once(&location.primary).chain(&location.related) {
+        work.charge(1).map_err(|()| resource())?;
+        let depth = match origin {
+            crate::syntax::MacroOrigin::Source(_) => 0,
+            crate::syntax::MacroOrigin::Combined { depth, .. } => {
+                work.charge(2).map_err(|()| resource())?;
+                *depth
+            }
+        };
+        if depth
+            .checked_add(1)
+            .is_none_or(|depth| depth > crate::parser::STRUCTURAL_DEPTH_LIMIT)
+        {
+            return Err(resource());
+        }
+    }
+    Ok(())
+}
+
+fn validate_newtype_shape<'a>(
+    declaration: &'a SurfaceTypeDeclaration,
+    work: &mut TypeWorkBudget,
+) -> Result<(&'a SurfaceConstructorDeclaration, &'a SurfaceType), ResolveError> {
     let [constructor] = declaration.constructors.as_slice() else {
         return Err(error(
             ResolveReason::InternalState,
@@ -2702,17 +2930,31 @@ fn validate_newtype_shape(
         }));
     };
     if constructor.name.text != declaration.name.text {
+        prepay_diagnostic_location(
+            work,
+            constructor.name.diagnostic.as_deref(),
+            constructor.name.span,
+        )?;
+        prepay_diagnostic_location(
+            work,
+            declaration.name.diagnostic.as_deref(),
+            declaration.name.span,
+        )?;
         let mut diagnostic = Diagnostic::new(
             ResolveReason::NewtypeConstructorName,
             SourceLabel::new(
                 constructor.name.span,
                 "this newtype constructor must use the nominal type's spelling",
-            ),
+            )
+            .with_location_preserving_span(constructor.name.diagnostic.as_deref()),
         );
-        diagnostic.related.push(SourceLabel::new(
-            declaration.name.span,
-            "this nominal declaration defines the required spelling",
-        ));
+        diagnostic.related.push(
+            SourceLabel::new(
+                declaration.name.span,
+                "this nominal declaration defines the required spelling",
+            )
+            .with_location_preserving_span(declaration.name.diagnostic.as_deref()),
+        );
         diagnostic.expected = Some(declaration.name.text.clone());
         diagnostic.found = Some(constructor.name.text.clone());
         return Err(diagnostic.into());
@@ -2788,6 +3030,16 @@ struct PendingInterfaceTypeParameters {
 struct PendingImplementationMethodGroup {
     equations: Range<usize>,
     binder: Option<Binder>,
+}
+
+enum DeclarationEffectOwner<'a> {
+    Admitted {
+        loaded: &'a LoadedModule,
+        retained: &'a mut Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
+    },
+    // Existing malformed resolver fixtures do not have an admitted owner.
+    #[cfg(test)]
+    Synthetic,
 }
 
 /// Completed declaration preparation retained while resolving bodies. Keeping
@@ -3028,6 +3280,13 @@ impl Resolver<'_, '_> {
             scopes: vec![HashMap::new()],
             syntax_inputs: None,
             syntax_expansion: None,
+            surface_quote_sites: &[],
+            current_caller: None,
+            replacement_quote_sites: Vec::new(),
+            quote_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            pending_advance_bindings: Vec::new(),
+            advance_sites: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -3076,10 +3335,10 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn validate_local_namespaces(&self, surface: &SurfaceModule) -> Result<(), ResolveError> {
-        let mut type_names: HashMap<&str, (crate::source::Span, LocalTypeDeclarationKind)> =
+    fn validate_local_namespaces(&mut self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+        let mut type_names: HashMap<&str, (&SurfaceName, LocalTypeDeclarationKind)> =
             HashMap::new();
-        let mut term_names: HashMap<&str, (crate::source::Span, Option<crate::source::Span>)> =
+        let mut term_names: HashMap<&str, (&SurfaceName, Option<crate::source::Span>)> =
             HashMap::new();
 
         for declaration in &surface.declaration_order {
@@ -3170,18 +3429,32 @@ impl Resolver<'_, '_> {
                     let mut operations = HashMap::new();
                     for operation in &declaration.operations {
                         if let Some(first) =
-                            operations.insert(&operation.name.text, operation.name.span)
+                            operations.insert(&operation.name.text, &operation.name)
                         {
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                operation.name.diagnostic.as_deref(),
+                                operation.name.span,
+                            )?;
+                            prepay_diagnostic_location(
+                                &mut self.type_work,
+                                first.diagnostic.as_deref(),
+                                first.span,
+                            )?;
                             let mut diagnostic = Diagnostic::new(
                                 ResolveReason::DuplicateGlobal,
                                 SourceLabel::new(
                                     operation.name.span,
                                     "this effect operation is already declared",
+                                )
+                                .with_location_preserving_span(
+                                    operation.name.diagnostic.as_deref(),
                                 ),
                             );
-                            diagnostic
-                                .related
-                                .push(SourceLabel::new(first, "the first operation is here"));
+                            diagnostic.related.push(
+                                SourceLabel::new(first.span, "the first operation is here")
+                                    .with_location_preserving_span(first.diagnostic.as_deref()),
+                            );
                             diagnostic.found = Some(operation.name.text.clone());
                             return Err(diagnostic.into());
                         }
@@ -3224,7 +3497,7 @@ impl Resolver<'_, '_> {
         &self,
         name: &'a crate::surface::SurfaceName,
         kind: LocalTypeDeclarationKind,
-        names: &mut HashMap<&'a str, (crate::source::Span, LocalTypeDeclarationKind)>,
+        names: &mut HashMap<&'a str, (&'a SurfaceName, LocalTypeDeclarationKind)>,
     ) -> Result<(), ResolveError> {
         if self.module_aliases.contains_key(&name.text)
             || self.type_names.contains_key(&name.text)
@@ -3233,27 +3506,31 @@ impl Resolver<'_, '_> {
         {
             return Err(import_conflict(name.span, &name.text));
         }
-        if let Some((first, first_kind)) = names.insert(&name.text, (name.span, kind)) {
+        if let Some((first, first_kind)) = names.insert(&name.text, (name, kind)) {
             if first_kind == LocalTypeDeclarationKind::Nominal
                 && kind == LocalTypeDeclarationKind::Nominal
             {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateType,
-                    SourceLabel::new(name.span, "this nominal type name is already defined"),
+                    SourceLabel::new(name.span, "this nominal type name is already defined")
+                        .with_location_preserving_span(name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first nominal type is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateType,
-                SourceLabel::new(name.span, "this type-namespace name is already declared"),
+                SourceLabel::new(name.span, "this type-namespace name is already declared")
+                    .with_location_preserving_span(name.diagnostic.as_deref()),
             );
-            diagnostic
-                .related
-                .push(SourceLabel::new(first, "the first declaration is here"));
+            diagnostic.related.push(
+                SourceLabel::new(first.span, "the first declaration is here")
+                    .with_location_preserving_span(first.diagnostic.as_deref()),
+            );
             diagnostic.found = Some(name.text.clone());
             return Err(diagnostic.into());
         }
@@ -3287,7 +3564,7 @@ impl Resolver<'_, '_> {
         &self,
         name: &'a crate::surface::SurfaceName,
         complete_definition: Option<crate::source::Span>,
-        names: &mut HashMap<&'a str, (crate::source::Span, Option<crate::source::Span>)>,
+        names: &mut HashMap<&'a str, (&'a SurfaceName, Option<crate::source::Span>)>,
     ) -> Result<(), ResolveError> {
         self.check_written_term_name(name)?;
         if self.module_aliases.contains_key(&name.text)
@@ -3301,16 +3578,18 @@ impl Resolver<'_, '_> {
             return Err(import_conflict(name.span, &name.text));
         }
         if let Some((first, first_definition)) =
-            names.insert(&name.text, (name.span, complete_definition))
+            names.insert(&name.text, (name, complete_definition))
         {
             if let (Some(first_definition), Some(_)) = (first_definition, complete_definition) {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateGlobal,
-                    SourceLabel::new(name.span, "this global name is already defined"),
+                    SourceLabel::new(name.span, "this global name is already defined")
+                        .with_location_preserving_span(name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first global name is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first global name is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.related.push(SourceLabel::new(
                     first_definition,
                     "the first complete definition is here",
@@ -3320,11 +3599,13 @@ impl Resolver<'_, '_> {
             }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateGlobal,
-                SourceLabel::new(name.span, "this term name is already declared"),
+                SourceLabel::new(name.span, "this term name is already declared")
+                    .with_location_preserving_span(name.diagnostic.as_deref()),
             );
-            diagnostic
-                .related
-                .push(SourceLabel::new(first, "the first term name is here"));
+            diagnostic.related.push(
+                SourceLabel::new(first.span, "the first term name is here")
+                    .with_location_preserving_span(first.diagnostic.as_deref()),
+            );
             if let Some(first_definition) = first_definition {
                 diagnostic.related.push(SourceLabel::new(
                     first_definition,
@@ -3503,7 +3784,7 @@ impl Resolver<'_, '_> {
                 let operation_id = OperationId::new(id, operation_index);
                 let operation_name = try_clone_resolution_string(
                     operation.spelling,
-                    operation.name_span,
+                    operation.name.span,
                     "effect operation name could not be retained",
                 )?;
                 operation_names.insert(operation_name, operation_id);
@@ -3513,6 +3794,102 @@ impl Resolver<'_, '_> {
             identities.push(EffectDeclarationIdentity { id, operations });
         }
         Ok(identities)
+    }
+
+    fn push_prepared_type_scope(
+        &mut self,
+        groups: &[(&[ResolvedTypeVariable], Option<&[SurfaceTypeParameter]>)],
+        span: Span,
+        duplicate_error: Option<(&'static str, Option<&'static str>)>,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "prepared type-scope retention exceeded its type-work budget",
+            )
+        };
+        self.type_work
+            .charge(groups.len())
+            .map_err(|()| exhausted())?;
+        let mut entries = 0usize;
+        for (parameters, source) in groups {
+            if source.is_some_and(|source| source.len() != parameters.len()) {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "the resolver retained mismatched type-parameter preparation records",
+                ));
+            }
+            entries = entries
+                .checked_add(parameters.len())
+                .ok_or_else(exhausted)?;
+        }
+        self.type_work.charge(entries).map_err(|()| exhausted())?;
+        let mut ordinary_count = 0usize;
+        let mut contextual_count = 0usize;
+        let mut work = 2usize;
+        for (parameters, source) in groups {
+            for (index, parameter) in parameters.iter().enumerate() {
+                let introduction = source.map_or(0, |source| source[index].name.introduction);
+                let count = if introduction == 0 {
+                    &mut ordinary_count
+                } else {
+                    &mut contextual_count
+                };
+                *count = count.checked_add(1).ok_or_else(exhausted)?;
+                work = parameter
+                    .spelling
+                    .len()
+                    .checked_mul(3)
+                    .and_then(|bytes| bytes.checked_add(1))
+                    .and_then(|entry_work| work.checked_add(entry_work))
+                    .ok_or_else(exhausted)?;
+            }
+        }
+        self.type_work.charge(work).map_err(|()| exhausted())?;
+        let mut ordinary = HashMap::new();
+        ordinary
+            .try_reserve(ordinary_count)
+            .map_err(|_| exhausted())?;
+        let mut contextual = HashMap::new();
+        contextual
+            .try_reserve(contextual_count)
+            .map_err(|_| exhausted())?;
+        self.type_scopes.try_reserve(1).map_err(|_| exhausted())?;
+        self.syntax_type_scopes
+            .try_reserve(1)
+            .map_err(|_| exhausted())?;
+        for (parameters, source) in groups {
+            for (index, parameter) in parameters.iter().enumerate() {
+                let introduction = source.map_or(0, |source| source[index].name.introduction);
+                let spelling = try_clone_resolution_string(
+                    &parameter.spelling,
+                    span,
+                    "prepared type-scope spelling could not be retained",
+                )?;
+                let displaced = if introduction == 0 {
+                    ordinary.insert(spelling, parameter.id)
+                } else {
+                    contextual.insert((spelling, introduction), parameter.id)
+                };
+                if displaced.is_some()
+                    && let Some((message, part)) = duplicate_error
+                {
+                    let failure = error(ResolveReason::InternalState, span, message);
+                    return Err(match part {
+                        Some(part) => failure.with_context(ResolveContext::WorkState {
+                            part,
+                            problem: "duplicate",
+                        }),
+                        None => failure,
+                    });
+                }
+            }
+        }
+        self.type_scopes.push(ordinary);
+        self.syntax_type_scopes.push(contextual);
+        Ok(())
     }
 
     fn allocate_effect_type_parameters(
@@ -3628,52 +4005,12 @@ impl Resolver<'_, '_> {
                 )?);
             }
             let checkpoint = self.type_scopes.len();
-            let mut scope = HashMap::new();
-            scope.try_reserve(parameters.0.len()).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope storage could not be reserved",
-                )
-            })?;
-            for parameter in &parameters.0 {
-                self.type_work
-                    .charge(parameter.spelling.len())
-                    .map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            declaration.span(),
-                            "effect type-scope spelling exceeded its type-work budget",
-                        )
-                    })?;
-                let spelling = try_clone_resolution_string(
-                    &parameter.spelling,
-                    declaration.span(),
-                    "effect type-scope spelling could not be retained",
-                )?;
-                if scope.insert(spelling, parameter.id).is_some() {
-                    return Err(error(
-                        ResolveReason::InternalState,
-                        declaration.span(),
-                        "an effect type scope repeats a prepared binder",
-                    ));
-                }
-            }
-            self.type_work.charge(1).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope stack exceeded its type-work budget",
-                )
-            })?;
-            self.type_scopes.try_reserve(1).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope stack could not be reserved",
-                )
-            })?;
-            self.type_scopes.push(scope);
+            let syntax_checkpoint = self.syntax_type_scopes.len();
+            self.push_prepared_type_scope(
+                &[(&parameters.0, Some(declaration.parameters()))],
+                declaration.span(),
+                Some(("an effect type scope repeats a prepared binder", None)),
+            )?;
             let operations = (|| {
                 self.type_work
                     .charge(declaration.operation_count())
@@ -3743,17 +4080,46 @@ impl Resolver<'_, '_> {
                             "an effect operation must have one outer function arrow with a pure result",
                         ));
                     }
+                    let origin = if matches!(declaration, EffectSource::Foreign { .. }) {
+                        // Pay for inspecting the issued name context and retaining
+                        // the two inline spans before constructing its origin.
+                        self.type_work.charge(3).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                operation.name.span,
+                                "foreign operation origin exceeded its type-work budget",
+                            )
+                        })?;
+                        if operation.name.introduction != 0 {
+                            let invocation = operation.name.introduced_at.ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    operation.name.span,
+                                    "introduced foreign symbol has no invocation origin",
+                                )
+                            })?;
+                            Origin::Expansion {
+                                invocation,
+                                definition: operation.name.span,
+                            }
+                        } else {
+                            Origin::Source(operation.name.span)
+                        }
+                    } else {
+                        Origin::Source(operation.name.span)
+                    };
                     resolved.0.push(ResolvedEffectOperation {
                         id,
                         spelling,
                         annotation: annotation.into_inner(),
-                        origin: Origin::Source(operation.name_span),
+                        origin,
                         span: operation.span,
                     });
                 }
                 Ok::<_, ResolveError>(resolved)
             })();
             self.type_scopes.truncate(checkpoint);
+            self.syntax_type_scopes.truncate(syntax_checkpoint);
             let operations = operations?;
             self.type_work
                 .charge(declaration.name().text.len())
@@ -3871,15 +4237,12 @@ impl Resolver<'_, '_> {
                 declaration.span,
                 &mut self.type_work,
             )?;
-            collect_free_type_names(
+            self.collect_free_type_names(
                 &method.annotation,
-                &self.type_names,
-                &self.interface_names,
                 &declared,
                 &mut seen,
                 &mut names,
                 false,
-                &mut self.type_work,
             )?;
             let type_parameters =
                 self.allocate_declaration_type_parameters(explicit, &names, false)?;
@@ -3938,60 +4301,22 @@ impl Resolver<'_, '_> {
                 .zip(identity.methods)
                 .zip(pending.methods)
             {
-                let scope_width = pending
-                    .parameters
-                    .len()
-                    .checked_add(type_parameters.len())
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            method.span,
-                            "interface method type scope size is not representable",
-                        )
-                    })?;
-                self.type_work.charge(scope_width).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope retention exceeded its type-work budget",
-                    )
-                })?;
-                let mut scope = HashMap::new();
-                scope.try_reserve(scope_width).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope storage could not be reserved",
-                    )
-                })?;
-                for parameter in pending.parameters.iter().chain(&type_parameters) {
-                    let spelling = try_clone_resolution_string(
-                        &parameter.spelling,
-                        method.span,
-                        "interface method type-scope spelling could not be retained",
-                    )?;
-                    if scope.insert(spelling, parameter.id).is_some() {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            method.span,
-                            "an interface method type scope repeats a prepared binder",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "prepared-method-binder",
-                            problem: "duplicate",
-                        }));
-                    }
-                }
-                self.type_scopes.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope stack could not be reserved",
-                    )
-                })?;
-                self.type_scopes.push(scope);
+                let checkpoint = self.type_scopes.len();
+                let syntax_checkpoint = self.syntax_type_scopes.len();
+                self.push_prepared_type_scope(
+                    &[
+                        (&pending.parameters, Some(&declaration.parameters)),
+                        (&type_parameters, method.type_parameters.as_deref()),
+                    ],
+                    method.span,
+                    Some((
+                        "an interface method type scope repeats a prepared binder",
+                        Some("prepared-method-binder"),
+                    )),
+                )?;
                 let annotation = self.resolve_type(&method.annotation);
-                let _ = self.type_scopes.pop();
+                self.type_scopes.truncate(checkpoint);
+                self.syntax_type_scopes.truncate(syntax_checkpoint);
                 let annotation = ResolvedTypeOccurrenceOwner::new(annotation?);
                 let type_parameters = if type_parameters.is_empty() {
                     crate::resolved::SharedOwnerParameters::default()
@@ -4082,15 +4407,12 @@ impl Resolver<'_, '_> {
             }));
         }
         for head_argument in &implementation.head.arguments {
-            collect_free_type_names(
+            self.collect_free_type_names(
                 head_argument,
-                &self.type_names,
-                &self.interface_names,
                 &declared,
                 &mut seen,
                 &mut head_names,
                 false,
-                &mut self.type_work,
             )?;
         }
         let head_parameters = self.allocate_declaration_type_parameters(
@@ -4102,15 +4424,12 @@ impl Resolver<'_, '_> {
         let mut prerequisite_only_names = Vec::new();
         for prerequisite in &implementation.prerequisites {
             for argument in &prerequisite.arguments {
-                collect_free_type_names(
+                self.collect_free_type_names(
                     argument,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut prerequisite_only_names,
                     false,
-                    &mut self.type_work,
                 )?;
             }
         }
@@ -4168,13 +4487,22 @@ impl Resolver<'_, '_> {
             let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
             self.builtin_region = Some(module);
         }
+        for dependency in dependencies.iter().filter(|dependency| {
+            dependency.edge.is_compiler_private()
+                && dependency.edge.target().is_builtin_compiler_syntax()
+        }) {
+            let module = dependency.edge.target();
+            self.retain_dependency_interface_facts(dependency.summary, module, surface.span)?;
+            let mut visits = CaptureGraphVisits::default();
+            let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
+        }
         for (dependency_summary_order, (import, dependency)) in surface
             .imports
             .iter()
             .zip(
                 dependencies
                     .iter()
-                    .filter(|dependency| !dependency.edge.is_region_service()),
+                    .filter(|dependency| !dependency.edge.is_compiler_private()),
             )
             .enumerate()
         {
@@ -5850,6 +6178,42 @@ impl Resolver<'_, '_> {
         Ok(())
     }
 
+    fn is_current_caller_quote(&mut self, name: &SurfaceName) -> Result<bool, ResolveError> {
+        let Some(owner) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(false);
+        };
+        let Some(caller) = owner.caller_quote_owner.as_ref() else {
+            return Ok(false);
+        };
+        self.type_work.charge(3).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "caller quote owner authentication exceeded its work budget",
+            )
+        })?;
+        let valid = owner.owner.is_none()
+            && self.current_caller.is_some_and(|loaded| {
+                loaded.id() == caller.module
+                    && Arc::ptr_eq(loaded.retained_source(), &caller.source)
+                    && loaded
+                        .caller_quote_owner()
+                        .is_some_and(|completed| Arc::ptr_eq(completed, caller))
+            });
+        if !valid {
+            return Err(error(
+                ResolveReason::InternalState,
+                name.span,
+                "the caller quote lost its completed module owner",
+            ));
+        }
+        Ok(true)
+    }
+
     fn retain_syntax_reference(
         &mut self,
         reference: &SurfaceReference,
@@ -6258,6 +6622,7 @@ impl Resolver<'_, '_> {
                             dependency.exports(),
                             owner.module(),
                             usage.import_span,
+                            None,
                         )?;
                         self.syntax_qualified_terms.insert(
                             key,
@@ -6299,156 +6664,424 @@ impl Resolver<'_, '_> {
                 }
                 continue;
             }
-            let key = (usage.name.text.clone(), usage.name.introduction);
-            let lookup = SyntaxOwnerLookup {
+            self.retain_unqualified_syntax_term(
+                &usage.name,
                 owner,
-                graph: syntax.owners,
-            };
-            if let Some(exported) = terms.get(&usage.name.text) {
-                if exported.binder.module() != Some(owner.module()) {
-                    return Err(invalid());
+                terms,
+                syntax.owners,
+                usage.import_span,
+                &mut capture_graph_visits,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn charge_method_head(
+        &mut self,
+        name: &SurfaceName,
+        amount: usize,
+    ) -> Result<(), ResolveError> {
+        self.type_work.charge(amount).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "contextual method-head lookup exceeded its type-work budget",
+            )
+        })
+    }
+
+    fn prepare_method_head_insertion<T>(
+        map: &mut HashMap<(String, usize), T>,
+        work: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "contextual method-head retention exceeded its type-work budget",
+            )
+        };
+        if map.len() == map.capacity() {
+            work.charge(map.capacity().saturating_mul(2).saturating_add(1))
+                .map_err(|()| exhausted())?;
+            let rehash = map.keys().fold(
+                map.len().saturating_add(1).saturating_mul(4),
+                |sum, (key, _)| sum.saturating_add(key.len()),
+            );
+            work.charge(rehash).map_err(|()| exhausted())?;
+        } else {
+            work.charge(1).map_err(|()| exhausted())?;
+        }
+        map.try_reserve(1).map_err(|_| exhausted())
+    }
+
+    // Both the ordinary syntax installer and implementation heads use this
+    // exact term lookup. Pay for work newly reached by either caller.
+    #[allow(clippy::too_many_arguments)]
+    fn retain_unqualified_syntax_term<'a>(
+        &mut self,
+        name: &SurfaceName,
+        owner: &'a crate::resolved::CheckedModule,
+        terms: &'a crate::syntax::SyntaxOwnerBindings,
+        owners: &'a [Arc<crate::resolved::CheckedModule>],
+        import_span: Span,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
+        charge_head: bool,
+    ) -> Result<SyntaxTermOutcome, ResolveError> {
+        let invalid = || {
+            error(
+                ResolveReason::InternalState,
+                name.span,
+                "the syntax name lost its checked defining owner",
+            )
+        };
+        if charge_head {
+            // Pay the owned key, initial owner lookup and cache probes.
+            self.charge_method_head(name, name.text.len().saturating_mul(10).saturating_add(10))?;
+        }
+        let key = (name.text.clone(), name.introduction);
+        let lookup = SyntaxOwnerLookup {
+            owner,
+            graph: owners,
+        };
+        if let Some(exported) = terms.get(&name.text) {
+            if exported.binder.module() != Some(owner.module()) {
+                return Err(invalid());
+            }
+            if !self.syntax_terms.contains_key(&key) {
+                self.retain_imported_global_from_owner(
+                    exported,
+                    owner.exports(),
+                    import_span,
+                    capture_graph_visits,
+                    Some(lookup),
+                )?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_terms,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
                 }
+                self.syntax_terms.insert(
+                    key,
+                    ResolvedTermBinding::imported(
+                        ResolvedTermName::Global(exported.binder),
+                        import_span,
+                    ),
+                );
+            }
+            return Ok(SyntaxTermOutcome::BoundNonMethod);
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(2))?;
+        }
+        if let Some(method) = owner
+            .exports()
+            .method(&name.text)
+            .filter(|method| method.interface().module() == owner.module())
+        {
+            if charge_head && !self.syntax_terms.contains_key(&key) {
+                Self::prepare_method_head_insertion(
+                    &mut self.syntax_terms,
+                    &mut self.type_work,
+                    name.span,
+                )?;
+            }
+            if self.imported.interface(method.interface()).is_none() {
+                self.retain_syntax_exported_method(
+                    method,
+                    owner.exports(),
+                    owner.module(),
+                    import_span,
+                    Some(name),
+                )?;
+            }
+            self.syntax_terms.entry(key).or_insert_with(|| {
+                ResolvedTermBinding::imported(ResolvedTermName::Method(method), import_span)
+            });
+            return Ok(SyntaxTermOutcome::BoundMethod(method));
+        }
+
+        let mut local_method = None;
+        for fact in owner.interface_facts() {
+            if charge_head {
+                self.charge_method_head(name, 1)?;
+            }
+            if fact.id.module() != owner.module() {
+                continue;
+            }
+            for method in fact.methods.iter() {
+                if charge_head {
+                    self.charge_method_head(
+                        name,
+                        name.text.len().min(method.spelling.len()).saturating_add(1),
+                    )?;
+                }
+                if method.spelling == name.text {
+                    local_method = Some((fact, method.id));
+                    break;
+                }
+            }
+            if local_method.is_some() {
+                break;
+            }
+        }
+        if let Some((interface, method)) = local_method {
+            if !self.syntax_terms.contains_key(&key) {
+                self.retain_imported_interface_fact_from_owner(
+                    interface.as_ref(),
+                    owner.exports(),
+                    ImportedInterfaceAccess::HiddenSummaryClosure,
+                    owner.module(),
+                    import_span,
+                    Some((interface, lookup)),
+                )?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_terms,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
+                }
+                self.syntax_terms.insert(
+                    key,
+                    ResolvedTermBinding::imported(ResolvedTermName::Method(method), import_span),
+                );
+            }
+            return Ok(SyntaxTermOutcome::BoundMethod(method));
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(1))?;
+        }
+        if let Some(constructor) = terms.constructor(&name.text) {
+            if constructor.id.owner().module() != owner.module() {
+                return Err(invalid());
+            }
+            if !self.syntax_constructors.contains_key(&key) {
+                let nominal = owner
+                    .syntax_nominal_fact(constructor.id.owner())
+                    .ok_or_else(invalid)?;
+                self.retain_scheme_nominal_fact(nominal, import_span)?;
+                let mut syntax_facts = self.imported.take_syntax_facts();
+                std::mem::swap(&mut self.imported, &mut syntax_facts);
+                let retained = self.retain_imported_constructor_family_from_syntax(
+                    nominal,
+                    owner.exports(),
+                    import_span,
+                    Some((terms, lookup)),
+                );
+                std::mem::swap(&mut self.imported, &mut syntax_facts);
+                self.imported.set_syntax_facts(syntax_facts);
+                retained?;
+                if charge_head {
+                    Self::prepare_method_head_insertion(
+                        &mut self.syntax_constructors,
+                        &mut self.type_work,
+                        name.span,
+                    )?;
+                }
+                self.syntax_constructors.insert(key, constructor.id);
+            }
+            return Ok(SyntaxTermOutcome::BoundNonMethod);
+        }
+        if charge_head {
+            self.charge_method_head(name, name.text.len().saturating_add(1))?;
+        }
+        if let Some((route, original, selector_span)) = terms.targeted(&name.text) {
+            if charge_head {
+                self.charge_method_head(
+                    name,
+                    owner
+                        .direct_dependencies()
+                        .len()
+                        .saturating_add(owners.len())
+                        .saturating_add(original.len().saturating_mul(6))
+                        .saturating_add(2),
+                )?;
+            }
+            if !owner.direct_dependencies().contains(&route) {
+                return Err(invalid());
+            }
+            let dependency = owners
+                .iter()
+                .find(|candidate| candidate.module() == route.target())
+                .ok_or_else(invalid)?;
+            if let Some(exported) = dependency.exports().term(original) {
                 if !self.syntax_terms.contains_key(&key) {
                     self.retain_imported_global_from_owner(
                         exported,
-                        owner.exports(),
-                        usage.import_span,
-                        &mut capture_graph_visits,
-                        Some(lookup),
+                        dependency.exports(),
+                        import_span,
+                        capture_graph_visits,
+                        Some(SyntaxOwnerLookup {
+                            owner: dependency,
+                            graph: owners,
+                        }),
                     )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_terms,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_terms.insert(
                         key,
                         ResolvedTermBinding::imported(
                             ResolvedTermName::Global(exported.binder),
-                            usage.import_span,
+                            selector_span,
                         ),
                     );
                 }
-            } else if let Some(method) = owner
-                .exports()
-                .method(&usage.name.text)
-                .filter(|method| method.interface().module() == owner.module())
-            {
-                if self.imported.interface(method.interface()).is_none() {
-                    return Err(invalid());
-                }
-                self.syntax_terms.entry(key).or_insert_with(|| {
-                    ResolvedTermBinding::imported(
-                        ResolvedTermName::Method(method),
-                        usage.import_span,
-                    )
-                });
-            } else if let Some((interface, method)) =
-                owner.interface_facts().iter().find_map(|fact| {
-                    if fact.id.module() != owner.module() {
-                        return None;
-                    }
-                    fact.methods
-                        .iter()
-                        .find(|method| method.spelling == usage.name.text)
-                        .map(|method| (fact, method.id))
-                })
-            {
+                return Ok(SyntaxTermOutcome::BoundNonMethod);
+            }
+            if let Some(method) = dependency.exports().method(original) {
                 if !self.syntax_terms.contains_key(&key) {
-                    self.retain_imported_interface_fact_from_owner(
-                        interface.as_ref(),
-                        owner.exports(),
-                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                    self.retain_syntax_exported_method(
+                        method,
+                        dependency.exports(),
                         owner.module(),
-                        usage.import_span,
-                        Some((interface, lookup)),
+                        import_span,
+                        charge_head.then_some(name),
                     )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_terms,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_terms.insert(
                         key,
                         ResolvedTermBinding::imported(
                             ResolvedTermName::Method(method),
-                            usage.import_span,
+                            selector_span,
                         ),
                     );
                 }
-            } else if let Some(constructor) = terms.constructor(&usage.name.text) {
-                if constructor.id.owner().module() != owner.module() {
-                    return Err(invalid());
-                }
+                return Ok(SyntaxTermOutcome::BoundMethod(method));
+            }
+            if let Some(constructor) = dependency.exports().constructor(original) {
                 if !self.syntax_constructors.contains_key(&key) {
-                    let nominal = owner
-                        .syntax_nominal_fact(constructor.id.owner())
-                        .ok_or_else(invalid)?;
-                    self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
-                    let mut syntax_facts = self.imported.take_syntax_facts();
-                    std::mem::swap(&mut self.imported, &mut syntax_facts);
-                    let retained = self.retain_imported_constructor_family_from_syntax(
-                        nominal,
-                        owner.exports(),
-                        usage.import_span,
-                        Some((terms, lookup)),
-                    );
-                    std::mem::swap(&mut self.imported, &mut syntax_facts);
-                    self.imported.set_syntax_facts(syntax_facts);
-                    retained?;
+                    self.retain_syntax_exported_constructor(
+                        constructor,
+                        dependency.exports(),
+                        import_span,
+                    )?;
+                    if charge_head {
+                        Self::prepare_method_head_insertion(
+                            &mut self.syntax_constructors,
+                            &mut self.type_work,
+                            name.span,
+                        )?;
+                    }
                     self.syntax_constructors.insert(key, constructor.id);
                 }
-            } else if let Some((route, original, selector_span)) = terms.targeted(&usage.name.text)
-            {
-                if !owner.direct_dependencies().contains(&route) {
-                    return Err(invalid());
-                }
-                let dependency = syntax
-                    .owners
-                    .iter()
-                    .find(|candidate| candidate.module() == route.target())
-                    .ok_or_else(invalid)?;
-                if let Some(exported) = dependency.exports().term(original) {
-                    if !self.syntax_terms.contains_key(&key) {
-                        self.retain_imported_global_from_owner(
-                            exported,
-                            dependency.exports(),
-                            usage.import_span,
-                            &mut capture_graph_visits,
-                            Some(SyntaxOwnerLookup {
-                                owner: dependency,
-                                graph: syntax.owners,
-                            }),
-                        )?;
-                        self.syntax_terms.insert(
-                            key,
-                            ResolvedTermBinding::imported(
-                                ResolvedTermName::Global(exported.binder),
-                                selector_span,
-                            ),
-                        );
-                    }
-                } else if let Some(method) = dependency.exports().method(original) {
-                    if !self.syntax_terms.contains_key(&key) {
-                        self.retain_syntax_exported_method(
-                            method,
-                            dependency.exports(),
-                            owner.module(),
-                            usage.import_span,
-                        )?;
-                        self.syntax_terms.insert(
-                            key,
-                            ResolvedTermBinding::imported(
-                                ResolvedTermName::Method(method),
-                                selector_span,
-                            ),
-                        );
-                    }
-                } else if let Some(constructor) = dependency.exports().constructor(original) {
-                    if !self.syntax_constructors.contains_key(&key) {
-                        self.retain_syntax_exported_constructor(
-                            constructor,
-                            dependency.exports(),
-                            usage.import_span,
-                        )?;
-                        self.syntax_constructors.insert(key, constructor.id);
-                    }
-                } else {
-                    return Err(invalid());
-                }
+                return Ok(SyntaxTermOutcome::BoundNonMethod);
             }
+            return Err(invalid());
         }
-        Ok(())
+        Ok(SyntaxTermOutcome::GenuineUnbound)
+    }
+
+    fn contextual_implementation_head(
+        &mut self,
+        name: &SurfaceName,
+    ) -> Result<SyntaxTermOutcome, ResolveError> {
+        self.charge_method_head(name, 3)?;
+        if name.introduction == 0 {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        }
+        let Some(inputs) = self.syntax_inputs else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let Some(context) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let Some(index) = context.owner else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        let declaration = context.declaration;
+        let import_span = context.import_span;
+        let (Some(owner), Some(terms)) = (inputs.owners.get(index), inputs.terms.get(index)) else {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        };
+        if terms.module != owner.module()
+            || declaration.source() != owner.span().source()
+            || terms.complete_source() != Some(owner.span().source())
+        {
+            return Ok(SyntaxTermOutcome::Unavailable);
+        }
+        self.retain_unqualified_syntax_term(
+            name,
+            owner,
+            terms,
+            inputs.owners,
+            import_span,
+            &mut CaptureGraphVisits::default(),
+            true,
+        )
+    }
+
+    fn unbound_implementation_member(
+        &mut self,
+        interface: InterfaceId,
+        name: &SurfaceName,
+    ) -> Result<Option<MethodId>, ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "contextual method-head lookup exceeded its type-work budget",
+            )
+        };
+        if interface.module() == self.module {
+            self.charge_method_head(name, self.resolved_interfaces.0.len())?;
+            let Some(fact) = self
+                .resolved_interfaces
+                .0
+                .iter()
+                .find(|fact| fact.id == interface)
+            else {
+                return Ok(None);
+            };
+            self.type_work
+                .charge(
+                    fact.methods
+                        .len()
+                        .saturating_mul(name.text.len().saturating_add(1)),
+                )
+                .map_err(|()| exhausted())?;
+            Ok(fact
+                .methods
+                .iter()
+                .find(|method| method.spelling == name.text)
+                .map(|method| method.id))
+        } else {
+            self.charge_method_head(name, 1)?;
+            let Some(fact) = self.imported.interface(interface) else {
+                return Ok(None);
+            };
+            self.type_work
+                .charge(
+                    fact.methods
+                        .len()
+                        .saturating_mul(name.text.len().saturating_add(1)),
+                )
+                .map_err(|()| exhausted())?;
+            Ok(fact
+                .methods
+                .iter()
+                .find(|method| method.spelling == name.text)
+                .map(|method| method.id))
+        }
     }
 
     fn retain_syntax_exported_constructor(
@@ -6480,20 +7113,31 @@ impl Resolver<'_, '_> {
         summary: &ExportSummary,
         owner: ModuleId,
         span: Span,
+        charge_search: Option<&SurfaceName>,
     ) -> Result<(), ResolveError> {
-        let interface = summary
-            .interfaces()
-            .chain(summary.hidden_interfaces())
-            .find(|interface| {
-                interface.id == method.interface() && interface.method(method).is_some()
-            })
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "the syntax method lost its checked interface",
-                )
-            })?;
+        let mut found = None;
+        for interface in summary.interfaces().chain(summary.hidden_interfaces()) {
+            if let Some(name) = charge_search {
+                self.charge_method_head(name, 1)?;
+            }
+            if interface.id != method.interface() {
+                continue;
+            }
+            if let Some(name) = charge_search {
+                self.charge_method_head(name, interface.methods.len())?;
+            }
+            if interface.method(method).is_some() {
+                found = Some(interface);
+                break;
+            }
+        }
+        let interface = found.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "the syntax method lost its checked interface",
+            )
+        })?;
         self.retain_imported_interface_fact(
             interface,
             summary,
@@ -6521,6 +7165,14 @@ impl Resolver<'_, '_> {
         capture_graph_visits: &mut CaptureGraphVisits<'a>,
         owner: Option<SyntaxOwnerLookup<'_>>,
     ) -> Result<(), ResolveError> {
+        #[cfg(test)]
+        if let Some(owner) = owner {
+            CHECKED_CAPTURE_OBSERVER.with(|observer| {
+                if let Some(observe) = observer.get() {
+                    observe(exported, owner, span);
+                }
+            });
+        }
         let constrained = !exported.scheme.requirements.is_empty();
         if constrained {
             self.constraint_work.charge(1).map_err(|()| {
@@ -6552,7 +7204,72 @@ impl Resolver<'_, '_> {
                     problem: "mismatch",
                 }));
             }
-            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
+            if let Some(owner) = owner {
+                // This alternate checked-helper route can need the same
+                // authenticated defining summary as first retention. Prepay
+                // our preliminary probes and the subsequently reached scan.
+                let identities = nominal_identities.identities();
+                let charge = |work: &mut TypeWorkBudget, units| {
+                    work.charge(units).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "checked global owner comparison exceeded its work budget",
+                        )
+                    })
+                };
+                charge(&mut self.type_work, identities.len())?;
+                for id in identities {
+                    charge(&mut self.type_work, 1)?;
+                    if self.imported.resource_fact(*id).is_some() {
+                        continue;
+                    }
+                    charge(&mut self.type_work, 2)?;
+                    if summary.nominal_fact(*id).is_some() {
+                        continue;
+                    }
+                    let mut source = None;
+                    let mut visited = 0usize;
+                    for checked in owner.graph {
+                        charge(&mut self.type_work, 1)?;
+                        visited = visited.saturating_add(1);
+                        if checked.module() == id.module() {
+                            source = Some(checked.exports());
+                            break;
+                        }
+                    }
+                    // The comparator repeats this same checked-owner walk.
+                    charge(&mut self.type_work, visited)?;
+                    let source = source.unwrap_or(summary);
+                    charge(&mut self.type_work, 2)?;
+                    match source.nominal_fact(*id) {
+                        Some(fact)
+                            if fact.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                                && fact.access == ImportedTypeAccess::Opaque =>
+                        {
+                            // canonical_nominal_fact reaches three summary maps.
+                            charge(&mut self.type_work, 3)?;
+                        }
+                        None => {
+                            // Both this preflight and private_nominal inspect
+                            // the lexical flag and defining module.
+                            charge(&mut self.type_work, 4)?;
+                            if !id.is_lexical() && id.module() == owner.owner.module() {
+                                // Existing private_nominal reaches the checked
+                                // registry, parameter index and export summary.
+                                charge(&mut self.type_work, 7)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.compare_retained_nominal_closure_from_owner(
+                &nominal_identities,
+                summary,
+                span,
+                owner,
+            )?;
             return Ok(());
         }
         if constrained {
@@ -6653,7 +7370,14 @@ impl Resolver<'_, '_> {
                     "imported capture type scan exceeded its work budget",
                 )
             })? {
-                self.retain_type_nominals_with(ty, summary, span, true, owner)?;
+                self.retain_type_nominals_inner(
+                    ty,
+                    summary,
+                    span,
+                    true,
+                    owner,
+                    owner.map(|owner| owner.graph),
+                )?;
             }
             for effect in exported
                 .capture
@@ -6898,6 +7622,18 @@ impl Resolver<'_, '_> {
         span: crate::source::Span,
         external_capture_facts: bool,
         owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_inner(scheme, summary, span, external_capture_facts, owner, None)
+    }
+
+    fn retain_type_nominals_inner(
+        &mut self,
+        scheme: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        external_capture_facts: bool,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+        checked_capture_graph: Option<&[Arc<crate::resolved::CheckedModule>]>,
     ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
@@ -7158,14 +7894,60 @@ impl Resolver<'_, '_> {
                     .and_then(|owner| owner.nominal_summary(id))
                     .unwrap_or(summary)
             };
-            let exported = if source.nominal_fact(id).is_none()
-                && let Some(private) = owner.and_then(|owner| owner.private_nominal(id))
-            {
-                private
-            } else {
-                Self::scheme_nominal_fact(source, id, span)?
-            };
-            self.retain_scheme_nominal_fact(exported, span)?;
+            if source.nominal_fact(id).is_none() {
+                if let Some(private) = owner.and_then(|owner| owner.private_nominal(id)) {
+                    self.retain_scheme_nominal_fact(private, span)?;
+                    continue;
+                }
+                // A checked helper's capture types can refer to private facts
+                // of other already retained modules. This metadata-only path
+                // never adds a source name or admits a constructor family.
+                if let Some(graph) = checked_capture_graph {
+                    let mut captured = None;
+                    for checked in graph {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "checked capture owner scan exceeded its work budget",
+                            )
+                        })?;
+                        if checked.module() == id.module() {
+                            // The checked lookup reaches the nominal map and
+                            // vector twice, the parameter map, and both export
+                            // summary lookup alternatives.
+                            self.type_work.charge(7).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "checked capture nominal lookup exceeded its work budget",
+                                )
+                            })?;
+                            captured = checked.syntax_nominal_fact(id);
+                            break;
+                        }
+                    }
+                    if let Some(captured) = captured {
+                        let prepared = self
+                            .imported
+                            .prepare_checked_capture_nominal_merge(
+                                crate::resolved::ImportedNominalFactRef {
+                                    constructors: &[],
+                                    access: ImportedTypeAccess::Hidden,
+                                    ..captured
+                                },
+                                &mut self.type_work,
+                                &mut self.constraint_work,
+                            )
+                            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                        self.imported
+                            .commit_nominal_merge(prepared)
+                            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                        continue;
+                    }
+                }
+            }
+            self.retain_scheme_nominal_fact(Self::scheme_nominal_fact(source, id, span)?, span)?;
         }
         Ok(())
     }
@@ -7953,6 +8735,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ImportedNominalName, ResolveError> {
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
@@ -7965,12 +8748,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this qualified nominal type is not available in the syntax context",
+                        &name.member,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(&name.member, &self.diagnostic_frames)
                 });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8005,7 +8791,7 @@ impl Resolver<'_, '_> {
         )? {
             return Ok(ImportedNominalName { id });
         }
-        if name.introduction != 0 {
+        if name.introduction != 0 && !self.is_current_caller_quote(name)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
                 .syntax_nominals
@@ -8013,12 +8799,15 @@ impl Resolver<'_, '_> {
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
-                    error(
+                    contextual_unknown_name(
                         ResolveReason::UnknownType,
+                        ResolveContext::Type,
                         name.span,
                         "this nominal type is not declared in the syntax context",
+                        name,
+                        &self.diagnostic_frames,
+                        &mut self.type_work,
                     )
-                    .with_name(name, &self.diagnostic_frames)
                 });
         }
         if self.interface_names.contains_key(&name.text) {
@@ -8052,7 +8841,7 @@ impl Resolver<'_, '_> {
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Interface)?;
             let id = match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -8110,13 +8899,35 @@ impl Resolver<'_, '_> {
                 origin: Origin::Source(reference.span()),
             });
         }
-        if self.file_name_is_bound(&member.text)
-            || self
-                .type_scopes
-                .iter()
-                .rev()
-                .any(|scope| scope.contains_key(&member.text))
-        {
+        let bound_as_type = if self.file_name_is_bound(&member.text) {
+            true
+        } else if member.introduction == 0 {
+            self.contextual_type_variable(member).is_some()
+        } else {
+            let message = "caller quote interface type-scope lookup exceeded its type-work budget";
+            self.type_work
+                .charge(member.text.len())
+                .map_err(|()| error(ResolveReason::TypeResourceExhausted, member.span, message))?;
+            let key = (
+                try_clone_resolution_string(&member.text, member.span, message)?,
+                member.introduction,
+            );
+            let mut found = false;
+            for scope in self.syntax_type_scopes.iter().rev() {
+                // Pay for the reached hash, comparison, and scope visit first.
+                self.type_work
+                    .charge(member.text.len().saturating_mul(2).saturating_add(1))
+                    .map_err(|()| {
+                        error(ResolveReason::TypeResourceExhausted, member.span, message)
+                    })?;
+                if scope.contains_key(&key) {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if bound_as_type {
             return Err(interface_kind_error(member.span, &member.text)
                 .with_name(member, &self.diagnostic_frames));
         }
@@ -8137,7 +8948,7 @@ impl Resolver<'_, '_> {
     fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
-        if context.introduction != 0 {
+        if context.introduction != 0 && !self.is_current_caller_quote(context)? {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
             return match reference {
                 SurfaceReference::Unqualified(_) => self
@@ -8700,6 +9511,7 @@ impl Resolver<'_, '_> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
+            && !self.is_current_caller_quote(&name.qualifier)?
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             let selected = self
@@ -8711,14 +9523,18 @@ impl Resolver<'_, '_> {
                 ))
                 .copied();
             return selected.ok_or_else(|| {
-                error(
+                contextual_unknown_name(
                     ResolveReason::UnknownConstructor,
+                    ResolveContext::Constructor,
                     member.span,
                     "this constructor is not exported through the syntax owner's alias",
+                    member,
+                    &self.diagnostic_frames,
+                    &mut self.type_work,
                 )
-                .with_name(member, &self.diagnostic_frames)
             });
         }
+        let mut checked_contextual_lexical = false;
         if matches!(reference, SurfaceReference::Unqualified(_)) && member.introduction != 0 {
             if let Some(id) = charged_lexical_scope_lookup(
                 &self.lexical_constructor_scopes,
@@ -8728,19 +9544,25 @@ impl Resolver<'_, '_> {
             )? {
                 return Ok(id);
             }
-            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
-            return self
-                .syntax_constructors
-                .get(&(member.text.clone(), member.introduction))
-                .copied()
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::UnknownConstructor,
-                        member.span,
-                        "this constructor is not declared in the syntax owner",
-                    )
-                    .with_name(member, &self.diagnostic_frames)
-                });
+            if !self.is_current_caller_quote(member)? {
+                self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
+                return self
+                    .syntax_constructors
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+                    .ok_or_else(|| {
+                        contextual_unknown_name(
+                            ResolveReason::UnknownConstructor,
+                            ResolveContext::Constructor,
+                            member.span,
+                            "this constructor is not declared in the syntax owner",
+                            member,
+                            &self.diagnostic_frames,
+                            &mut self.type_work,
+                        )
+                    });
+            }
+            checked_contextual_lexical = true;
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
@@ -8762,13 +9584,17 @@ impl Resolver<'_, '_> {
                     .with_name(reference.member(), &self.diagnostic_frames)
                 });
         }
-        if let Some(constructor) = charged_lexical_scope_lookup(
-            &self.lexical_constructor_scopes,
-            reference.member(),
-            &mut self.type_work,
-            "lexical constructor lookup exceeded its type-work budget",
-        )?
-        .or_else(|| {
+        let lexical = if checked_contextual_lexical {
+            None
+        } else {
+            charged_lexical_scope_lookup(
+                &self.lexical_constructor_scopes,
+                reference.member(),
+                &mut self.type_work,
+                "lexical constructor lookup exceeded its type-work budget",
+            )?
+        };
+        if let Some(constructor) = lexical.or_else(|| {
             self.constructor_names
                 .get(&reference.member().text)
                 .copied()
@@ -8805,7 +9631,7 @@ impl Resolver<'_, '_> {
         &mut self,
         definition: &SurfaceDefinition,
     ) -> Result<Binder, ResolveError> {
-        let (global_name, global_name_span) = match &definition.kind {
+        let global_name = match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 if equational.equations.is_empty() {
                     return Err(error(
@@ -8840,26 +9666,34 @@ impl Resolver<'_, '_> {
                         return Err(diagnostic.into());
                     }
                 }
-                (
-                    equational.interface.name.text.as_str(),
-                    equational.interface.name.span,
-                )
+                &equational.interface.name
             }
-            SurfaceDefinitionKind::InlineOperational(operational) => (
-                operational.header.name.text.as_str(),
-                operational.header.name.span,
-            ),
+            SurfaceDefinitionKind::InlineOperational(operational) => &operational.header.name,
         };
         let requirement_count = match &definition.kind {
             SurfaceDefinitionKind::Equational(global) => global.interface.requirements.len(),
             SurfaceDefinitionKind::InlineOperational(global) => global.header.requirements.len(),
         };
-        self.allocate_global_name(
-            global_name,
-            global_name_span,
+        let mut binder = self.allocate_global_name(
+            &global_name.text,
+            global_name.span,
             definition.span,
             requirement_count,
-        )
+        )?;
+        if global_name.introduction != 0 {
+            let invocation = global_name.introduced_at.ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    global_name.span,
+                    "introduced binder has no invocation origin",
+                )
+            })?;
+            binder.origin = Origin::Expansion {
+                invocation,
+                definition: global_name.span,
+            };
+        }
+        Ok(binder)
     }
 
     fn allocate_global_name(
@@ -8925,6 +9759,7 @@ impl Resolver<'_, '_> {
     fn prepare_declaration_setup(
         &mut self,
         surface: &SurfaceModule,
+        loaded: DeclarationEffectOwner<'_>,
     ) -> Result<PreparedDeclarationSetup, ResolveError> {
         let nominal_identities = self.install_nominal_identities(&surface.type_declarations)?;
         self.type_work
@@ -9027,6 +9862,37 @@ impl Resolver<'_, '_> {
         }
         let interface_identities = self.install_interface_identities(&surface.interfaces)?;
         let effect_sources = self.effect_sources(surface)?;
+        match loaded {
+            DeclarationEffectOwner::Admitted { loaded, retained } => {
+                if loaded.id() != self.module || !std::ptr::eq(loaded.surface(), surface) {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "effect syntax source does not match the admitted module",
+                    ));
+                }
+                *retained = Some(
+                    crate::core::validate::AdmittedEffectCoordinates::from_admitted(
+                        loaded,
+                        &effect_sources,
+                        &mut self.type_work,
+                    )
+                    .map_err(|failure| {
+                        error(
+                            if failure.reason() == crate::core::ValidationReason::Resource {
+                                ResolveReason::TypeResourceExhausted
+                            } else {
+                                ResolveReason::InternalState
+                            },
+                            surface.span,
+                            "effect syntax provenance could not be prepared",
+                        )
+                    })?,
+                );
+            }
+            #[cfg(test)]
+            DeclarationEffectOwner::Synthetic => {}
+        }
         let effect_identities = self.install_effect_identities(&effect_sources)?;
 
         let mut nominal_type_parameters = Vec::new();
@@ -9554,9 +10420,48 @@ impl Resolver<'_, '_> {
         })
     }
 
+    fn resolve_loaded_declarations(
+        &mut self,
+        loaded: &LoadedModule,
+    ) -> Result<
+        (
+            ResolvedDeclarations,
+            Arc<crate::core::validate::AdmittedEffectCoordinates>,
+        ),
+        ResolveError,
+    > {
+        let mut retained = None;
+        let declarations = self.resolve_declarations_inner(
+            loaded.surface(),
+            DeclarationEffectOwner::Admitted {
+                loaded,
+                retained: &mut retained,
+            },
+        )?;
+        let retained = retained.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                loaded.surface().span,
+                "effect syntax provenance was not prepared",
+            )
+        })?;
+        Ok((declarations, retained))
+    }
+
+    // Existing resolver unit fixtures construct synthetic surfaces, including
+    // malformed ones. They do not produce a loaded module or a summary.
+    #[cfg(test)]
     fn resolve_declarations(
         &mut self,
         surface: &SurfaceModule,
+    ) -> Result<ResolvedDeclarations, ResolveError> {
+        self.resolve_declarations_inner(surface, DeclarationEffectOwner::Synthetic)
+    }
+
+    fn resolve_declarations_inner(
+        &mut self,
+        surface: &SurfaceModule,
+        loaded: DeclarationEffectOwner<'_>,
     ) -> Result<ResolvedDeclarations, ResolveError> {
         let PreparedDeclarationSetup {
             registry,
@@ -9565,7 +10470,7 @@ impl Resolver<'_, '_> {
             mut global_type_parameters,
             mut global_binders,
             pending_implementations,
-        } = self.prepare_declaration_setup(surface)?;
+        } = self.prepare_declaration_setup(surface, loaded)?;
         let surface_definitions = &surface.definitions;
 
         let resources = self.resolve_resource_definitions(&surface.resources)?;
@@ -9591,13 +10496,20 @@ impl Resolver<'_, '_> {
         {
             let type_parameters = ImportedTypeVariableBuffer(type_parameters);
             let type_scope_checkpoint = self.type_scopes.len();
-            self.type_scopes.push(
-                type_parameters
-                    .0
-                    .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            let explicit = match &definition.kind {
+                SurfaceDefinitionKind::Equational(equational) => {
+                    equational.interface.type_parameters.as_deref()
+                }
+                SurfaceDefinitionKind::InlineOperational(operational) => {
+                    operational.header.type_parameters.as_deref()
+                }
+            };
+            self.push_prepared_type_scope(
+                &[(&type_parameters.0, explicit)],
+                definition.span,
+                None,
+            )?;
             let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
                 let kind = match &definition.kind {
                     SurfaceDefinitionKind::Equational(equational) => {
@@ -9624,11 +10536,43 @@ impl Resolver<'_, '_> {
                                 self.resolve_pattern_vector(&equation.patterns)?;
                             let patterns = ResolvedPatternBuffer(patterns);
                             self.push_binder_scope_many(&binders);
+                            let advance_start = self.pending_advance_bindings.len();
                             let resolved_body = self
                                 .resolve_expr(&equation.body)
                                 .map(ResolvedExpressionOwner::new);
                             self.scopes.truncate(scope_checkpoint);
                             let resolved_body = resolved_body?;
+                            let count = self
+                                .pending_advance_bindings
+                                .len()
+                                .checked_sub(advance_start)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        definition.span,
+                                        "advance-site owner range is invalid",
+                                    )
+                                })?;
+                            let association_work = count.checked_mul(2).ok_or_else(|| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            self.type_work.charge(association_work).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            for binders in self.pending_advance_bindings.drain(advance_start..) {
+                                self.advance_sites.push(crate::syntax::ResolvedAdvanceSite {
+                                    owner: global.id,
+                                    binders,
+                                });
+                            }
                             equations.0.push(ResolvedEquation {
                                 name: crate::resolved::ResolvedEquationHead {
                                     binder: global.id,
@@ -9819,6 +10763,8 @@ impl Resolver<'_, '_> {
                 Ok(kind)
             })();
             self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes
+                .truncate(syntax_type_scope_checkpoint);
             let kind = kind?;
             definitions.0.push(ResolvedDefinition {
                 kind,
@@ -9910,14 +10856,18 @@ impl Resolver<'_, '_> {
             ResolvedImplementationBuffer(Vec::with_capacity(declarations.len()));
         for (implementation, pending) in declarations.iter().zip(pending) {
             let type_scope_checkpoint = self.type_scopes.len();
-            self.type_scopes.push(
-                pending
-                    .head_parameters
-                    .iter()
-                    .chain(&pending.prerequisite_only_parameters)
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            self.push_prepared_type_scope(
+                &[
+                    (
+                        &pending.head_parameters,
+                        implementation.type_parameters.as_deref(),
+                    ),
+                    (&pending.prerequisite_only_parameters, None),
+                ],
+                implementation.span,
+                None,
+            )?;
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
@@ -10005,12 +10955,24 @@ impl Resolver<'_, '_> {
                             problem: "missing",
                         })
                     })?;
-                    let method = self.method_names.get(&first.name.text).and_then(|binding| {
-                        match binding.term {
-                            ResolvedTermName::Method(method) => Some(method),
-                            ResolvedTermName::Global(_) => None,
+                    let method = if first.name.introduction == 0 {
+                        self.method_names.get(&first.name.text).and_then(|binding| {
+                            match binding.term {
+                                ResolvedTermName::Method(method) => Some(method),
+                                ResolvedTermName::Global(_) => None,
+                            }
+                        })
+                    } else {
+                        match self.contextual_implementation_head(&first.name)? {
+                            SyntaxTermOutcome::BoundMethod(method) => Some(method),
+                            SyntaxTermOutcome::GenuineUnbound => {
+                                self.unbound_implementation_member(head.interface.id, &first.name)?
+                            }
+                            SyntaxTermOutcome::BoundNonMethod | SyntaxTermOutcome::Unavailable => {
+                                None
+                            }
                         }
-                    });
+                    };
                     let identity = method.map(|method| ImplMethodId::new(pending.id, method));
                     let mut resolved_equations =
                         ResolvedEquationBuffer(Vec::with_capacity(equations.len()));
@@ -10061,6 +11023,8 @@ impl Resolver<'_, '_> {
             })();
 
             self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes
+                .truncate(syntax_type_scope_checkpoint);
             implementations.0.push(result?);
         }
         Ok(implementations.into_vec())
@@ -10072,20 +11036,25 @@ impl Resolver<'_, '_> {
     ) -> Result<Vec<NominalDeclarationIdentity>, ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(type_declarations.len());
+        let mut introduced_nominal_count = 0usize;
+        let mut introduced_nominal_bytes = 0usize;
+        let mut introduced_nominal_anchor = None;
         for (index, declaration) in type_declarations.iter().enumerate() {
             if let Some(first) =
-                first_types.insert(declaration.name.text.as_str(), declaration.name.span)
+                first_types.insert(declaration.name.text.as_str(), &declaration.name)
             {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateType,
                     SourceLabel::new(
                         declaration.name.span,
                         "this nominal type name is already defined",
-                    ),
+                    )
+                    .with_location_preserving_span(declaration.name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first nominal type is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.found = Some(declaration.name.text.clone());
                 return Err(diagnostic.into());
             }
@@ -10111,29 +11080,41 @@ impl Resolver<'_, '_> {
             let id = NominalTypeId::new(self.module, index);
             self.type_names.insert(declaration.name.text.clone(), id);
             nominal_ids.push(id);
+            if declaration.name.introduction != 0 {
+                introduced_nominal_count = introduced_nominal_count.saturating_add(1);
+                introduced_nominal_bytes =
+                    introduced_nominal_bytes.saturating_add(declaration.name.text.len());
+                introduced_nominal_anchor.get_or_insert(declaration.name.span);
+            }
         }
 
         let mut first_constructors = HashMap::new();
         let mut identities = Vec::with_capacity(type_declarations.len());
+        let mut constructor_count = 0usize;
+        let mut introduced_count = 0usize;
+        let mut introduced_bytes = 0usize;
+        let mut introduced_anchor = None;
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
-                let _ = validate_newtype_shape(declaration)?;
+                let _ = validate_newtype_shape(declaration, &mut self.type_work)?;
             }
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
                 if let Some(first) =
-                    first_constructors.insert(constructor.name.text.as_str(), constructor.name.span)
+                    first_constructors.insert(constructor.name.text.as_str(), &constructor.name)
                 {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicateConstructor,
                         SourceLabel::new(
                             constructor.name.span,
                             "this constructor name is already defined",
-                        ),
+                        )
+                        .with_location_preserving_span(constructor.name.diagnostic.as_deref()),
                     );
-                    diagnostic
-                        .related
-                        .push(SourceLabel::new(first, "the first constructor is here"));
+                    diagnostic.related.push(
+                        SourceLabel::new(first.span, "the first constructor is here")
+                            .with_location_preserving_span(first.diagnostic.as_deref()),
+                    );
                     diagnostic.found = Some(constructor.name.text.clone());
                     return Err(diagnostic.into());
                 }
@@ -10163,11 +11144,141 @@ impl Resolver<'_, '_> {
                 self.constructor_names
                     .insert(constructor.name.text.clone(), id);
                 owned.push(id);
+                constructor_count = constructor_count.saturating_add(1);
+                if constructor.name.introduction != 0 {
+                    introduced_count = introduced_count.saturating_add(1);
+                    introduced_bytes = introduced_bytes.saturating_add(constructor.name.text.len());
+                    introduced_anchor.get_or_insert(constructor.name.span);
+                }
             }
             identities.push(NominalDeclarationIdentity {
                 id: *owner,
                 constructors: owned,
             });
+        }
+        if let Some(anchor) = introduced_anchor.or(introduced_nominal_anchor) {
+            // Module installation precedes all block-local frames. Stage both
+            // bases before publishing either, using only already admitted names
+            // and their existing IDs after the ordinary conflict checks.
+            let constructor_work = if introduced_anchor.is_some() {
+                let live = self.lexical_constructor_scopes.len();
+                let frame = if live == self.lexical_constructor_scopes.capacity() {
+                    live.saturating_mul(2).saturating_add(1)
+                } else {
+                    1
+                };
+                type_declarations
+                    .len()
+                    .saturating_add(constructor_count)
+                    .saturating_add(introduced_count.saturating_mul(4))
+                    .saturating_add(introduced_bytes.saturating_mul(2))
+                    .saturating_add(frame)
+            } else {
+                0
+            };
+            let nominal_work = if introduced_nominal_anchor.is_some() {
+                let live = self.lexical_nominal_scopes.len();
+                let frame = if live == self.lexical_nominal_scopes.capacity() {
+                    live.saturating_mul(2).saturating_add(1)
+                } else {
+                    1
+                };
+                type_declarations
+                    .len()
+                    .saturating_add(introduced_nominal_count.saturating_mul(4))
+                    .saturating_add(introduced_nominal_bytes.saturating_mul(2))
+                    .saturating_add(frame)
+            } else {
+                0
+            };
+            let work = constructor_work.saturating_add(nominal_work);
+            self.type_work.charge(work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    anchor,
+                    "introduced module identity retention exceeded its type-work budget",
+                )
+            })?;
+            let constructor_scope = if introduced_anchor.is_some() {
+                let mut scope = HashMap::new();
+                scope.try_reserve(introduced_count).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "introduced module constructor storage could not be reserved",
+                    )
+                })?;
+                for (declaration, identity) in type_declarations.iter().zip(&identities) {
+                    for (constructor, id) in
+                        declaration.constructors.iter().zip(&identity.constructors)
+                    {
+                        let name = &constructor.name;
+                        if name.introduction != 0 {
+                            let spelling = try_clone_resolution_string(
+                                &name.text,
+                                name.span,
+                                "introduced module constructor name storage could not be reserved",
+                            )?;
+                            scope.insert((spelling, name.introduction), *id);
+                        }
+                    }
+                }
+                Some(scope)
+            } else {
+                None
+            };
+            let nominal_scope = if introduced_nominal_anchor.is_some() {
+                let mut scope = HashMap::new();
+                scope.try_reserve(introduced_nominal_count).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "introduced module nominal storage could not be reserved",
+                    )
+                })?;
+                for (declaration, id) in type_declarations.iter().zip(&nominal_ids) {
+                    let name = &declaration.name;
+                    if name.introduction != 0 {
+                        let spelling = try_clone_resolution_string(
+                            &name.text,
+                            name.span,
+                            "introduced module nominal name storage could not be reserved",
+                        )?;
+                        scope.insert((spelling, name.introduction), *id);
+                    }
+                }
+                Some(scope)
+            } else {
+                None
+            };
+            if constructor_scope.is_some() {
+                debug_assert!(self.lexical_constructor_scopes.is_empty());
+                self.lexical_constructor_scopes
+                    .try_reserve(1)
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            anchor,
+                            "module constructor scope storage could not be reserved",
+                        )
+                    })?;
+            }
+            if nominal_scope.is_some() {
+                debug_assert!(self.lexical_nominal_scopes.is_empty());
+                self.lexical_nominal_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "module nominal scope storage could not be reserved",
+                    )
+                })?;
+            }
+            if let Some(scope) = constructor_scope {
+                self.lexical_constructor_scopes.push(scope);
+            }
+            if let Some(scope) = nominal_scope {
+                self.lexical_nominal_scopes.push(scope);
+            }
         }
         Ok(identities)
     }
@@ -10217,7 +11328,8 @@ impl Resolver<'_, '_> {
                 problem: "wrong",
             }));
         }
-        let (constructor, representation) = validate_newtype_shape(declaration)?;
+        let (constructor, representation) =
+            validate_newtype_shape(declaration, &mut self.type_work)?;
 
         let parameters = self.allocate_nominal_type_parameters(declaration)?;
         let type_scope_checkpoint = self.type_scopes.len();
@@ -10441,7 +11553,13 @@ impl Resolver<'_, '_> {
                 constructors: identity.constructors.clone().into_boxed_slice(),
                 representation: None,
                 representation_provenance: None,
-                origin: Origin::Source(declaration.span),
+                origin: match (declaration.declaration_kind, declaration.name.introduced_at) {
+                    (SurfaceNominalDeclarationKind::Data, Some(invocation)) => Origin::Expansion {
+                        invocation,
+                        definition: declaration.span,
+                    },
+                    _ => Origin::Source(declaration.span),
+                },
             })
             .collect::<Vec<_>>();
         let discard_nominals = |nominals: &mut Vec<ResolvedNominalType>| {
@@ -10499,12 +11617,16 @@ impl Resolver<'_, '_> {
                         "constructor payload-provenance retention could not reserve storage",
                     )
                 })?;
-            self.type_scopes.push(
-                parameters
-                    .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let type_scope_checkpoint = self.type_scopes.len();
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            if let Err(error) = self.push_prepared_type_scope(
+                &[(parameters, Some(&declaration.parameters))],
+                declaration.span,
+                None,
+            ) {
+                discard_nominals(&mut nominals);
+                return Err(error);
+            }
             let result = (|| -> Result<(), ResolveError> {
                 for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors)
                 {
@@ -10637,7 +11759,13 @@ impl Resolver<'_, '_> {
                         owner: identity.id,
                         spelling: constructor.name.text.clone(),
                         payload: constructor_payload,
-                        origin: Origin::Source(constructor.span),
+                        origin: match constructor.name.introduced_at {
+                            Some(invocation) => Origin::Expansion {
+                                invocation,
+                                definition: constructor.span,
+                            },
+                            None => Origin::Source(constructor.span),
+                        },
                     });
                     nominal_payload_provenance.push(ConstructorPayloadProvenance {
                         constructor: *id,
@@ -10646,7 +11774,9 @@ impl Resolver<'_, '_> {
                 }
                 Ok(())
             })();
-            let _ = self.type_scopes.pop();
+            self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes
+                .truncate(syntax_type_scope_checkpoint);
             if let Err(error) = result {
                 discard_nominals(&mut nominals);
                 return Err(error);
@@ -12063,65 +13193,50 @@ impl Resolver<'_, '_> {
         let mut seen = HashMap::new();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
-                collect_free_type_names(
+                self.collect_free_type_names(
                     &equational.interface.annotation,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut names,
                     infer_implicit_effect_rows,
-                    &mut self.type_work,
                 )?;
                 for requirement in &equational.interface.requirements {
                     for argument in &requirement.arguments {
-                        collect_free_type_names(
+                        self.collect_free_type_names(
                             argument,
-                            &self.type_names,
-                            &self.interface_names,
                             &declared,
                             &mut seen,
                             &mut names,
                             infer_implicit_effect_rows,
-                            &mut self.type_work,
                         )?;
                     }
                 }
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
                 for parameter in &operational.header.parameters {
-                    collect_free_type_names(
+                    self.collect_free_type_names(
                         &parameter.annotation,
-                        &self.type_names,
-                        &self.interface_names,
                         &declared,
                         &mut seen,
                         &mut names,
                         infer_implicit_effect_rows,
-                        &mut self.type_work,
                     )?;
                 }
-                collect_free_type_names(
+                self.collect_free_type_names(
                     &operational.header.result_type,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut names,
                     infer_implicit_effect_rows,
-                    &mut self.type_work,
                 )?;
                 for requirement in &operational.header.requirements {
                     for argument in &requirement.arguments {
-                        collect_free_type_names(
+                        self.collect_free_type_names(
                             argument,
-                            &self.type_names,
-                            &self.interface_names,
                             &declared,
                             &mut seen,
                             &mut names,
                             infer_implicit_effect_rows,
-                            &mut self.type_work,
                         )?;
                     }
                 }
@@ -13576,12 +14691,84 @@ impl Resolver<'_, '_> {
                     tasks.push(ResolveTask::VisitExpr(&member.initializer));
                 }
             }
-            ResolveTask::FinishApplication { span } => {
+            ResolveTask::FinishApplication { span, quote_site } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
+                let retained_quote = if let Some(index) = quote_site {
+                    let source = match index {
+                        SurfaceQuoteSiteIndex::Module(index) => self.surface_quote_sites.get(index),
+                        SurfaceQuoteSiteIndex::Replacement(index) => {
+                            self.replacement_quote_sites.get(index)
+                        }
+                    }
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote site was lost",
+                        )
+                    })?;
+                    let ResolvedExprKind::Constructor(occurrence) = &function.kind else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote constructor was not resolved",
+                        ));
+                    };
+                    if !occurrence
+                        .constructor
+                        .owner()
+                        .module()
+                        .is_builtin_compiler_syntax()
+                        || occurrence.spelling != "HiddenExpressionFragment"
+                    {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote constructor has the wrong owner",
+                        ));
+                    }
+                    let live = self.quote_sites.len();
+                    let work = if live == self.quote_sites.capacity() {
+                        live.saturating_mul(2).saturating_add(2)
+                    } else {
+                        1
+                    };
+                    self.syntax_expansion
+                        .as_deref_mut()
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                span,
+                                "the quote budget was lost",
+                            )
+                        })?
+                        .charge_quote_work(work, span)
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::InternalState,
+                                span,
+                                "the quote budget was exhausted",
+                            )
+                        })?;
+                    if live == self.quote_sites.capacity() {
+                        self.quote_sites.reserve_exact(1);
+                    }
+                    Some((occurrence.constructor, Arc::clone(&source.template)))
+                } else {
+                    None
+                };
+                let function = Box::new(function);
+                if let Some((constructor, template)) = retained_quote {
+                    self.quote_sites.push(crate::syntax::ResolvedQuoteSite {
+                        callee: std::ptr::from_ref(function.as_ref()) as usize,
+                        constructor,
+                        template,
+                    });
+                }
                 expressions.push(ResolvedExpr {
                     diagnostic: None,
                     kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                        function: Box::new(function),
+                        function,
                         argument: Box::new(argument),
                     }),
                     span,
@@ -13619,6 +14806,75 @@ impl Resolver<'_, '_> {
                         problem: "missing",
                     })
                 })?;
+                let mut matched = None;
+                if let Some(inputs) = self.syntax_inputs {
+                    for (index, site) in inputs.advance_sites.iter().enumerate() {
+                        self.type_work.charge(2).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                binding.span,
+                                "advance-site matching exceeded its work budget",
+                            )
+                        })?;
+                        if site.binding == std::ptr::from_ref(binding) as usize
+                            && matched.replace(index).is_some()
+                        {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                binding.span,
+                                "an advance binding was issued more than once",
+                            ));
+                        }
+                    }
+                }
+                if let Some(index) = matched {
+                    self.type_work.charge(3).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site tuple inspection exceeded its work budget",
+                        )
+                    })?;
+                    let ResolvedPatternKind::Tuple(elements) = &pattern.kind else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple pattern",
+                        ));
+                    };
+                    let [first, second] = elements.as_slice() else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding has the wrong tuple arity",
+                        ));
+                    };
+                    let (ResolvedPatternKind::Binder(first), ResolvedPatternKind::Binder(second)) =
+                        (&first.kind, &second.kind)
+                    else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple binders",
+                        ));
+                    };
+                    if first.id == second.id || self.advance_seen[index] {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding was duplicated",
+                        ));
+                    }
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site retention exceeded its work budget",
+                        )
+                    })?;
+                    self.advance_seen[index] = true;
+                    self.pending_advance_bindings.push([first.id, second.id]);
+                }
                 let pattern = ResolvedPatternOwner::new(pattern);
                 let annotation = binding
                     .annotation
@@ -14337,19 +15593,37 @@ impl Resolver<'_, '_> {
         match &expression.kind {
             SurfaceExprKind::SyntaxInvocation { name, captures } => {
                 if self.active_expansions >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
-                    let definition = self
-                        .syntax_expansion
-                        .as_ref()
-                        .and_then(|expansion| expansion.selected(name))
-                        .ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                expression.span,
-                                "the syntax expansion lost its selected definition",
-                            )
-                        })?
-                        .declaration
-                        .span;
+                    let definition = if crate::syntax::has_quoted_capture(captures) {
+                        self.syntax_expansion
+                            .as_deref_mut()
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the syntax expansion is unavailable",
+                                )
+                            })?
+                            .quoted_selection_span(name, captures, expression.span)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the quote budget was exhausted",
+                                )
+                            })?
+                    } else {
+                        self.syntax_expansion
+                            .as_ref()
+                            .and_then(|expansion| expansion.selected(name))
+                            .map(|selection| selection.declaration.span)
+                    }
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            expression.span,
+                            "the syntax expansion lost its selected definition",
+                        )
+                    })?;
                     let invocation = name.introduced_at.unwrap_or(expression.span);
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::InternalState,
@@ -14380,9 +15654,12 @@ impl Resolver<'_, '_> {
                     expansion.expand(name, captures, expression.span, &mut self.constraint_work);
                 self.syntax_expansion = Some(expansion);
                 let replacement = replacement.map_err(unsupported_syntax_template)?;
+                let previous_sites =
+                    std::mem::replace(&mut self.replacement_quote_sites, replacement.quote_sites);
                 self.active_expansions += 1;
-                let resolved = self.resolve_expr(&replacement);
+                let resolved = self.resolve_expr(&replacement.expression);
                 self.active_expansions -= 1;
+                self.replacement_quote_sites = previous_sites;
                 expressions.push(resolved?);
             }
             SurfaceExprKind::TemplateSplice(_) => {
@@ -14788,7 +16065,7 @@ impl Resolver<'_, '_> {
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
                 let context = name.qualifier().unwrap_or(member);
                 let lexical_key = (member.text.clone(), member.introduction);
-                if context.introduction != 0
+                let needs_syntax = context.introduction != 0
                     && (is_qualified
                         || (!self
                             .scopes
@@ -14799,13 +16076,19 @@ impl Resolver<'_, '_> {
                                 .lexical_constructor_scopes
                                 .iter()
                                 .rev()
-                                .any(|scope| scope.contains_key(&lexical_key))))
-                {
+                                .any(|scope| scope.contains_key(&lexical_key))));
+                let current_caller = if needs_syntax {
+                    self.is_current_caller_quote(context)?
+                } else {
+                    false
+                };
+                if needs_syntax && !current_caller {
                     self.retain_syntax_reference(name, crate::syntax::SyntaxNameNamespace::Term)?;
                 }
                 let (qualified_binding, qualified_constructor, qualified_withheld) =
                     if let SurfaceReference::Qualified(qualified) = name
                         && qualified.qualifier.introduction != 0
+                        && !current_caller
                     {
                         (
                             self.syntax_qualified_terms
@@ -14841,6 +16124,22 @@ impl Resolver<'_, '_> {
                     } else {
                         (None, None, None)
                     };
+                let current_file_binding = if current_caller && !is_qualified {
+                    self.type_work
+                        .charge(member.text.len().saturating_mul(2).saturating_add(1))
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                member.span,
+                                "caller quote file lookup exceeded its work budget",
+                            )
+                        })?;
+                    self.scopes
+                        .first()
+                        .and_then(|scope| scope.get(&(member.text.clone(), 0)).copied())
+                } else {
+                    None
+                };
                 let binding = if is_qualified {
                     qualified_binding
                 } else {
@@ -14854,8 +16153,9 @@ impl Resolver<'_, '_> {
                                 .get(&(member.text.clone(), member.introduction))
                                 .copied()
                         })
+                        .or(current_file_binding)
                         .or_else(|| {
-                            (member.introduction == 0)
+                            (member.introduction == 0 || current_caller)
                                 .then(|| self.method_names.get(&member.text).copied())
                                 .flatten()
                         })
@@ -14868,7 +16168,7 @@ impl Resolver<'_, '_> {
                         "inline lexical constructor lookup exceeded its type-work budget",
                     )?
                     .or_else(|| {
-                        if member.introduction != 0 {
+                        if member.introduction != 0 && !current_caller {
                             self.syntax_constructors
                                 .get(&(member.text.clone(), member.introduction))
                                 .copied()
@@ -14966,8 +16266,44 @@ impl Resolver<'_, '_> {
                 }
             }
             SurfaceExprKind::Apply(application) => {
+                let mut quote_site = None;
+                if !self.surface_quote_sites.is_empty() || !self.replacement_quote_sites.is_empty()
+                {
+                    let pointer = std::ptr::from_ref(application.function.as_ref()) as usize;
+                    let expansion = self.syntax_expansion.as_deref_mut().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            expression.span,
+                            "the quote budget was lost",
+                        )
+                    })?;
+                    let sites = self
+                        .surface_quote_sites
+                        .iter()
+                        .enumerate()
+                        .map(|(index, site)| (SurfaceQuoteSiteIndex::Module(index), site))
+                        .chain(self.replacement_quote_sites.iter().enumerate().map(
+                            |(index, site)| (SurfaceQuoteSiteIndex::Replacement(index), site),
+                        ));
+                    for (index, site) in sites {
+                        expansion
+                            .charge_quote_work(1, expression.span)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the quote budget was exhausted",
+                                )
+                            })?;
+                        if site.callee == pointer {
+                            quote_site = Some(index);
+                            break;
+                        }
+                    }
+                }
                 tasks.push(ResolveTask::FinishApplication {
                     span: expression.span,
+                    quote_site,
                 });
                 tasks.push(ResolveTask::VisitExpr(&application.argument));
                 tasks.push(ResolveTask::VisitExpr(&application.function));
@@ -15221,6 +16557,11 @@ impl Drop for PendingLexicalResolution<'_> {
     }
 }
 
+enum SurfaceQuoteSiteIndex {
+    Module(usize),
+    Replacement(usize),
+}
+
 enum ResolveTask<'a> {
     FinishResume {
         owner: ResumeId,
@@ -15323,6 +16664,7 @@ enum ResolveTask<'a> {
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
+        quote_site: Option<SurfaceQuoteSiteIndex>,
     },
     FinishBinary {
         kind: BinaryKind,
@@ -15509,6 +16851,28 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
+fn contextual_unknown_name(
+    reason: ResolveReason,
+    context: ResolveContext,
+    span: Span,
+    message: &str,
+    name: &SurfaceName,
+    frames: &[Arc<crate::syntax::ExpansionFrame>],
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "contextual name diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(ResolveReason::TypeResourceExhausted, span, RESOURCE_MESSAGE);
+    }
+    let found = match try_clone_resolution_string(&name.text, span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    diagnostic.found = Some(found);
+    ResolveError::new(diagnostic, Some(context)).with_name(name, frames)
+}
+
 pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
     lookup_error(
         ResolveContext::MissingExport,
@@ -15534,12 +16898,28 @@ pub(crate) fn unsupported_syntax_template(span: Span) -> ResolveError {
     )
 }
 
-pub(crate) fn duplicate_syntax_import(name: &SurfaceName) -> ResolveError {
-    error(
+pub(crate) fn duplicate_syntax_import(
+    name: &SurfaceName,
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "syntax import diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(
+            ResolveReason::TypeResourceExhausted,
+            name.span,
+            RESOURCE_MESSAGE,
+        );
+    }
+    let found = match try_clone_resolution_string(&name.text, name.span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(
         ResolveReason::ImportConflict,
-        name.span,
-        "this syntax spelling is already imported",
-    )
+        SourceLabel::new(name.span, "this syntax spelling is already imported"),
+    );
+    diagnostic.found = Some(found);
+    diagnostic.into()
 }
 
 fn lookup_error(
@@ -15566,7 +16946,8 @@ fn lookup_error(
         | ResolveContext::MissingFileScope
         | ResolveContext::MissingLexicalScope
         | ResolveContext::MissingNominalScope
-        | ResolveContext::MissingConstructorScope => ResolveReason::InternalState,
+        | ResolveContext::MissingConstructorScope
+        | ResolveContext::ForeignContract(_) => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -16117,127 +17498,225 @@ fn retain_free_type_name<'a>(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "free-name discovery keeps the reviewed omitted-global correction in one pass"
-)]
-fn collect_free_type_names<'a>(
-    root: &'a SurfaceType,
-    nominals: &HashMap<String, NominalTypeId>,
-    interfaces: &HashMap<String, InterfaceId>,
-    declared: &HashSet<&str>,
-    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
-    output: &mut Vec<FreeTypeName>,
-    reject_mixed_roles: bool,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), ResolveError> {
-    enum Task<'a> {
-        Visit(&'a SurfaceType),
-        Slice(std::slice::Iter<'a, SurfaceType>),
-        RowTail(&'a SurfaceName),
-    }
-
-    let mut work = vec![Task::Visit(root)];
-    while let Some(task) = work.pop() {
-        let ty = match task {
-            Task::Visit(ty) => ty,
-            Task::Slice(mut remaining) => {
-                if let Some(next) = remaining.next() {
-                    work.push(Task::Slice(remaining));
-                    work.push(Task::Visit(next));
-                }
-                continue;
-            }
-            Task::RowTail(tail) => {
-                budget.charge(1).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        tail.span,
-                        "free type discovery exceeded its work budget",
-                    )
-                })?;
-                retain_free_type_name(
-                    tail,
-                    FreeTypeNameRole::EffectRow,
-                    seen,
-                    output,
-                    reject_mixed_roles,
-                )?;
-                continue;
-            }
+impl Resolver<'_, '_> {
+    fn is_free_type_name(
+        &mut self,
+        reference: &SurfaceReference,
+        declared: &HashSet<&str>,
+    ) -> Result<bool, ResolveError> {
+        let SurfaceReference::Unqualified(name) = reference else {
+            return Ok(false);
         };
-        budget.charge(1).map_err(|()| {
+        if declared.contains(name.text.as_str()) {
+            return Ok(true);
+        }
+        if self.type_names.contains_key(&name.text) || self.interface_names.contains_key(&name.text)
+        {
+            return Ok(false);
+        }
+        if name.introduction == 0 {
+            return Ok(true);
+        }
+
+        let exhausted = || {
             error(
                 ResolveReason::TypeResourceExhausted,
-                ty.span,
-                "free type discovery exceeded its work budget",
+                name.span,
+                "contextual free type discovery exceeded its work budget",
             )
-        })?;
-        match &ty.kind {
-            SurfaceTypeKind::RowArgument(row) => {
-                if let Some(tail) = &row.tail {
-                    work.push(Task::RowTail(tail));
-                }
-                for effect in row.effects.iter().rev() {
-                    work.push(Task::Slice(effect.arguments.iter()));
-                }
-            }
-            SurfaceTypeKind::Named(name) => {
-                let SurfaceReference::Unqualified(name) = name else {
+        };
+        // Copy, hash, and compare the key before probing the authenticated facts.
+        self.type_work
+            .charge(name.text.len().saturating_mul(3).saturating_add(1))
+            .map_err(|()| exhausted())?;
+        let key = (name.text.clone(), name.introduction);
+        if self.syntax_nominals.contains_key(&key) {
+            return Ok(false);
+        }
+
+        self.type_work.charge(1).map_err(|()| exhausted())?;
+        let Some(inputs) = self.syntax_inputs else {
+            return Ok(true);
+        };
+        let Some(owner) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(true);
+        };
+        let Some(owner_index) = owner.owner else {
+            return Ok(true);
+        };
+        let checked = inputs.owners.get(owner_index);
+        let terms = inputs.terms.get(owner_index);
+
+        // This lookup sizes the existing retention route; it does not decide which
+        // owner or nominal is valid. The retention call below remains authoritative.
+        self.type_work
+            .charge(name.text.len().saturating_mul(2).saturating_add(1))
+            .map_err(|()| exhausted())?;
+        let original_len = terms
+            .and_then(|terms| terms.targeted_nominal(&name.text))
+            .map_or(0, |(_, original, _)| original.len());
+        let nominal_count = checked.map_or(0, |owner| owner.registry().nominals().len());
+        let route_count = checked.map_or(0, |owner| owner.direct_dependencies().len());
+        let diagnostic_copies = name.diagnostic.as_ref().map_or(0, |location| {
+            location
+                .related
+                .len()
+                .saturating_mul(3)
+                .saturating_add(location.frames.len().saturating_mul(2))
+                .saturating_add(6)
+        });
+
+        // Insertion may rehash every existing owned key. Charge the sizing scan
+        // before it starts, then charge key hashing and the grown table before the
+        // existing retention path can mutate the map.
+        let growth_work = if self.syntax_nominals.len() == self.syntax_nominals.capacity() {
+            let count = self.syntax_nominals.len();
+            self.type_work
+                .charge(
+                    self.syntax_nominals
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )
+                .map_err(|()| exhausted())?;
+            self.syntax_nominals.keys().fold(
+                count.saturating_add(1).saturating_mul(4),
+                |work, (text, _)| work.saturating_add(text.len()),
+            )
+        } else {
+            1
+        };
+        let retention_work = nominal_count
+            .saturating_mul(name.text.len().saturating_add(1))
+            .saturating_add(name.text.len().saturating_mul(8))
+            .saturating_add(original_len.saturating_mul(2))
+            .saturating_add(route_count)
+            .saturating_add(inputs.owners.len())
+            .saturating_add(diagnostic_copies)
+            .saturating_add(growth_work)
+            .saturating_add(8);
+        self.type_work
+            .charge(retention_work)
+            .map_err(|()| exhausted())?;
+        self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
+        Ok(!self.syntax_nominals.contains_key(&key))
+    }
+
+    fn collect_free_type_names<'a>(
+        &mut self,
+        root: &'a SurfaceType,
+        declared: &HashSet<&str>,
+        seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+        output: &mut Vec<FreeTypeName>,
+        reject_mixed_roles: bool,
+    ) -> Result<(), ResolveError> {
+        enum Task<'a> {
+            Visit(&'a SurfaceType),
+            Slice(std::slice::Iter<'a, SurfaceType>),
+            RowTail(&'a SurfaceName),
+        }
+
+        let mut work = vec![Task::Visit(root)];
+        while let Some(task) = work.pop() {
+            let ty = match task {
+                Task::Visit(ty) => ty,
+                Task::Slice(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        work.push(Task::Slice(remaining));
+                        work.push(Task::Visit(next));
+                    }
                     continue;
-                };
-                if declared.contains(name.text.as_str())
-                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text))
-                {
+                }
+                Task::RowTail(tail) => {
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            tail.span,
+                            "free type discovery exceeded its work budget",
+                        )
+                    })?;
                     retain_free_type_name(
-                        name,
-                        FreeTypeNameRole::Type,
+                        tail,
+                        FreeTypeNameRole::EffectRow,
                         seen,
                         output,
                         reject_mixed_roles,
                     )?;
+                    continue;
                 }
-            }
-            SurfaceTypeKind::Application {
-                constructor,
-                arguments,
-            } => {
-                if let SurfaceReference::Unqualified(constructor) = constructor
-                    && (declared.contains(constructor.text.as_str())
-                        || (!nominals.contains_key(&constructor.text)
-                            && !interfaces.contains_key(&constructor.text)))
-                {
-                    retain_free_type_name(
-                        constructor,
-                        FreeTypeNameRole::Type,
-                        seen,
-                        output,
-                        reject_mixed_roles,
-                    )?;
-                }
-                work.push(Task::Slice(arguments.iter()));
-            }
-            SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
-            SurfaceTypeKind::Function(function) => {
-                if let Some(effects) = &function.effects {
-                    if let Some(tail) = &effects.tail {
+            };
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    ty.span,
+                    "free type discovery exceeded its work budget",
+                )
+            })?;
+            match &ty.kind {
+                SurfaceTypeKind::RowArgument(row) => {
+                    if let Some(tail) = &row.tail {
                         work.push(Task::RowTail(tail));
                     }
-                    for effect in effects.effects.iter().rev() {
+                    for effect in row.effects.iter().rev() {
                         work.push(Task::Slice(effect.arguments.iter()));
                     }
                 }
-                work.push(Task::Visit(&function.codomain));
-                work.push(Task::Visit(&function.domain));
+                SurfaceTypeKind::Named(reference) => {
+                    if let SurfaceReference::Unqualified(name) = reference
+                        && self.is_free_type_name(reference, declared)?
+                    {
+                        retain_free_type_name(
+                            name,
+                            FreeTypeNameRole::Type,
+                            seen,
+                            output,
+                            reject_mixed_roles,
+                        )?;
+                    }
+                }
+                SurfaceTypeKind::Application {
+                    constructor,
+                    arguments,
+                } => {
+                    if let SurfaceReference::Unqualified(name) = constructor
+                        && self.is_free_type_name(constructor, declared)?
+                    {
+                        retain_free_type_name(
+                            name,
+                            FreeTypeNameRole::Type,
+                            seen,
+                            output,
+                            reject_mixed_roles,
+                        )?;
+                    }
+                    work.push(Task::Slice(arguments.iter()));
+                }
+                SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
+                SurfaceTypeKind::Function(function) => {
+                    if let Some(effects) = &function.effects {
+                        if let Some(tail) = &effects.tail {
+                            work.push(Task::RowTail(tail));
+                        }
+                        for effect in effects.effects.iter().rev() {
+                            work.push(Task::Slice(effect.arguments.iter()));
+                        }
+                    }
+                    work.push(Task::Visit(&function.codomain));
+                    work.push(Task::Visit(&function.domain));
+                }
+                SurfaceTypeKind::Bytes
+                | SurfaceTypeKind::String
+                | SurfaceTypeKind::Int
+                | SurfaceTypeKind::Bool
+                | SurfaceTypeKind::Unit => {}
             }
-            SurfaceTypeKind::Bytes
-            | SurfaceTypeKind::String
-            | SurfaceTypeKind::Int
-            | SurfaceTypeKind::Bool
-            | SurfaceTypeKind::Unit => {}
         }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -17405,6 +18884,438 @@ mod tests {
             ResolveReason::InternalState,
             "signature-only effects still require authenticated metadata"
         );
+    }
+
+    std::thread_local! {
+        static OBSERVED_CHECKED_CAPTURE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+        static OBSERVED_LATE_CHECKED_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn observe_late_checked_capture(
+        exported: &ExportedGlobal,
+        _owner: SyntaxOwnerLookup<'_>,
+        _span: Span,
+    ) {
+        if exported
+            .publication
+            .as_ref()
+            .is_some_and(|fact| fact.spelling == "value")
+        {
+            OBSERVED_LATE_CHECKED_CAPTURE.set(true);
+        }
+    }
+
+    fn observe_checked_capture(
+        exported: &ExportedGlobal,
+        owner: SyntaxOwnerLookup<'_>,
+        span: Span,
+    ) {
+        let Some(publication) = &exported.publication else {
+            return;
+        };
+        if publication.spelling != "is_first" {
+            return;
+        }
+        // Exercise the exact live checked owner and graph synchronously. Keeping
+        // any Arc beyond this callback would change their normal uniqueness.
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        let defining = owner
+            .graph
+            .iter()
+            .find(|checked| {
+                checked
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .any(|nominal| nominal.spelling == "QuoteHoles")
+            })
+            .expect("the checked graph retains the genuine quote owner");
+        let identity = defining
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "QuoteHoles")
+            .unwrap()
+            .id;
+        let original = defining.syntax_nominal_fact(identity).unwrap();
+        assert!(owner.owner.exports().nominal_fact(identity).is_none());
+        assert!(defining.exports().nominal_fact(identity).is_none());
+
+        let run = |limit, graph: &[Arc<crate::resolved::CheckedModule>]| {
+            let mut resolver = Resolver::with_budgets(
+                ModuleId::new(90_311),
+                TypeWorkBudget::with_limit(limit),
+                InterfaceConstraintBudget::with_limit(usize::MAX),
+            );
+            resolver.type_work.charge(17).unwrap();
+            let result = resolver.retain_imported_global_from_owner(
+                exported,
+                owner.owner.exports(),
+                span,
+                &mut CaptureGraphVisits::default(),
+                Some(SyntaxOwnerLookup {
+                    owner: owner.owner,
+                    graph,
+                }),
+            );
+            (result, resolver)
+        };
+
+        let (result, measured) = run(usize::MAX, owner.graph);
+        result.expect("the real capture closure is retained");
+        let used = measured.type_work.used();
+        assert!(used > 17);
+
+        // Observe every actually reached ordinary capture nominal whose fact
+        // must come from its checked owner, not just the known QuoteHoles ID.
+        let mut observed_work = TypeWorkBudget::unbounded();
+        let mut referenced = HashSet::new();
+        for ty in exported.capture.types(&mut observed_work).unwrap() {
+            crate::resolved::collect_nominal_identities(ty, &mut referenced, &mut observed_work)
+                .unwrap();
+        }
+        let mut checked_missing = HashSet::new();
+        for id in referenced {
+            if id.is_lexical()
+                || owner
+                    .owner
+                    .exports()
+                    .resource_by_family(id, &mut observed_work)
+                    .unwrap()
+                    .is_some()
+            {
+                continue;
+            }
+            let summary = if owner.owner.exports().nominal_fact(id).is_some() {
+                owner.owner.exports()
+            } else {
+                owner.nominal_summary(id).unwrap_or(owner.owner.exports())
+            };
+            if summary.nominal_fact(id).is_some() || owner.private_nominal(id).is_some() {
+                continue;
+            }
+            let checked = owner
+                .graph
+                .iter()
+                .find(|checked| checked.module() == id.module())
+                .expect("the reached ordinary nominal has its real checked module");
+            let fact = checked
+                .syntax_nominal_fact(id)
+                .expect("the exact checked nominal exists");
+            let retained = measured
+                .imported
+                .nominal(id)
+                .expect("the reached fact is retained");
+            assert_eq!(retained.id, id);
+            assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+            assert!(retained.constructors.is_empty());
+            assert_eq!(retained.declaration_kind, fact.declaration_kind);
+            assert_eq!(retained.parameter_count, fact.parameter_count);
+            assert_eq!(retained.constructor_count, fact.constructor_count);
+            assert_eq!(retained.parameters.as_ref(), fact.parameters);
+            assert_eq!(retained.representation.as_ref(), fact.representation);
+            assert_eq!(
+                retained.representation_provenance.as_ref(),
+                fact.representation_provenance
+            );
+            assert_eq!(retained.display_spelling.as_deref(), fact.display_spelling);
+            assert_eq!(retained.display_is_private, fact.display_is_private);
+            assert_eq!(&retained.origin, fact.origin);
+            assert!(!measured.type_names.values().any(|named| *named == id));
+            assert!(
+                fact.constructors
+                    .iter()
+                    .all(|constructor| measured.imported.constructor(*constructor).is_none())
+            );
+
+            assert_ne!(owner.owner.module(), id.module());
+            assert!(owner.private_nominal(id).is_none());
+            let mut ordinary = Resolver::new(ModuleId::new(90_312));
+            let refusal = ordinary.retain_type_nominals_with(
+                &Type::Nominal(id),
+                owner.owner.exports(),
+                span,
+                false,
+                Some(owner),
+            );
+            assert_eq!(refusal.unwrap_err().reason, ResolveReason::InternalState);
+            assert!(ordinary.imported.nominal(id).is_none());
+            checked_missing.insert(id);
+        }
+        assert!(checked_missing.contains(&identity));
+        eprintln!(
+            "actual checked capture missing nominal IDs: {}",
+            checked_missing.len()
+        );
+
+        // Exercise the checked-capture merge itself with the actual borrowed
+        // fact, including reached table growth and a conflicting origin.
+        let candidate = crate::resolved::ImportedNominalFactRef {
+            constructors: &[],
+            access: ImportedTypeAccess::Hidden,
+            ..original
+        };
+        let merge = |limit| {
+            let mut facts = ImportedFacts::default();
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let mut constraints = InterfaceConstraintBudget::with_limit(usize::MAX);
+            work.charge(17).unwrap();
+            let result = facts
+                .prepare_checked_capture_nominal_merge(candidate, &mut work, &mut constraints)
+                .and_then(|prepared| facts.commit_nominal_merge(prepared));
+            (result, facts, work.used())
+        };
+        let (merged, mut facts, merge_work) = merge(usize::MAX);
+        merged.expect("the actual hidden fact stages and commits");
+        assert!(merge_work > 19, "the reached table growth is charged");
+        assert_eq!(
+            facts.nominal(identity).unwrap().access,
+            ImportedTypeAccess::Hidden
+        );
+        let (short, untouched, _) = merge(merge_work - 1);
+        assert!(matches!(
+            short,
+            Err(ImportedNominalMergeFailure::TypeResource)
+        ));
+        assert!(untouched.nominal(identity).is_none());
+        for _ in 0..2 {
+            let (retry, exact, actual_work) = merge(merge_work);
+            retry.expect("an exact fresh retry commits the actual hidden fact");
+            assert_eq!(actual_work, merge_work);
+            assert_eq!(
+                exact.nominal(identity).unwrap().access,
+                ImportedTypeAccess::Hidden
+            );
+        }
+        let changed_origin = Origin::Source(span);
+        assert_ne!(candidate.origin, &changed_origin);
+        let conflicting = crate::resolved::ImportedNominalFactRef {
+            origin: &changed_origin,
+            ..candidate
+        };
+        let conflict = |facts: &mut ImportedFacts, limit| {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut constraints = InterfaceConstraintBudget::with_limit(limit);
+            let result = facts.prepare_checked_capture_nominal_merge(
+                conflicting,
+                &mut work,
+                &mut constraints,
+            );
+            (result.map(|_| ()), constraints.used())
+        };
+        let (failure, conflict_work) = conflict(&mut facts, usize::MAX);
+        assert!(matches!(
+            failure,
+            Err(ImportedNominalMergeFailure::Conflict)
+        ));
+        assert!(conflict_work > 0);
+        let (short, _) = conflict(&mut facts, conflict_work - 1);
+        assert!(matches!(
+            short,
+            Err(ImportedNominalMergeFailure::ConstraintResource)
+        ));
+        for _ in 0..2 {
+            let (failure, exact_work) = conflict(&mut facts, conflict_work);
+            assert!(matches!(
+                failure,
+                Err(ImportedNominalMergeFailure::Conflict)
+            ));
+            assert_eq!(exact_work, conflict_work);
+            assert_eq!(&facts.nominal(identity).unwrap().origin, original.origin);
+        }
+
+        let retained = measured.imported.nominal(identity).unwrap();
+        assert_eq!(retained.id, identity);
+        assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+        assert!(retained.constructors.is_empty());
+        assert_eq!(retained.declaration_kind, original.declaration_kind);
+        assert_eq!(retained.parameter_count, original.parameter_count);
+        assert_eq!(retained.constructor_count, original.constructor_count);
+        assert_eq!(retained.parameters.as_ref(), original.parameters);
+        assert_eq!(retained.representation.as_ref(), original.representation);
+        assert_eq!(
+            retained.representation_provenance.as_ref(),
+            original.representation_provenance
+        );
+        assert_eq!(
+            retained.display_spelling.as_deref(),
+            original.display_spelling
+        );
+        assert_eq!(retained.display_is_private, original.display_is_private);
+        assert_eq!(&retained.origin, original.origin);
+        assert!(!measured.type_names.contains_key("QuoteHoles"));
+        assert!(measured.syntax_nominals.is_empty());
+        assert!(
+            original
+                .constructors
+                .iter()
+                .all(|id| measured.imported.constructor(*id).is_none())
+        );
+
+        let (short, _) = run(used - 1, owner.graph);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (exact, resolver) = run(used, owner.graph);
+            exact.expect("a fresh exact-work replay retains the same checked fact");
+            assert_eq!(resolver.type_work.used(), used);
+            assert_eq!(
+                resolver.imported.nominal(identity).unwrap().access,
+                ImportedTypeAccess::Hidden
+            );
+        }
+        {
+            let missing = owner
+                .graph
+                .iter()
+                .filter(|checked| checked.module() != defining.module())
+                .cloned()
+                .collect::<Vec<_>>();
+            let (missing_result, _) = run(usize::MAX, &missing);
+            assert_eq!(
+                missing_result.unwrap_err().reason,
+                ResolveReason::InternalState
+            );
+        }
+        let repeat = |limit| {
+            let (first, mut resolver) = run(usize::MAX, owner.graph);
+            first.expect("the initial real helper route is retained");
+            resolver.type_work = TypeWorkBudget::with_limit(limit);
+            resolver.type_work.charge(17).unwrap();
+            let result = resolver.retain_imported_global_from_owner(
+                exported,
+                owner.owner.exports(),
+                span,
+                &mut CaptureGraphVisits::default(),
+                Some(owner),
+            );
+            (result, resolver)
+        };
+        let (again, repeated) = repeat(usize::MAX);
+        again.expect("the repeated actual helper route retains equal metadata");
+        let repeated_work = repeated.type_work.used();
+        assert!(repeated_work > 17);
+        let (short, _) = repeat(repeated_work - 1);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (exact, resolver) = repeat(repeated_work);
+            exact.expect("fresh exact retries retain the same repeated checked helper");
+            assert_eq!(resolver.type_work.used(), repeated_work);
+        }
+        OBSERVED_CHECKED_CAPTURE_WORK.set(Some(used));
+    }
+
+    #[test]
+    fn checked_helper_capture_retains_actual_hidden_nominal_with_shared_work() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+
+        OBSERVED_CHECKED_CAPTURE_WORK.set(None);
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_checked_capture)));
+        let compiled = compile_path(RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/generators/main.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .expect("the original checked generator graph compiles");
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        assert!(
+            OBSERVED_CHECKED_CAPTURE_WORK.get().is_some(),
+            "the actual checked private helper was reached"
+        );
+    }
+
+    #[test]
+    fn checked_capture_then_late_resolution_failure_publishes_no_caller() {
+        const ENTRY: &str =
+            "import dependency (value)\nmain : Unit -> Int\nmain () = missing(())\n";
+        let fixture =
+            ImportBudgetFixture::create(ENTRY, "pub value : Unit -> Int\nvalue () = 42\n");
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|owner| owner.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut binding_work = TypeWorkBudget::unbounded();
+        let terms = checked
+            .iter()
+            .map(|owner| {
+                crate::syntax::SyntaxOwnerBindings::new(
+                    owner,
+                    graph.module(owner.module()).unwrap(),
+                    &checked,
+                    &mut binding_work,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| owner.exports().term("value").is_some())
+            .unwrap();
+        let owner = &checked[owner_index];
+        let usage = crate::syntax::SyntaxNameUse {
+            name: SurfaceName {
+                text: "value".into(),
+                span: owner.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            },
+            qualifier: None,
+            namespace: crate::syntax::SyntaxNameNamespace::Term,
+            owner: owner_index,
+            declaration: owner.span(),
+            import_span: entry
+                .dependencies()
+                .iter()
+                .find(|edge| edge.target() == owner.module())
+                .unwrap()
+                .import_span(),
+        };
+        OBSERVED_LATE_CHECKED_CAPTURE.set(false);
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_late_checked_capture)));
+        let result = resolve_module_with_syntax(
+            entry,
+            &dependencies,
+            &mut TypeWorkBudget::unbounded(),
+            &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+            &[usage],
+            &checked,
+            &terms,
+            None,
+        );
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        assert!(OBSERVED_LATE_CHECKED_CAPTURE.get());
+        let Err(ResolveModuleError::Resolution(failure)) = result else {
+            panic!("the later missing caller name must prevent a completed module");
+        };
+        assert_eq!(failure.reason, ResolveReason::UnknownName);
+        let missing = ENTRY.find("missing").unwrap() as u32;
+        assert_eq!(failure.primary.span().range().start(), missing);
+        assert_eq!(failure.primary.span().range().end(), missing + 7);
     }
 
     #[test]
@@ -18896,6 +20807,196 @@ mod tests {
         }
     }
 
+    fn resolve_coordinate_fixture(
+        graph: &crate::module::ModuleGraph,
+        loaded: &LoadedModule,
+    ) -> ResolvedModule {
+        let checked = checked_import_dependencies(graph);
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("fixture dependency should be checked")
+                        .exports(),
+                )
+                .expect("fixture dependency should match its edge")
+            })
+            .collect::<Vec<_>>();
+        resolve_module(loaded, &dependencies).expect("the effect fixture should resolve")
+    }
+
+    #[test]
+    fn admitted_effect_coordinates_keep_slots_anchors_and_current_fact_checks() {
+        let fixture = ImportBudgetFixture::create(
+            "effect First {\n    first : Unit -> Unit\n}\neffect Second {\n    second : Unit -> Unit\n}\n",
+            "",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let loaded = graph.module(graph.entry()).unwrap();
+        let mut resolver = Resolver::with_type_work(loaded.id(), TypeWorkBudget::default());
+        let sources = resolver.effect_sources(loaded.surface()).unwrap();
+        let source = loaded.retained_source();
+        let strong = Arc::strong_count(source);
+        let build = |work: &mut TypeWorkBudget| {
+            crate::core::validate::AdmittedEffectCoordinates::from_admitted(loaded, &sources, work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        let coordinates = build(&mut measured).unwrap();
+        let total = measured.used();
+        assert_eq!(Arc::strong_count(source), strong);
+
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                build(&mut short).unwrap_err().reason(),
+                crate::core::ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                exact.charge(prefix).unwrap();
+                let retry = build(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + total);
+                drop(retry);
+            }
+        }
+        assert_eq!(Arc::strong_count(source), strong);
+
+        let resolved = resolve_coordinate_fixture(&graph, loaded);
+        let [first, second] = resolved.effects() else {
+            panic!("two effects")
+        };
+        for effect in [first, second] {
+            coordinates
+                .authenticate_effect(loaded.id(), source, effect, &mut TypeWorkBudget::default())
+                .unwrap();
+        }
+        for (effect, replacement) in [(first, second), (second, first)] {
+            let mut permuted = effect.clone();
+            permuted.id = replacement.id;
+            permuted.operations[0].id = crate::types::OperationId::new(replacement.id, 0);
+            assert_eq!(
+                coordinates
+                    .authenticate_effect(
+                        loaded.id(),
+                        source,
+                        &permuted,
+                        &mut TypeWorkBudget::default()
+                    )
+                    .unwrap_err()
+                    .reason(),
+                crate::core::ValidationReason::Registry,
+            );
+        }
+        for mutation in 0..3 {
+            let mut current = first.clone();
+            match mutation {
+                0 => current.spelling = second.spelling.clone(),
+                1 => current.span = second.span,
+                _ => current.origin = second.origin.clone(),
+            }
+            assert_eq!(
+                coordinates
+                    .authenticate_effect(
+                        loaded.id(),
+                        source,
+                        &current,
+                        &mut TypeWorkBudget::default()
+                    )
+                    .unwrap_err()
+                    .reason(),
+                crate::core::ValidationReason::Registry,
+            );
+        }
+        let copied_source = Arc::new(loaded.source().clone());
+        assert_eq!(copied_source.id(), source.id());
+        assert_eq!(
+            coordinates
+                .authenticate_effect(
+                    loaded.id(),
+                    &copied_source,
+                    first,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+        assert_eq!(
+            coordinates
+                .authenticate_effect(
+                    ModuleId::new(u32::MAX - 1),
+                    source,
+                    first,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+    }
+
+    #[test]
+    fn admitted_effect_coordinates_preserve_interleaved_native_slots() {
+        let fixture = ImportBudgetFixture::create(
+            "effect Before {\n    request : Unit -> Unit\n}\n\
+             foreign library First {\n    profile \"x86_64-unknown-linux-gnu\"\n\
+             symbol Stop : Unit -> Unit { name \"stop\" }\n}\n\
+             effect After {\n    request : Unit -> Unit\n}\n",
+            "",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let loaded = graph.module(graph.entry()).unwrap();
+        let mut resolver = Resolver::with_type_work(loaded.id(), TypeWorkBudget::default());
+        let sources = resolver.effect_sources(loaded.surface()).unwrap();
+        assert!(matches!(
+            sources.as_slice(),
+            [
+                EffectSource::Ordinary(_),
+                EffectSource::Foreign { .. },
+                EffectSource::Ordinary(_),
+            ]
+        ));
+        let record = crate::core::validate::AdmittedEffectCoordinates::from_admitted(
+            loaded,
+            &sources,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let resolved = resolve_coordinate_fixture(&graph, loaded);
+        let [before, native, after] = resolved.effects() else {
+            panic!("three effects")
+        };
+        assert_eq!(after.id, EffectId::new(loaded.id(), 2));
+        for effect in [before, after] {
+            record
+                .authenticate_effect(
+                    loaded.id(),
+                    loaded.retained_source(),
+                    effect,
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            record
+                .authenticate_effect(
+                    loaded.id(),
+                    loaded.retained_source(),
+                    native,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry,
+        );
+    }
+
     fn resolve_import_fixture_with_limit(
         entry: &str,
         limit: usize,
@@ -18992,6 +21093,15 @@ mod tests {
         dependency: &str,
         limit: usize,
     ) -> (Result<ResolvedModule, ResolveError>, usize) {
+        resolve_import_fixture_with_type_prefix(entry, dependency, limit, 0)
+    }
+
+    fn resolve_import_fixture_with_type_prefix(
+        entry: &str,
+        dependency: &str,
+        limit: usize,
+        prefix: usize,
+    ) -> (Result<ResolvedModule, ResolveError>, usize) {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
@@ -19015,6 +21125,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
+        type_work.charge(prefix).expect("the fixture prefix fits");
         let mut constraint_work = InterfaceConstraintBudget::default();
         let result = resolve_module_names_with_budget(
             entry,
@@ -19772,14 +21883,27 @@ mod tests {
         private.expect("the private name import should establish the staging baseline");
 
         let exact_limit = private_used + 2;
+        // The private baseline includes the later two-cell effect provenance
+        // record. Leave those cells out when cutting the candidate itself.
         let (short, short_used) =
-            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 3);
         let error = short.expect_err(
             "one missing candidate-order unit should reject resolution before summary freeze",
         );
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range().start(), 23);
-        assert_eq!(short_used, private_used);
+        assert_eq!(short_used, private_used - 2);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
@@ -19801,7 +21925,7 @@ mod tests {
         let (opaque_short, opaque_short_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
             OPAQUE_DEPENDENCY,
-            opaque_exact_limit - 1,
+            opaque_exact_limit - 3,
         );
         let error = opaque_short
             .expect_err("the opaque-family withheld entry should exhaust candidate staging");
@@ -19811,7 +21935,21 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(error.primary.span().range().start(), 23);
-        assert_eq!(opaque_short_used, private_opaque_used + 3);
+        assert_eq!(opaque_short_used, private_opaque_used + 1);
+
+        let (opaque_late, opaque_late_used) = resolve_import_fixture_with_type_limit(
+            PUBLIC_OPAQUE,
+            OPAQUE_DEPENDENCY,
+            opaque_exact_limit - 1,
+        );
+        let error = opaque_late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(opaque_late_used, opaque_exact_limit - 2);
 
         let (opaque_exact, opaque_exact_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
@@ -19855,8 +21993,8 @@ mod tests {
         private_result.expect("the private wide import should establish the staging baseline");
 
         let exact_limit = private_used + ALIAS_COUNT * 2;
-        let (short, _) =
-            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 1);
+        let (short, short_used) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 3);
         let error = short.expect_err("the final public alias should exhaust candidate staging");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(
@@ -19866,6 +22004,18 @@ mod tests {
                 .rfind("answer")
                 .expect("the last selector should exist"),
         );
+        assert_eq!(short_used, exact_limit - 4);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit);
@@ -19893,6 +22043,7 @@ mod tests {
             resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, TYPE_WORK_LIMIT);
         result.expect("the passive void symbol must resolve without a native binding");
         let mut binding_cutoffs = 0;
+        let mut origin_cutoffs = 0;
         for limit in 0..exact_work {
             let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, limit);
             let failure =
@@ -19906,17 +22057,79 @@ mod tests {
             binding_cutoffs += usize::from(
                 failure.primary.message() == "foreign symbol binding exceeded its work budget",
             );
+            origin_cutoffs += usize::from(
+                failure.primary.message()
+                    == "foreign operation origin exceeded its type-work budget",
+            );
         }
         assert!(
             binding_cutoffs > 0,
             "the cutoffs must reach the actual symbol binder"
         );
-        for _ in 0..2 {
-            let (result, used) =
-                resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, exact_work);
-            result.expect("the exact foreign resolution allowance must retry");
-            assert_eq!(used, exact_work);
+        assert!(
+            origin_cutoffs > 0,
+            "the cutoffs must reach the actual foreign origin producer"
+        );
+        for prefix in [0, 17] {
+            let (short, used) = resolve_import_fixture_with_type_prefix(
+                ENTRY,
+                DEPENDENCY,
+                prefix + exact_work - 1,
+                prefix,
+            );
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert!(used < prefix + exact_work);
+            for _ in 0..2 {
+                let (result, used) = resolve_import_fixture_with_type_prefix(
+                    ENTRY,
+                    DEPENDENCY,
+                    prefix + exact_work,
+                    prefix,
+                );
+                result.expect("the exact foreign resolution allowance must retry");
+                assert_eq!(used, prefix + exact_work);
+            }
         }
+    }
+
+    #[test]
+    fn introduced_foreign_operation_without_invocation_is_refused() {
+        let mut surface = declaration_fixture(
+            "foreign-missing-invocation.ash",
+            "foreign library Fixture {\nprofile \"x86_64-unknown-linux-gnu\"\nsymbol Make : Unit -> Unit { name \"fixture_make\" }\n}\n",
+        );
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        let identities = {
+            let sources = resolver.effect_sources(&surface).unwrap();
+            resolver.install_effect_identities(&sources).unwrap()
+        };
+        let symbol = surface.foreign_libraries[0]
+            .members
+            .iter_mut()
+            .find_map(|member| {
+                if let crate::surface::SurfaceForeignMember::Symbol(symbol) = member {
+                    Some(symbol)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        symbol.name.introduction = 1;
+        symbol.name.introduced_at = None;
+        let sources = resolver.effect_sources(&surface).unwrap();
+        let failure = resolver
+            .resolve_effect_declarations(&sources, identities, vec![Vec::new()], surface.span)
+            .unwrap_err();
+        assert_eq!(failure.reason, ResolveReason::InternalState);
+        assert_eq!(
+            failure.primary.message(),
+            "introduced foreign symbol has no invocation origin"
+        );
+        assert!(resolver.type_scopes.is_empty());
+        assert!(resolver.syntax_type_scopes.is_empty());
     }
 
     #[test]
@@ -19942,7 +22155,7 @@ mod tests {
 
         let exact_limit = private_used + RETAINED_CANDIDATE_WORK + 2 * WITHHELD_ENTRY_COUNT;
         let (short, short_used) =
-            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 3);
         let error =
             short.expect_err("the second complete withheld-order scan should fail atomically");
         assert_eq!(
@@ -19961,7 +22174,18 @@ mod tests {
                 .find("Token as SecondToken")
                 .expect("the repeated selector should exist"),
         );
-        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 6 + 2,);
+        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 6);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
@@ -21476,6 +23700,904 @@ mod tests {
         project_module(&source, &tree).expect("the declaration fixture should project")
     }
 
+    fn staged_module_constructor_fixture() -> (SurfaceModule, Vec<crate::syntax::SyntaxOwner>) {
+        use crate::parser::{
+            finish_module_from_checkpoint_with_syntax, parse_module_header,
+            project_declaration_expansions, project_module_retaining_templates,
+        };
+        use crate::syntax::SelectedSyntax;
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new(
+            "constructor-forms.ash",
+            concat!(
+                "pub syntax declaration: (spawn) => {\n",
+                "type Generated = Generated\n",
+                "newtype Wrapped = Wrapped(Int)\n",
+                "type Several =\n",
+                "First\n",
+                "| Second\n",
+                "| Third\n",
+                "| Fourth\n",
+                "type Generic<A> = Generic(A)\n",
+                "probe : Unit -> Int\n",
+                "probe () = match Generated {\n",
+                "Generated => 42\n",
+                "}\n",
+                "wrapped : Unit -> Int\n",
+                "wrapped () = match Wrapped(42) {\n",
+                "Wrapped(value) => value\n",
+                "}\n",
+                "shadow : Unit -> Int\n",
+                "shadow () = {\n",
+                "newtype Generated = Generated(Int)\n",
+                "let item : Generated = Generated(42)\n",
+                "match item {\n",
+                "Generated(value) => value\n",
+                "}\n",
+                "}\n",
+                "bad : Unit -> Int\n",
+                "bad () = {\n",
+                "newtype Generated = Generated(Int)\n",
+                "Missing\n",
+                "}\n",
+                "identity : Generated -> Generated\n",
+                "identity value = value\n",
+                "generic_identity : Generic<Int> -> Generic<Int>\n",
+                "generic_identity value = value\n",
+                "parametric<Generated> : Generated -> Generated\n",
+                "parametric value = value\n",
+                "higher<Generic : Type -> Type> : Generic<Int> -> Generic<Int>\n",
+                "higher value = value\n",
+                "}\n",
+                "pub syntax declaration: (other) => {\n",
+                "type Other = Other\n",
+                "}\n",
+                "pub syntax declaration: (nominal_only) $ctor:ident => {\n",
+                "type Standalone = $ctor\n",
+                "}\n",
+                "pub syntax declaration: (constructor_only) $tname:ident => {\n",
+                "type $tname = Distinct\n",
+                "}\n",
+            ),
+        )
+        .unwrap();
+        let tree = parse(lex(&forms).unwrap());
+        let selected: Vec<_> = project_module_retaining_templates(&forms, &tree)
+            .expect("the definition templates should project")
+            .syntax_declarations
+            .into_iter()
+            .map(|declaration| SelectedSyntax {
+                name: declaration.name.text.clone(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            })
+            .collect();
+        let caller = SourceFile::new(
+            "constructor-caller.ash",
+            "spawn\nother\nnominal_only Captured\nconstructor_only Authored\n",
+        )
+        .unwrap();
+        let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) =
+            finish_module_from_checkpoint_with_syntax(checkpoint, budget, Some(&caller), &selected);
+        assert!(tree.parse_diagnostics().is_empty());
+        let mut owners = Vec::new();
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut owners,
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .expect("the actual declaration stager should emit the fixture");
+        (module, owners)
+    }
+
+    fn staged_diagnostic_fixture(
+        template: &str,
+        invocation: &str,
+    ) -> (SurfaceModule, SourceFile, SourceFile) {
+        use crate::parser::{
+            finish_module_from_checkpoint_with_syntax, parse_module_header,
+            project_declaration_expansions, project_module_retaining_templates,
+        };
+        use crate::syntax::SelectedSyntax;
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new("diagnostic-forms.ash", template).unwrap();
+        let tree = parse(lex(&forms).unwrap());
+        let selected: Vec<_> = project_module_retaining_templates(&forms, &tree)
+            .unwrap()
+            .syntax_declarations
+            .into_iter()
+            .map(|declaration| SelectedSyntax {
+                name: declaration.name.text.clone(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            })
+            .collect();
+        let caller = SourceFile::new("diagnostic-caller.ash", invocation).unwrap();
+        let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) =
+            finish_module_from_checkpoint_with_syntax(checkpoint, budget, Some(&caller), &selected);
+        assert!(tree.parse_diagnostics().is_empty());
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut Vec::new(),
+            &mut SyntaxBudget::default(),
+            None,
+        )
+        .unwrap();
+        (module, forms, caller)
+    }
+
+    #[test]
+    fn diagnostic_location_copy_is_paid_flat_and_drops_retained_frames() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin};
+        let source = SourceFile::new("location-work.ash", "source").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut location = DiagnosticLocation::new(MacroOrigin::Combined {
+            inputs: Arc::from([MacroOrigin::Source(span)]),
+            frame: Arc::clone(&frame),
+            span_count: 1,
+            depth: 1,
+        });
+        location.related.push(MacroOrigin::Source(span));
+        location.add_frame(&frame);
+        location.add_frame(&frame);
+        assert_eq!(location.frames.len(), 1);
+        let original_count = Arc::strong_count(&frame);
+        let mut absent = TypeWorkBudget::with_limit(0);
+        prepay_diagnostic_location(&mut absent, None, span).unwrap();
+        assert_eq!(absent.used(), 0);
+
+        const COPY_WORK: usize = 9;
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + COPY_WORK - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                prepay_diagnostic_location(&mut short, Some(&location), span)
+                    .unwrap_err()
+                    .reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(Arc::strong_count(&frame), original_count);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + COPY_WORK);
+                exact.charge(prefix).unwrap();
+                prepay_diagnostic_location(&mut exact, Some(&location), span).unwrap();
+                assert_eq!(exact.used(), prefix + COPY_WORK);
+                let label = SourceLabel::new(span, "original input")
+                    .with_location_preserving_span(Some(&location));
+                assert_eq!(label.span(), span);
+                assert_eq!(Arc::strong_count(&frame), original_count + 2);
+                drop(label);
+                assert_eq!(Arc::strong_count(&frame), original_count);
+            }
+        }
+        if let MacroOrigin::Combined { depth, .. } = &mut location.primary {
+            *depth = crate::parser::STRUCTURAL_DEPTH_LIMIT;
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        assert_eq!(
+            prepay_diagnostic_location(&mut work, Some(&location), span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(Arc::strong_count(&frame), original_count);
+    }
+
+    #[test]
+    fn contextual_unknown_lookup_forms_keep_name_scope_and_paid_retries() {
+        let (surface, _) = staged_module_constructor_fixture();
+        let member = surface.type_declarations[0].name.clone();
+        let qualifier = surface.type_declarations[4].name.clone();
+        assert_ne!(member.introduction, 0);
+        assert_ne!(qualifier.introduction, 0);
+        let references = [
+            SurfaceReference::Unqualified(member.clone()),
+            SurfaceReference::Qualified(crate::surface::SurfaceQualifiedName {
+                span: member.span,
+                qualifier,
+                member: member.clone(),
+            }),
+        ];
+        for reference in &references {
+            for constructor in [false, true] {
+                let run = |limit: usize, prefix: usize| {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(7_104),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    resolver.type_work.charge(prefix).unwrap();
+                    let failure = if constructor {
+                        resolver.constructor_reference(reference).unwrap_err()
+                    } else {
+                        resolver.nominal_reference(reference).unwrap_err()
+                    };
+                    (failure, resolver.type_work.used())
+                };
+                let (failure, work) = run(usize::MAX, 0);
+                let expected = if constructor {
+                    ResolveReason::UnknownConstructor
+                } else {
+                    ResolveReason::UnknownType
+                };
+                assert_eq!(failure.reason, expected);
+                assert_eq!(failure.found.as_deref(), Some(member.text.as_str()));
+                assert_eq!(
+                    failure.lookup_scope_name(),
+                    Some(if constructor { "constructor" } else { "type" })
+                );
+                let mut stripped = reference.clone();
+                match &mut stripped {
+                    SurfaceReference::Unqualified(name) => name.diagnostic = None,
+                    SurfaceReference::Qualified(name) => name.member.diagnostic = None,
+                }
+                let mut ordinary = Resolver::new(ModuleId::new(7_104));
+                let unchanged = if constructor {
+                    ordinary.constructor_reference(&stripped).unwrap_err()
+                } else {
+                    ordinary.nominal_reference(&stripped).unwrap_err()
+                };
+                assert_eq!(unchanged.reason, failure.reason);
+                assert_eq!(unchanged.found, failure.found);
+                assert_eq!(unchanged.lookup_scope_name(), failure.lookup_scope_name());
+                assert_eq!(unchanged.primary.span(), failure.primary.span());
+                assert!(work >= member.text.len());
+                for prefix in [0, 7] {
+                    let (short, _) = run(prefix + work - 1, prefix);
+                    assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                    for _ in 0..2 {
+                        let (retry, used) = run(prefix + work, prefix);
+                        assert_eq!(retry.reason, expected);
+                        assert_eq!(retry.found.as_deref(), Some(member.text.as_str()));
+                        assert_eq!(used, prefix + work);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_diagnostic_labels_preserve_sources_and_retry_paid_failures() {
+        use crate::presentation::{PresentationError, compile_resolve_diagnostic, write_json};
+
+        let fixtures = [
+            (
+                "pub syntax declaration: (ops) $name:ident first $first:ident second $second:ident => {\n    pub effect $name {\n        $first : Unit -> Int\n        $second : Unit -> Int\n    }\n}\n",
+                "ops Ask first ask second ask\n",
+                ResolveReason::DuplicateGlobal,
+            ),
+            (
+                "pub syntax declaration: (box) $name:ident constructor $ctor:ident => {\n    pub newtype $name = $ctor(Int)\n}\n",
+                "box Box constructor Wrap\n",
+                ResolveReason::NewtypeConstructorName,
+            ),
+            (
+                "pub syntax declaration: (foreign) $name:ident symbol $symbol:ident => {\n    pub foreign library $name {\n        symbol $symbol : Unit -> Unit { name \"stop\" }\n    }\n}\n",
+                "foreign Fixture symbol Stop\n",
+                ResolveReason::ForeignContract,
+            ),
+        ];
+        for (index, (template, invocation, expected)) in fixtures.into_iter().enumerate() {
+            let (surface, forms, caller) = staged_diagnostic_fixture(template, invocation);
+            let original = match index {
+                0 => &surface.effects[0].operations[1].name,
+                1 => &surface.type_declarations[0].constructors[0].name,
+                _ => &surface.foreign_libraries[0].name,
+            };
+            let frame = Arc::clone(&original.diagnostic.as_ref().unwrap().frames[0]);
+            let base_count = Arc::strong_count(&frame);
+            let run = |limit: usize, prefix: usize| {
+                let mut resolver = Resolver::with_type_work(
+                    ModuleId::new(7_105),
+                    TypeWorkBudget::with_limit(limit),
+                );
+                resolver.type_work.charge(prefix).unwrap();
+                let failure = match index {
+                    0 => resolver.validate_local_namespaces(&surface).unwrap_err(),
+                    1 => validate_newtype_shape(
+                        &surface.type_declarations[0],
+                        &mut resolver.type_work,
+                    )
+                    .unwrap_err(),
+                    _ => match resolver.prepare_source_foreign(&surface) {
+                        Ok(_) => panic!("the missing profile must fail"),
+                        Err(failure) => failure,
+                    },
+                };
+                (failure, resolver.type_work.used())
+            };
+            let (failure, work) = run(usize::MAX, 0);
+            assert_eq!(failure.reason, expected);
+            let primary_span = if index == 2 {
+                surface.foreign_libraries[0].span
+            } else {
+                original.span
+            };
+            assert_eq!(failure.primary.span(), primary_span);
+            assert!(failure.primary.diagnostic_location().is_some());
+            assert!(Arc::strong_count(&frame) > base_count);
+            let view = compile_resolve_diagnostic(&failure, &[&forms, &caller]).unwrap();
+            let mut encoded = Vec::new();
+            write_json(&mut encoded, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            let labels = json["labels"].as_array().unwrap();
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == "syntax_invocation")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == "syntax_definition")
+                    .count(),
+                1
+            );
+            assert!(matches!(
+                compile_resolve_diagnostic(&failure, &[&caller]),
+                Err(PresentationError::MissingSource)
+            ));
+            drop(view);
+            let mut stripped = surface.clone();
+            match index {
+                0 => stripped.effects[0].operations[1].name.diagnostic = None,
+                1 => {
+                    stripped.type_declarations[0].constructors[0]
+                        .name
+                        .diagnostic = None
+                }
+                _ => stripped.foreign_libraries[0].name.diagnostic = None,
+            }
+            let mut ordinary = Resolver::new(ModuleId::new(7_105));
+            let unchanged = match index {
+                0 => ordinary.validate_local_namespaces(&stripped).unwrap_err(),
+                1 => {
+                    validate_newtype_shape(&stripped.type_declarations[0], &mut ordinary.type_work)
+                        .unwrap_err()
+                }
+                _ => match ordinary.prepare_source_foreign(&stripped) {
+                    Ok(_) => panic!("the missing profile must fail"),
+                    Err(failure) => failure,
+                },
+            };
+            assert_eq!(unchanged.reason, failure.reason);
+            assert_eq!(unchanged.primary.span(), failure.primary.span());
+            assert_eq!(unchanged.expected, failure.expected);
+            assert_eq!(unchanged.found, failure.found);
+            assert_eq!(
+                unchanged.foreign_contract_cause(),
+                failure.foreign_contract_cause()
+            );
+            assert_eq!(
+                unchanged
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>(),
+                failure
+                    .related
+                    .iter()
+                    .map(|label| label.span())
+                    .collect::<Vec<_>>()
+            );
+            assert!(unchanged.primary.diagnostic_location().is_none());
+            drop(unchanged);
+            drop(stripped);
+            drop(failure);
+            assert_eq!(Arc::strong_count(&frame), base_count);
+            for prefix in [0, 11] {
+                let (short, _) = run(prefix + work - 1, prefix);
+                assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+                drop(short);
+                assert_eq!(Arc::strong_count(&frame), base_count);
+                for _ in 0..2 {
+                    let (retry, used) = run(prefix + work, prefix);
+                    assert_eq!(retry.reason, expected);
+                    assert_eq!(retry.primary.span(), primary_span);
+                    assert_eq!(used, prefix + work);
+                    drop(retry);
+                    assert_eq!(Arc::strong_count(&frame), base_count);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_untagged_and_resource_failures_keep_existing_classification() {
+        let surface = declaration_fixture(
+            "foreign-untagged.ash",
+            "foreign library Fixture {\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Stop : Unit -> Unit { name \"\" }\n}\n",
+        );
+        let run = |limit| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(7_106), TypeWorkBudget::with_limit(limit));
+            match resolver.prepare_source_foreign(&surface) {
+                Ok(_) => panic!("the invalid native name must fail"),
+                Err(failure) => failure,
+            }
+        };
+        let failure = run(usize::MAX);
+        assert_eq!(failure.reason, ResolveReason::ForeignContract);
+        assert_eq!(failure.foreign_contract_cause(), None);
+        assert!(failure.primary.diagnostic_location().is_none());
+        let short = run(0);
+        assert_eq!(short.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.foreign_contract_cause(), None);
+    }
+
+    #[test]
+    fn introduced_module_constructors_resolve_actual_staged_ids_and_restore_scopes() {
+        let (surface, owners) = staged_module_constructor_fixture();
+        let mut resolver = Resolver::new(ModuleId::new(7_101));
+        let identities = resolver
+            .install_nominal_identities(&surface.type_declarations)
+            .expect("staged declarations install their original IDs");
+        assert_eq!(identities.len(), 7);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
+
+        for (declaration, identity) in surface.type_declarations.iter().zip(&identities) {
+            let name = &declaration.name;
+            assert_eq!(resolver.type_names.get(&name.text), Some(&identity.id));
+            if name.introduction != 0 {
+                assert_eq!(owners[name.introduction - 1].owner, Some(0));
+                assert_eq!(
+                    resolver.lexical_nominal_scopes[0].get(&(name.text.clone(), name.introduction)),
+                    Some(&identity.id),
+                );
+            } else {
+                assert!(!resolver.lexical_nominal_scopes[0].contains_key(&(name.text.clone(), 0)));
+            }
+            for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors) {
+                let name = &constructor.name;
+                assert_eq!(resolver.constructor_names.get(&name.text), Some(id));
+                if name.introduction != 0 {
+                    assert_eq!(owners[name.introduction - 1].owner, Some(0));
+                    assert!(name.introduced_at.is_some());
+                    assert_eq!(
+                        resolver.lexical_constructor_scopes[0]
+                            .get(&(name.text.clone(), name.introduction)),
+                        Some(id),
+                    );
+                } else {
+                    assert!(
+                        !resolver.lexical_constructor_scopes[0]
+                            .contains_key(&(name.text.clone(), 0))
+                    );
+                }
+                assert_eq!(id.owner(), identity.id);
+            }
+        }
+        assert_ne!(
+            surface.type_declarations[0].constructors[0]
+                .name
+                .introduction,
+            surface.type_declarations[4].constructors[0]
+                .name
+                .introduction,
+        );
+
+        for (definition_index, declaration_index) in [(0, 0), (1, 1)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected an equational generated function")
+            };
+            let SurfaceExprKind::Match(source_match) = &function.equations[0].body.kind else {
+                panic!("expected a generated match")
+            };
+            let SurfacePatternKind::Constructor { name: pattern, .. } =
+                &source_match.arms[0].pattern.kind
+            else {
+                panic!("expected a constructor pattern")
+            };
+            let source_name = &surface.type_declarations[declaration_index].constructors[0].name;
+            assert_eq!(pattern.member().introduction, source_name.introduction);
+            let source_scrutinee = if declaration_index == 1 {
+                let SurfaceExprKind::Apply(application) = &source_match.scrutinee.kind else {
+                    panic!("the newtype constructor has a payload")
+                };
+                &application.function
+            } else {
+                &source_match.scrutinee
+            };
+            let SurfaceExprKind::Name(reference) = &source_scrutinee.kind else {
+                panic!("expected the original constructor reference")
+            };
+            assert_eq!(reference.member().introduction, source_name.introduction);
+            let resolved = resolver
+                .resolve_expr(&function.equations[0].body)
+                .expect("the actual staged expression and pattern should resolve");
+            let ResolvedExprKind::Match(resolved_match) = resolved.kind else {
+                panic!("expected a resolved match")
+            };
+            let ResolvedPatternKind::Constructor { constructor, .. } =
+                resolved_match.arms[0].pattern.kind
+            else {
+                panic!("expected a resolved constructor pattern")
+            };
+            assert_eq!(constructor, identities[declaration_index].constructors[0]);
+            let scrutinee = if declaration_index == 1 {
+                let ResolvedExprKind::Apply(application) = &resolved_match.scrutinee.kind else {
+                    panic!("the newtype constructor is applied to its payload")
+                };
+                &application.function
+            } else {
+                &resolved_match.scrutinee
+            };
+            let ResolvedExprKind::Constructor(occurrence) = &scrutinee.kind else {
+                panic!("expected the constructor expression")
+            };
+            assert_eq!(occurrence.constructor, constructor);
+            assert_eq!(occurrence.spelling, source_name.text);
+            assert_eq!(occurrence.origin, Origin::Source(reference.span()));
+            assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        }
+
+        // A term in the existing lexical scope keeps its normal precedence.
+        let SurfaceDefinitionKind::Equational(probe) = &surface.definitions[0].kind else {
+            panic!("expected the generated probe")
+        };
+        let SurfaceExprKind::Match(probe_match) = &probe.equations[0].body.kind else {
+            panic!("expected the generated match")
+        };
+        let SurfaceExprKind::Name(reference) = &probe_match.scrutinee.kind else {
+            panic!("expected the generated constructor reference")
+        };
+        let name = reference.member();
+        let binder = resolver.allocate_contextual_binder(name).unwrap();
+        let key = (name.text.clone(), name.introduction);
+        resolver.scopes[0].insert(
+            key.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+        );
+        let term = resolver.resolve_expr(&probe_match.scrutinee).unwrap();
+        let ResolvedExprKind::Occurrence(occurrence) = term.kind else {
+            panic!("the lexical term must keep precedence over the constructor")
+        };
+        assert_eq!(occurrence.term, ResolvedTermName::Global(binder.id));
+        resolver.scopes[0].remove(&key);
+
+        let SurfaceDefinitionKind::Equational(shadow) = &surface.definitions[2].kind else {
+            panic!("expected the local newtype control")
+        };
+        let resolved = resolver.resolve_expr(&shadow.equations[0].body).unwrap();
+        let ResolvedExprKind::Block(block) = resolved.kind else {
+            panic!("expected the resolved local block")
+        };
+        let ResolvedLocalDeclaration::Newtype(local_owner) = block.declarations[0] else {
+            panic!("expected the local newtype")
+        };
+        let ResolvedExprKind::Match(local_match) = &block.result.kind else {
+            panic!("expected the local match")
+        };
+        let ResolvedPatternKind::Constructor { constructor, .. } = local_match.arms[0].pattern.kind
+        else {
+            panic!("expected the local constructor pattern")
+        };
+        assert_eq!(constructor.owner(), local_owner);
+        assert_ne!(constructor, identities[0].constructors[0]);
+        let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[1] else {
+            panic!("expected the annotated local binding")
+        };
+        assert_eq!(
+            binding.annotation.as_ref().unwrap().ty,
+            Type::Nominal(local_owner),
+        );
+        let ResolvedExprKind::Apply(application) = &binding.initializer.kind else {
+            panic!("the local constructor is applied to its payload")
+        };
+        let ResolvedExprKind::Constructor(occurrence) = &application.function.kind else {
+            panic!("expected the local constructor expression")
+        };
+        assert_eq!(occurrence.constructor, constructor);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
+
+        let SurfaceDefinitionKind::Equational(bad) = &surface.definitions[3].kind else {
+            panic!("expected the local failure control")
+        };
+        assert_eq!(
+            resolver
+                .resolve_expr(&bad.equations[0].body)
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownConstructor,
+        );
+        assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
+        let generated = &surface.type_declarations[0].constructors[0].name;
+        assert_eq!(
+            resolver.lexical_constructor_scopes[0]
+                .get(&(generated.text.clone(), generated.introduction)),
+            Some(&identities[0].constructors[0]),
+        );
+    }
+
+    #[test]
+    fn introduced_module_nominals_resolve_actual_signatures_and_preserve_parameters() {
+        let (surface, owners) = staged_module_constructor_fixture();
+        let mut resolver = Resolver::new(ModuleId::new(7_103));
+        let identities = resolver
+            .install_nominal_identities(&surface.type_declarations)
+            .unwrap();
+        for (definition_index, declaration_index) in [(4, 0), (5, 3)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected the generated signature")
+            };
+            let SurfaceTypeKind::Function(arrow) = &function.interface.annotation.kind else {
+                panic!("expected the generated function type")
+            };
+            let reference = match &arrow.domain.kind {
+                SurfaceTypeKind::Named(reference) => reference,
+                SurfaceTypeKind::Application { constructor, .. } => constructor,
+                _ => panic!("expected the generated nominal occurrence"),
+            };
+            let name = &surface.type_declarations[declaration_index].name;
+            assert_ne!(name.introduction, 0);
+            assert_eq!(reference.member().introduction, name.introduction);
+            assert_eq!(reference.member().introduced_at, name.introduced_at);
+            assert_eq!(owners[name.introduction - 1].owner, Some(0));
+            assert_eq!(
+                resolver.nominal_reference(reference).unwrap().id,
+                identities[declaration_index].id
+            );
+            let nominal = Type::Nominal(identities[declaration_index].id);
+            let expected = if declaration_index == 3 {
+                Type::Application(Box::new(nominal), Box::new(Type::Int))
+            } else {
+                nominal
+            };
+            assert_eq!(
+                resolver
+                    .resolve_type(&function.interface.annotation)
+                    .unwrap()
+                    .ty,
+                Type::Function(Box::new(expected.clone()), Box::new(expected)),
+            );
+        }
+
+        // The ordinary explicit parameter still precedes an equally spelled
+        // module nominal in both Named and Application type positions.
+        for (definition_index, higher) in [(6, false), (7, true)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected the generated parameter control")
+            };
+            let parameters = function.interface.type_parameters.as_ref().unwrap();
+            let parameter = &parameters[0];
+            let binder = resolver
+                .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
+                .unwrap();
+            if higher {
+                assert_eq!(
+                    binder.kind,
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                );
+            } else {
+                assert_eq!(binder.kind, Kind::Type);
+            }
+            let checkpoint = (
+                resolver.type_scopes.len(),
+                resolver.syntax_type_scopes.len(),
+            );
+            resolver
+                .push_prepared_type_scope(
+                    &[(std::slice::from_ref(&binder), Some(parameters.as_slice()))],
+                    function.interface.span,
+                    None,
+                )
+                .unwrap();
+            let variable = Type::Variable(binder.id);
+            let expected = if higher {
+                Type::Application(Box::new(variable), Box::new(Type::Int))
+            } else {
+                variable
+            };
+            assert_eq!(
+                resolver
+                    .resolve_type(&function.interface.annotation)
+                    .unwrap()
+                    .ty,
+                Type::Function(Box::new(expected.clone()), Box::new(expected)),
+            );
+            resolver.type_scopes.truncate(checkpoint.0);
+            resolver.syntax_type_scopes.truncate(checkpoint.1);
+        }
+    }
+
+    #[test]
+    fn introduced_module_constructor_reservation_is_atomic_and_retryable() {
+        let (surface, _) = staged_module_constructor_fixture();
+        let module = ModuleId::new(7_102);
+        let mut measured = Resolver::with_type_work(module, TypeWorkBudget::unbounded());
+        measured
+            .install_nominal_identities(&surface.type_declarations)
+            .unwrap();
+        let work = measured.type_work.used();
+        assert!(work > 0);
+        assert!(measured.lexical_constructor_scopes[0].len() > 4);
+        for prefix in [0, 11] {
+            let mut short =
+                Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work - 1));
+            short.type_work.charge(prefix).unwrap();
+            let error = match short.install_nominal_identities(&surface.type_declarations) {
+                Ok(_) => panic!("a short budget must refuse before publishing the frame"),
+                Err(error) => error,
+            };
+            assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+            assert_eq!(short.type_work.used(), prefix);
+            assert!(short.lexical_constructor_scopes.is_empty());
+            assert!(short.lexical_nominal_scopes.is_empty());
+            for _ in 0..2 {
+                let mut exact =
+                    Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work));
+                exact.type_work.charge(prefix).unwrap();
+                let identities = exact
+                    .install_nominal_identities(&surface.type_declarations)
+                    .expect("a fresh exact retry must retain the complete frame");
+                assert_eq!(exact.type_work.used(), prefix + work);
+                assert_eq!(exact.lexical_constructor_scopes.len(), 1);
+                assert_eq!(exact.lexical_nominal_scopes.len(), 1);
+                assert_eq!(
+                    exact.lexical_constructor_scopes[0].len(),
+                    measured.lexical_constructor_scopes[0].len()
+                );
+                assert_eq!(identities.len(), surface.type_declarations.len());
+            }
+        }
+        let ordinary = declaration_fixture("ordinary-constructors.ash", "type Plain = Plain\n");
+        let mut plain = Resolver::with_type_work(module, TypeWorkBudget::with_limit(0));
+        plain
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert!(plain.lexical_constructor_scopes.is_empty());
+        assert!(plain.lexical_nominal_scopes.is_empty());
+        assert_eq!(plain.type_work.used(), 0);
+
+        let mut mixed_declarations = surface.type_declarations.clone();
+        mixed_declarations.extend(ordinary.type_declarations.iter().cloned());
+        let mut mixed = Resolver::new(module);
+        let ids = mixed
+            .install_nominal_identities(&mixed_declarations)
+            .unwrap();
+        let source_name = &ordinary.type_declarations[0].constructors[0].name;
+        assert_eq!(source_name.introduction, 0);
+        assert_eq!(
+            mixed
+                .constructor_reference(&SurfaceReference::Unqualified(source_name.clone()))
+                .unwrap(),
+            ids.last().unwrap().constructors[0],
+        );
+        assert!(!mixed.lexical_constructor_scopes[0].contains_key(&(source_name.text.clone(), 0)));
+        let source_type = &ordinary.type_declarations[0].name;
+        assert_eq!(
+            mixed
+                .nominal_reference(&SurfaceReference::Unqualified(source_type.clone()))
+                .unwrap()
+                .id,
+            ids.last().unwrap().id,
+        );
+        assert!(!mixed.lexical_nominal_scopes[0].contains_key(&(source_type.text.clone(), 0)));
+
+        // A zero-budget installation is free, but an introduced-name
+        // diagnostic must pay to retain the missing spelling.
+        let introduced = &surface.type_declarations[0].constructors[0].name;
+        assert!(!introduced.text.is_empty());
+        assert_eq!(
+            plain
+                .constructor_reference(&SurfaceReference::Unqualified(introduced.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::TypeResourceExhausted,
+        );
+        assert_eq!(plain.type_work.used(), 0);
+        let introduced_type = &surface.type_declarations[0].name;
+        assert!(!introduced_type.text.is_empty());
+        assert_eq!(
+            plain
+                .nominal_reference(&SurfaceReference::Unqualified(introduced_type.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::TypeResourceExhausted,
+        );
+        assert_eq!(plain.type_work.used(), 0);
+
+        // A fresh module still cannot see an introduced constructor or type
+        // from another one when each diagnostic has its exact spelling work.
+        let mut constructor_lookup =
+            Resolver::with_type_work(module, TypeWorkBudget::with_limit(introduced.text.len()));
+        constructor_lookup
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert_eq!(constructor_lookup.type_work.used(), 0);
+        assert_eq!(
+            constructor_lookup
+                .constructor_reference(&SurfaceReference::Unqualified(introduced.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownConstructor,
+        );
+        assert_eq!(constructor_lookup.type_work.used(), introduced.text.len());
+
+        let mut nominal_lookup = Resolver::with_type_work(
+            module,
+            TypeWorkBudget::with_limit(introduced_type.text.len()),
+        );
+        nominal_lookup
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert_eq!(nominal_lookup.type_work.used(), 0);
+        assert_eq!(
+            nominal_lookup
+                .nominal_reference(&SurfaceReference::Unqualified(introduced_type.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownType,
+        );
+        assert_eq!(nominal_lookup.type_work.used(), introduced_type.text.len());
+
+        // Each base can be reached on its own through real captured names.
+        for (index, has_nominal, has_constructor) in [(5, true, false), (6, false, true)] {
+            let declarations = &surface.type_declarations[index..=index];
+            let mut measured = Resolver::with_type_work(module, TypeWorkBudget::unbounded());
+            measured.install_nominal_identities(declarations).unwrap();
+            let work = measured.type_work.used();
+            assert!(work > 0);
+            assert_eq!(!measured.lexical_nominal_scopes.is_empty(), has_nominal);
+            assert_eq!(
+                !measured.lexical_constructor_scopes.is_empty(),
+                has_constructor
+            );
+            for prefix in [0, 11] {
+                let mut short =
+                    Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work - 1));
+                short.type_work.charge(prefix).unwrap();
+                assert!(short.install_nominal_identities(declarations).is_err());
+                assert_eq!(short.type_work.used(), prefix);
+                assert!(short.lexical_nominal_scopes.is_empty());
+                assert!(short.lexical_constructor_scopes.is_empty());
+                for _ in 0..2 {
+                    let mut exact =
+                        Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work));
+                    exact.type_work.charge(prefix).unwrap();
+                    exact.install_nominal_identities(declarations).unwrap();
+                    assert_eq!(exact.type_work.used(), prefix + work);
+                    assert_eq!(!exact.lexical_nominal_scopes.is_empty(), has_nominal);
+                    assert_eq!(
+                        !exact.lexical_constructor_scopes.is_empty(),
+                        has_constructor
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn lexical_method_lookup_and_parameter_registry_have_exact_work_boundaries() {
         for (interface_count, method_count, parameter_count) in
@@ -21933,10 +25055,14 @@ mod tests {
         //   3P + M(2P + 3).
         const PREPARATION_WORK: usize =
             3 * PARAMETER_COUNT + METHOD_COUNT * (2 * PARAMETER_COUNT + 3);
-        // Each method retains one P-wide scope map and resolves its three
-        // annotation nodes. One immutable original parameter array is then
-        // published; canonical registry bindings later retain its slots.
-        const RESOLUTION_WORK: usize = METHOD_COUNT * (PARAMETER_COUNT + 3) + 1;
+        // Each method prepays two groups, one visit per parameter, two frame
+        // slots, and one key plus copy/hash/comparison bytes per parameter.
+        // P0..P9 have two bytes and P10..P31 have three bytes.
+        const SPELLING_BYTES: usize = 10 * 2 + 22 * 3;
+        const SCOPE_WORK: usize = 2 + PARAMETER_COUNT + 2 + PARAMETER_COUNT + 3 * SPELLING_BYTES;
+        // Each signature then visits three annotation nodes. The immutable
+        // original parameter array costs one more unit to publish.
+        const RESOLUTION_WORK: usize = METHOD_COUNT * (SCOPE_WORK + 3) + 1;
         const EXACT_WORK: usize = PREPARATION_WORK + RESOLUTION_WORK;
 
         let parameter_names = (0..PARAMETER_COUNT)
@@ -21968,6 +25094,7 @@ mod tests {
         assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(one_short.type_work.used(), EXACT_WORK - 1);
         assert!(one_short.type_scopes.is_empty());
+        assert!(one_short.syntax_type_scopes.is_empty());
         assert_eq!(one_short.next_type_variable as usize, PARAMETER_COUNT);
 
         let mut exact =
@@ -21988,12 +25115,155 @@ mod tests {
             .expect("the exact wide interface formula should resolve");
         assert_eq!(exact.type_work.used(), EXACT_WORK);
         assert!(exact.type_scopes.is_empty());
+        assert!(exact.syntax_type_scopes.is_empty());
         assert_eq!(interfaces[0].parameters.len(), PARAMETER_COUNT);
         assert_eq!(interfaces[0].methods.len(), METHOD_COUNT);
         assert!(
             retained.is_empty(),
             "canonical registry bindings retain immutable originals at publication"
         );
+    }
+
+    #[test]
+    fn prepared_type_scopes_are_atomic_budgeted_and_contextual() {
+        let mut surface = declaration_fixture(
+            "prepared-type-scope.ash",
+            "interface Example<A, B> {\nmethod : A -> B\n}\n",
+        );
+        let source = &mut surface.interfaces[0].parameters;
+        source[1].name.introduction = 7;
+        source[1].name.introduced_at = Some(surface.span);
+        let module = ModuleId::new(0);
+        let parameters = source
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, index as u32),
+                spelling: parameter.name.text.clone(),
+                kind: Kind::Type,
+                origin: Origin::Source(parameter.name.span),
+            })
+            .collect::<Vec<_>>();
+        // One group, two classification visits, two frame slots, and one
+        // retained key plus three spelling-byte operations for each binder.
+        const EXACT_WORK: usize = 1 + 2 + 2 + 2 * (1 + 3);
+        for limit in 0..EXACT_WORK {
+            let mut resolver = Resolver::with_type_work(module, TypeWorkBudget::with_limit(limit));
+            resolver.type_scopes.push(HashMap::new());
+            resolver.syntax_type_scopes.push(HashMap::new());
+            let failure = resolver
+                .push_prepared_type_scope(&[(&parameters, Some(source))], surface.span, None)
+                .expect_err("an incomplete budget must not activate either frame");
+            assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+            assert_eq!(resolver.type_scopes.len(), 1);
+            assert_eq!(resolver.syntax_type_scopes.len(), 1);
+        }
+
+        let mut resolver =
+            Resolver::with_type_work(module, TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        resolver
+            .push_prepared_type_scope(&[(&parameters, Some(source))], surface.span, None)
+            .expect_err("a one-short attempt leaves the resolver retryable");
+        assert!(resolver.type_scopes.is_empty());
+        assert!(resolver.syntax_type_scopes.is_empty());
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        resolver
+            .push_prepared_type_scope(&[(&parameters, Some(source))], surface.span, None)
+            .expect("the complete budget activates both frames");
+        assert_eq!(resolver.type_work.used(), EXACT_WORK);
+        assert_eq!(
+            resolver.contextual_type_variable(&source[0].name),
+            Some(parameters[0].id)
+        );
+        assert_eq!(
+            resolver.contextual_type_variable(&source[1].name),
+            Some(parameters[1].id)
+        );
+        let mut unrelated = source[1].name.clone();
+        unrelated.introduction = 0;
+        assert_eq!(resolver.contextual_type_variable(&unrelated), None);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
+        assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
+
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        resolver
+            .push_prepared_type_scope(&[(&parameters, None)], surface.span, None)
+            .expect("an omitted list retains spelling-only registration");
+        assert_eq!(
+            resolver.contextual_type_variable(&unrelated),
+            Some(parameters[1].id)
+        );
+        assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
+
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let failure = resolver
+            .push_prepared_type_scope(&[(&parameters, Some(&[]))], surface.span, None)
+            .expect_err("an explicit empty list cannot pair with prepared binders");
+        assert_eq!(failure.reason, ResolveReason::InternalState);
+        assert!(resolver.type_scopes.is_empty());
+        assert!(resolver.syntax_type_scopes.is_empty());
+
+        let duplicate_source = [source[0].clone(), source[0].clone()];
+        let mut duplicate_parameters = [parameters[0].clone(), parameters[0].clone()];
+        duplicate_parameters[1].id = parameters[1].id;
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let failure = resolver
+            .push_prepared_type_scope(
+                &[(&duplicate_parameters, Some(&duplicate_source))],
+                surface.span,
+                Some(("duplicate prepared binder", Some("prepared-method-binder"))),
+            )
+            .expect_err("guarded owners reject a repeated prepared key");
+        assert_eq!(failure.reason, ResolveReason::InternalState);
+        assert!(resolver.type_scopes.is_empty());
+        assert!(resolver.syntax_type_scopes.is_empty());
+    }
+
+    #[test]
+    fn interface_type_scopes_restore_both_frames_on_success_and_error() {
+        for matching_context in [false, true] {
+            let mut surface = declaration_fixture(
+                "interface-context-cleanup.ash",
+                "interface Example<A> {\nmethod : A\n}\n",
+            );
+            let declaration = &mut surface.interfaces[0];
+            declaration.parameters[0].name.introduction = 1;
+            declaration.parameters[0].name.introduced_at = Some(surface.span);
+            if matching_context {
+                let SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) =
+                    &mut declaration.methods[0].annotation.kind
+                else {
+                    panic!("the fixture has one named method type")
+                };
+                name.introduction = 1;
+                name.introduced_at = Some(surface.span);
+            }
+            let mut resolver = Resolver::new(ModuleId::new(0));
+            resolver.type_scopes.push(HashMap::new());
+            resolver.syntax_type_scopes.push(HashMap::new());
+            let identities = resolver
+                .install_interface_identities(&surface.interfaces)
+                .expect("interface identity");
+            let pending = resolver
+                .prepare_interface_type_parameters(&surface.interfaces[0])
+                .expect("interface parameters");
+            let result = resolver.resolve_interface_declarations(
+                &surface.interfaces,
+                identities,
+                vec![pending],
+                surface.span,
+            );
+            if matching_context {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().reason, ResolveReason::UnknownType);
+            }
+            assert_eq!(resolver.type_scopes.len(), 1);
+            assert_eq!(resolver.syntax_type_scopes.len(), 1);
+        }
     }
 
     #[test]
@@ -22966,24 +26236,17 @@ mod tests {
                 .span(ByteRange::new(0, 5).expect("the range is ordered"))
                 .expect("the range belongs to the fixture"),
         };
-        let mut budget = TypeWorkBudget::default();
-        budget
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        resolver
+            .type_work
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves two units");
         let mut seen = HashMap::new();
         let mut output = Vec::new();
 
-        let error = collect_free_type_names(
-            &annotation,
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &mut seen,
-            &mut output,
-            true,
-            &mut budget,
-        )
-        .expect_err("the second name exceeds the remaining budget");
+        let error = resolver
+            .collect_free_type_names(&annotation, &HashSet::new(), &mut seen, &mut output, true)
+            .expect_err("the second name exceeds the remaining budget");
 
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range().start(), 2);
@@ -22999,11 +26262,599 @@ mod tests {
     }
 
     #[test]
+    fn contextual_free_type_cache_and_fallback_are_prepaid() {
+        let source = SourceFile::new("contextual-free.ash", "Layer").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let annotation = SurfaceType {
+            diagnostic: None,
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
+                text: "Layer".to_owned(),
+                span,
+                introduction: 1,
+                introduced_at: Some(span),
+                written: false,
+                diagnostic: None,
+            })),
+            span,
+        };
+        let candidate = NominalTypeId::new(ModuleId::new(1), 0);
+        let attempt = |limit, cached, declared: bool| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(limit));
+            if cached {
+                resolver
+                    .syntax_nominals
+                    .insert(("Layer".to_owned(), 1), candidate);
+            }
+            let declared = if declared {
+                HashSet::from(["Layer"])
+            } else {
+                HashSet::new()
+            };
+            let mut seen = HashMap::new();
+            let mut output = Vec::new();
+            let result = resolver.collect_free_type_names(
+                &annotation,
+                &declared,
+                &mut seen,
+                &mut output,
+                true,
+            );
+            (result, resolver.type_work.used(), output.len())
+        };
+
+        // One node plus copy, hash and equal-key comparison for five bytes.
+        let cache_work = 1 + 3 * "Layer".len() + 1;
+        let (short, _, retained) = attempt(cache_work - 1, true, false);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(retained, 0);
+        let (exact, used, retained) = attempt(cache_work, true, false);
+        assert!(exact.is_ok());
+        assert_eq!((used, retained), (cache_work, 0));
+        let (retry, _, retained) = attempt(cache_work, true, false);
+        assert!(retry.is_ok());
+        assert_eq!(retained, 0);
+
+        // An explicitly declared spelling wins before the contextual lookup.
+        let (explicit, used, retained) = attempt(1, true, true);
+        assert!(explicit.is_ok());
+        assert_eq!((used, retained), (1, 1));
+
+        // Missing syntax inputs leave an introduced name genuinely free.
+        let fallback_work = cache_work + 1;
+        let (short, _, retained) = attempt(fallback_work - 1, false, false);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(retained, 0);
+        let (fallback, used, retained) = attempt(fallback_work, false, false);
+        assert!(fallback.is_ok());
+        assert_eq!((used, retained), (fallback_work, 1));
+    }
+
+    #[test]
+    fn implementation_head_requires_the_complete_owner_source_and_paid_lookup() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
+        fn unused_transformer(
+            _: &crate::syntax::SelectedSyntax,
+            _: &[crate::surface::SurfaceSyntaxCapture],
+            _: crate::source::Span,
+            _: &SurfaceName,
+            _: usize,
+            _: &[Option<usize>],
+            _: &Arc<crate::syntax::ExpansionFrame>,
+            _: &mut InterfaceConstraintBudget,
+            _: Option<crate::syntax::QuoteExpansionLoan<'_>>,
+        ) -> Result<(crate::syntax::ExpandedExpression, usize), crate::source::Span> {
+            unreachable!("method lookup does not invoke a transformer")
+        }
+
+        let fixture = ImportBudgetFixture::create(
+            "import dependency (bound, Marker, mark)\nimport other (other_value)\nmain : Unit -> Int\nmain () = 42\n",
+            "pub bound : Unit -> Int\nbound () = 1\npub interface Marker<A> {\n    mark : A -> Bool\n}\n",
+        );
+        fs::write(
+            fixture.0.join("other.ash"),
+            "pub other_value : Unit -> Int\nother_value () = 1\n",
+        )
+        .unwrap();
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| {
+                owner
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "bound")
+            })
+            .unwrap();
+        let owner = &checked[owner_index];
+        let loaded_owner = graph.module(owner.module()).unwrap();
+        assert_ne!(entry.source().id(), loaded_owner.source().id());
+
+        // mode 0 is the real complete census; 1 is empty; 2 pairs the same
+        // ModuleId with a different source; 3 has no issuing owner; 4 has an
+        // out-of-range owner; 5 asks for an unissued introduction.
+        let attempt = |limit: usize, prefix: usize, spelling: &str, mode: usize, repeat: bool| {
+            let mut views = checked
+                .iter()
+                .map(|checked_owner| {
+                    if checked_owner.module() == owner.module() && mode != 1 {
+                        crate::syntax::SyntaxOwnerBindings::new(
+                            checked_owner,
+                            loaded_owner,
+                            &checked,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap()
+                    } else {
+                        crate::syntax::SyntaxOwnerBindings::empty(checked_owner.module())
+                    }
+                })
+                .collect::<Vec<_>>();
+            if mode == 2 {
+                views[owner_index].replace_complete_source_for_test(entry.source().id());
+            }
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
+                    owner: if mode == 3 {
+                        None
+                    } else if mode == 4 {
+                        Some(checked.len())
+                    } else {
+                        Some(owner_index)
+                    },
+                    declaration: owner.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver =
+                Resolver::with_type_work(entry.id(), TypeWorkBudget::with_limit(limit));
+            resolver.type_work.charge(prefix).unwrap();
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &views,
+                advance_sites: &[],
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let name = SurfaceName {
+                text: spelling.to_owned(),
+                span: owner.span(),
+                introduction: if mode == 5 { 2 } else { 1 },
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            };
+            let first = resolver.contextual_implementation_head(&name);
+            if repeat && first.is_ok() {
+                resolver.syntax_terms.clear();
+                let again = resolver.contextual_implementation_head(&name).unwrap();
+                assert_eq!(again, SyntaxTermOutcome::BoundNonMethod);
+            }
+            (
+                first,
+                resolver.type_work.used(),
+                resolver.syntax_terms.len(),
+            )
+        };
+        assert_eq!(
+            attempt(usize::MAX, 0, "absent", 0, false).0.unwrap(),
+            SyntaxTermOutcome::GenuineUnbound
+        );
+        for mode in 1..=5 {
+            assert_eq!(
+                attempt(usize::MAX, 0, "absent", mode, false).0.unwrap(),
+                SyntaxTermOutcome::Unavailable
+            );
+        }
+        let (result, total, _) = attempt(usize::MAX, 0, "bound", 0, false);
+        assert_eq!(result.unwrap(), SyntaxTermOutcome::BoundNonMethod);
+        assert_eq!(
+            attempt(usize::MAX, 0, "bound", 0, true).0.unwrap(),
+            SyntaxTermOutcome::BoundNonMethod,
+        );
+        for prefix in [0, 17] {
+            let (short, _, installed) = attempt(prefix + total - 1, prefix, "bound", 0, false);
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(installed, 0);
+            for _ in 0..2 {
+                let (exact, used, installed) = attempt(prefix + total, prefix, "bound", 0, false);
+                assert_eq!(exact.unwrap(), SyntaxTermOutcome::BoundNonMethod);
+                assert_eq!(used, prefix + total);
+                assert_eq!(installed, 1);
+            }
+        }
+        // A real checked interface supplies the bound method and the member
+        // selected after an independently complete, genuinely unbound owner.
+        let other_index = checked
+            .iter()
+            .position(|candidate| {
+                candidate
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "other_value")
+            })
+            .unwrap();
+        let expected_method = owner.exports().method("mark").unwrap();
+        let interface = owner
+            .interface_facts()
+            .iter()
+            .find(|fact| fact.id == expected_method.interface())
+            .unwrap();
+        let attempt_member = |bound: bool, limit: usize, prefix: usize| {
+            let selected_index = if bound { owner_index } else { other_index };
+            let selected = &checked[selected_index];
+            let selected_loaded = graph.module(selected.module()).unwrap();
+            let views = checked
+                .iter()
+                .enumerate()
+                .map(|(index, checked_owner)| {
+                    if index == selected_index {
+                        crate::syntax::SyntaxOwnerBindings::new(
+                            checked_owner,
+                            selected_loaded,
+                            &checked,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap()
+                    } else {
+                        crate::syntax::SyntaxOwnerBindings::empty(checked_owner.module())
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
+                    owner: Some(selected_index),
+                    declaration: selected.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver = Resolver::with_budgets(
+                entry.id(),
+                TypeWorkBudget::with_limit(limit),
+                InterfaceConstraintBudget::default(),
+            );
+            resolver.type_work.charge(prefix).unwrap();
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &views,
+                advance_sites: &[],
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let name = SurfaceName {
+                text: "mark".to_owned(),
+                span: selected.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: None,
+            };
+            assert_eq!(resolver.syntax_terms.capacity(), 0);
+            let mut reached_scan = false;
+            let result = (|| -> Result<_, ResolveError> {
+                if !bound {
+                    resolver.retain_imported_interface_fact(
+                        interface.as_ref(),
+                        owner.exports(),
+                        ImportedInterfaceAccess::PublicExport,
+                        owner.module(),
+                        entry.surface().span,
+                    )?;
+                }
+                let selected = resolver.contextual_implementation_head(&name)?;
+                let member = if selected == SyntaxTermOutcome::GenuineUnbound {
+                    reached_scan = true;
+                    resolver.unbound_implementation_member(expected_method.interface(), &name)?
+                } else {
+                    None
+                };
+                Ok((selected, member))
+            })();
+            (
+                result,
+                resolver.type_work.used(),
+                resolver.syntax_terms.len(),
+                resolver.syntax_terms.capacity(),
+                resolver
+                    .imported
+                    .interface(expected_method.interface())
+                    .is_some(),
+                reached_scan,
+            )
+        };
+        // An empty syntax-term map must pay the reached growth and rehash
+        // charge before it reserves storage for the retained method.
+        for prefix in [0, 17] {
+            let mut short_map = HashMap::<(String, usize), ResolvedTermBinding>::new();
+            let mut short = TypeWorkBudget::with_limit(prefix + 4);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                Resolver::prepare_method_head_insertion(&mut short_map, &mut short, owner.span())
+                    .unwrap_err()
+                    .reason,
+                ResolveReason::TypeResourceExhausted,
+            );
+            assert_eq!(short_map.capacity(), 0);
+            for _ in 0..2 {
+                let mut map = HashMap::<(String, usize), ResolvedTermBinding>::new();
+                let mut exact = TypeWorkBudget::with_limit(prefix + 5);
+                exact.charge(prefix).unwrap();
+                Resolver::prepare_method_head_insertion(&mut map, &mut exact, owner.span())
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + 5);
+                assert!(map.capacity() > 0);
+            }
+        }
+        for bound in [true, false] {
+            let (result, total, entries, capacity, retained, scanned) =
+                attempt_member(bound, usize::MAX, 0);
+            if bound {
+                assert_eq!(
+                    result.unwrap(),
+                    (SyntaxTermOutcome::BoundMethod(expected_method), None)
+                );
+                assert_eq!(entries, 1);
+                assert!(capacity > 0 && retained);
+                assert!(!scanned);
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    (SyntaxTermOutcome::GenuineUnbound, Some(expected_method))
+                );
+                assert_eq!((entries, capacity), (0, 0));
+                assert!(retained && scanned);
+            }
+            assert_eq!(expected_method.interface(), interface.id);
+            for prefix in [0, 17] {
+                let (short, _, entries, capacity, retained, scanned) =
+                    attempt_member(bound, prefix + total - 1, prefix);
+                assert_eq!(
+                    short.unwrap_err().reason,
+                    ResolveReason::TypeResourceExhausted
+                );
+                assert_eq!(entries, 0);
+                if bound {
+                    assert!(capacity > 0 && !scanned);
+                } else {
+                    assert!(retained && scanned);
+                }
+                for _ in 0..2 {
+                    let (exact, used, entries, capacity, retained, scanned) =
+                        attempt_member(bound, prefix + total, prefix);
+                    assert_eq!(used, prefix + total);
+                    if bound {
+                        assert_eq!(
+                            exact.unwrap(),
+                            (SyntaxTermOutcome::BoundMethod(expected_method), None)
+                        );
+                        assert_eq!(entries, 1);
+                        assert!(capacity > 0 && retained && !scanned);
+                    } else {
+                        assert_eq!(
+                            exact.unwrap(),
+                            (SyntaxTermOutcome::GenuineUnbound, Some(expected_method))
+                        );
+                        assert_eq!((entries, capacity), (0, 0));
+                        assert!(retained && scanned);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contextual_free_type_retention_preserves_authority_and_work_limits() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
+        fn unused_transformer(
+            _: &crate::syntax::SelectedSyntax,
+            _: &[crate::surface::SurfaceSyntaxCapture],
+            _: crate::source::Span,
+            _: &SurfaceName,
+            _: usize,
+            _: &[Option<usize>],
+            _: &Arc<crate::syntax::ExpansionFrame>,
+            _: &mut InterfaceConstraintBudget,
+            _: Option<crate::syntax::QuoteExpansionLoan<'_>>,
+        ) -> Result<(crate::syntax::ExpandedExpression, usize), crate::source::Span> {
+            unreachable!("free type discovery does not invoke a transformer")
+        }
+
+        let fixture = ImportBudgetFixture::create(
+            "import dependency (Layer)\nmain : Unit -> Int\nmain () = 42\n",
+            "pub type Layer<A> = Layer(A)\n",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let entry = graph.module(graph.entry()).unwrap();
+        let checked = checked_import_dependencies(&graph)
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let owner_index = checked
+            .iter()
+            .position(|owner| {
+                owner
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .any(|n| n.spelling == "Layer")
+            })
+            .unwrap();
+        let owner = &checked[owner_index];
+        let nominal = owner
+            .registry()
+            .nominals()
+            .iter()
+            .find(|n| n.spelling == "Layer")
+            .unwrap()
+            .id;
+        assert_eq!(
+            owner.registry().nominal_parameters(nominal).unwrap()[0].kind,
+            Kind::Type
+        );
+        let terms = checked
+            .iter()
+            .map(|owner| crate::syntax::SyntaxOwnerBindings::empty(owner.module()))
+            .collect::<Vec<_>>();
+        let frame = Arc::new(crate::syntax::ExpansionFrame {
+            invocation: entry.surface().span,
+            definition: owner.span(),
+        });
+        let combined = crate::syntax::MacroOrigin::combined(
+            vec![crate::syntax::MacroOrigin::Source(owner.span())],
+            Arc::clone(&frame),
+        )
+        .unwrap();
+        let annotation = |name: &str| SurfaceType {
+            diagnostic: None,
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
+                text: name.to_owned(),
+                span: owner.span(),
+                introduction: 1,
+                introduced_at: Some(entry.surface().span),
+                written: false,
+                diagnostic: Some(Box::new(crate::syntax::DiagnosticLocation {
+                    primary: combined.clone(),
+                    related: vec![combined.clone(); 4],
+                    frames: vec![Arc::clone(&frame); 3],
+                    token_cause: false,
+                    captured_expression: false,
+                })),
+            })),
+            span: owner.span(),
+        };
+        let attempt = |limit, name: &str, malformed: bool, prefill: bool| {
+            let mut transformer = unused_transformer;
+            let mut expansion = crate::syntax::SyntaxExpansion::new(
+                entry.source(),
+                &[],
+                &[],
+                vec![crate::syntax::SyntaxOwner {
+                    caller_quote_owner: None,
+                    owner: Some(if malformed {
+                        checked.len()
+                    } else {
+                        owner_index
+                    }),
+                    declaration: owner.span(),
+                    import_span: entry.surface().span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(limit));
+            if prefill {
+                let mut index = 0;
+                loop {
+                    resolver
+                        .syntax_nominals
+                        .insert((format!("ExistingNominal{index:04}"), 2), nominal);
+                    index += 1;
+                    if resolver.syntax_nominals.len() == resolver.syntax_nominals.capacity() {
+                        break;
+                    }
+                }
+            }
+            resolver.syntax_inputs = Some(SyntaxInputs {
+                uses: &[],
+                owners: &checked,
+                terms: &terms,
+                advance_sites: &[],
+            });
+            resolver.syntax_expansion = Some(&mut expansion);
+            let ty = annotation(name);
+            let mut seen = HashMap::new();
+            let mut output = Vec::new();
+            let result = resolver.collect_free_type_names(
+                &ty,
+                &HashSet::new(),
+                &mut seen,
+                &mut output,
+                true,
+            );
+            let installed = resolver.syntax_nominals.get(&(name.to_owned(), 1)).copied();
+            let access = resolver.imported.nominal(nominal).map(|fact| fact.access);
+            (
+                result,
+                resolver.type_work.used(),
+                output.len(),
+                installed,
+                access,
+            )
+        };
+
+        for prefill in [false, true] {
+            let (measured, work, retained, installed, access) =
+                attempt(TYPE_WORK_LIMIT, "Layer", false, prefill);
+            assert!(measured.is_ok());
+            assert_eq!(
+                (retained, installed, access),
+                (0, Some(nominal), Some(ImportedTypeAccess::Hidden))
+            );
+            let (short, _, retained, installed, access) =
+                attempt(work - 1, "Layer", false, prefill);
+            assert_eq!(
+                short.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!((retained, installed, access), (0, None, None));
+            let (exact, used, retained, installed, access) = attempt(work, "Layer", false, prefill);
+            assert!(exact.is_ok());
+            assert_eq!(
+                (used, retained, installed, access),
+                (work, 0, Some(nominal), Some(ImportedTypeAccess::Hidden))
+            );
+            let (retry, _, _, installed, _) = attempt(work, "Layer", false, prefill);
+            assert!(retry.is_ok());
+            assert_eq!(installed, Some(nominal));
+        }
+
+        let (free, _, retained, installed, _) = attempt(TYPE_WORK_LIMIT, "Free", false, false);
+        assert!(free.is_ok());
+        assert_eq!((retained, installed), (1, None));
+        let (invalid, _, retained, installed, _) = attempt(TYPE_WORK_LIMIT, "Layer", true, false);
+        assert_eq!(invalid.unwrap_err().reason, ResolveReason::InternalState);
+        assert_eq!((retained, installed), (0, None));
+    }
+
+    #[test]
     fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
-        // One outer nominal provenance record, one constructor provenance
-        // record, two field-provenance slots, one synthesized Tuple node, and
-        // two resolved Int nodes: 1 + 1 + 2 + 1 + 2 = 7.
-        const EXACT_WORK: usize = 7;
+        // One nominal record, one constructor record, one prepared group
+        // and two scope cells, two field slots, one Tuple node, and two Int
+        // nodes: 1 + 1 + 1 + 2 + 2 + 1 + 2 = 10.
+        const PREPARED_SCOPE_WORK: usize = 1 + 2;
+        const EXACT_WORK: usize = 1 + 1 + PREPARED_SCOPE_WORK + 2 + 1 + 2;
         let source = SourceFile::new(
             "constructor-tuple-budget.ash",
             "type Pair =\nPair(Int, Int)\n",
@@ -23034,7 +26885,7 @@ mod tests {
             .expect("the fixture leaves one cell fewer than the complete transaction");
         let error = short
             .resolve_registry(&module.type_declarations)
-            .expect_err("the tuple wrapper must consume the remaining budget");
+            .expect_err("the second field must consume the remaining budget");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range(), second_field_span.range());
     }
@@ -23042,9 +26893,11 @@ mod tests {
     #[test]
     fn wide_constructor_provenance_is_exact_atomic_and_stack_safe() {
         const WIDTH: usize = 32_768;
-        // One nominal provenance record, one constructor record, WIDTH field
-        // provenance slots, one Tuple wrapper, and WIDTH field Type nodes.
-        const EXACT_WORK: usize = 2 * WIDTH + 3;
+        // One nominal record, one constructor record, one prepared group and
+        // two scope cells, WIDTH field slots, one Tuple wrapper, and WIDTH
+        // field Type nodes.
+        const PREPARED_SCOPE_WORK: usize = 1 + 2;
+        const EXACT_WORK: usize = 2 * WIDTH + 3 + PREPARED_SCOPE_WORK;
         std::thread::Builder::new()
             .name("wide-constructor-provenance".into())
             .stack_size(256 * 1024)
@@ -23549,3 +27402,6 @@ mod tests {
             .expect("success, rejection, retry, and teardown should fit a small stack");
     }
 }
+
+#[cfg(test)]
+mod duplicate_origin_tests;

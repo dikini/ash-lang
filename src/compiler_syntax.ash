@@ -1,6 +1,6 @@
 pub opaque type Token = HiddenToken
 pub opaque type Identifier = HiddenIdentifier
-pub opaque type ExpressionFragment = HiddenExpressionFragment
+pub opaque type ExpressionFragment = HiddenExpressionFragment(Int, QuoteHoles)
 pub opaque type Input = HiddenInput
 pub opaque type Origin = HiddenOrigin
 pub opaque type ParseFailure = HiddenParseFailure
@@ -12,12 +12,19 @@ pub type Node = TokenNode(Token, Origin)
     | IdentifierNode(Identifier, Origin)
     | GroupNode(Delimiter, Syntax, Origin)
     | ExpressionNode(ExpressionFragment, Origin)
+    | TypeNode(TypeFragment, Origin)
+    | PatternNode(PatternFragment, Origin)
+    | DeclarationNode(DeclarationFragment, Origin)
 pub type Delimiter = Parentheses
     | Braces
 pub type Origins = NoOrigins
     | MoreOrigins(Origin, Origins)
 pub type Capture = ExpressionCapture(ExpressionFragment)
     | IdentifierCapture(Identifier, Origin)
+    | TypeCapture(TypeFragment)
+    | PatternCapture(PatternFragment)
+    | DeclarationCapture(DeclarationFragment)
+    | RepeatedCapture(Captures)
 pub type CaptureResult = Captured(Capture)
     | MissingCapture
 pub type OriginsResult = Combined(Origin)
@@ -76,14 +83,27 @@ pub type TokenKind = Wildcard
     | Less
     | Greater
     | LineEnd
+    | SyntaxKeyword
+    | Dollar
 pub type TokenResult = MadeToken(Token)
     | InvalidToken
 pub type ParseResult = Parsed(ExpressionFragment)
     | ParseRejected(ParseFailure)
+    | ParsedType(TypeFragment)
+    | ParsedPattern(PatternFragment)
+    | ParsedDeclaration(DeclarationFragment)
 pub type MacroDiagnostic = MacroDiagnostic(String, Origin, Origins)
     | SyntaxDiagnostic(ParseFailure)
 pub type MacroResult = Expanded(Syntax)
     | Rejected(MacroDiagnostic)
+
+pub opaque type TypeFragment = HiddenTypeFragment
+pub opaque type PatternFragment = HiddenPatternFragment
+pub opaque type DeclarationFragment = HiddenDeclarationFragment
+pub type Captures = NoCaptures
+    | MoreCaptures(Capture, Captures)
+type QuoteHoles = NoQuoteHoles
+    | MoreQuoteHoles(ExpressionFragment, QuoteHoles)
 
 pub effect Ops {
     capture : (Input, Int) -> CaptureResult
@@ -99,6 +119,12 @@ pub effect Ops {
     definition_identifier : (Input, String, Origin) -> IdentifierResult
     caller_identifier : (Input, String, Origin) -> IdentifierResult
     combine_origins : (Input, Origins) -> OriginsResult
+    declaration_syntax : DeclarationFragment -> Syntax
+    type_syntax : TypeFragment -> Syntax
+    parse_type : (Input, Syntax) -> ParseResult
+    pattern_syntax : PatternFragment -> Syntax
+    parse_pattern : (Input, Syntax) -> ParseResult
+    parse_declaration : (Input, Syntax) -> ParseResult
 }
 
 pub capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -127,3 +153,15 @@ pub caller_identifier : (Input, String, Origin) -> IdentifierResult ! {Ops}
 caller_identifier value = perform Ops.caller_identifier value
 pub combine_origins : (Input, Origins) -> OriginsResult ! {Ops}
 combine_origins value = perform Ops.combine_origins value
+pub declaration_syntax : DeclarationFragment -> Syntax ! {Ops}
+declaration_syntax value = perform Ops.declaration_syntax value
+pub type_syntax : TypeFragment -> Syntax ! {Ops}
+type_syntax value = perform Ops.type_syntax value
+pub parse_type : (Input, Syntax) -> ParseResult ! {Ops}
+parse_type value = perform Ops.parse_type value
+pub pattern_syntax : PatternFragment -> Syntax ! {Ops}
+pattern_syntax value = perform Ops.pattern_syntax value
+pub parse_pattern : (Input, Syntax) -> ParseResult ! {Ops}
+parse_pattern value = perform Ops.parse_pattern value
+pub parse_declaration : (Input, Syntax) -> ParseResult ! {Ops}
+parse_declaration value = perform Ops.parse_declaration value

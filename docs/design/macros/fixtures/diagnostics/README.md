@@ -1,8 +1,9 @@
 # Declaration diagnostic fixtures
 
-These proposed I14/I15 graphs use the unimplemented CP-0034 syntax. Each entry
-file is compiled independently. None is represented as a passing product test.
-Assert the structured cause and source roles in both human and JSON diagnostics,
+These fixed I14/I15 graphs use declaration and derive syntax. Each entry file
+is compiled independently. [TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md)
+records the delivery evidence and remaining gates. Assert the structured cause
+and source roles in both human and JSON diagnostics,
 not a fixed rendering of the message.
 
 - `type_error.ash` expands `bad_type` successfully and then fails ordinary
@@ -45,11 +46,11 @@ not a fixed rendering of the message.
   graph publishes a partial module. These are expansion failures; ordinary
   parse or type errors are not ordered by this assertion.
 
-The TokenKind name `LineEnd` in `recursive_forms.ash` follows the in-progress
-expression-slice vocabulary and is subject to the shared lexical vocabulary
-contract described in CP-0033. `recursive_forms.ash` uses only the slice 1
+The `LineEnd` token in `recursive_forms.ash` follows the
+[current public token vocabulary](../../../../../spec/lexical-structure.md#public-token-kinds).
+`recursive_forms.ash` uses only the slice 1
 syntax service apart from its declaration-macro header. Its transformer body
 was checked against the expression-slice compiler after removing that
-unimplemented header. `category_forms.ash` was similarly checked against a
-stand-in for the proposed type fragment and operation. Neither declaration
-expansion path has run.
+header. `category_forms.ash` was similarly checked against a stand-in for
+the proposed type fragment and operation. Those early checks did not exercise
+either declaration expansion path.

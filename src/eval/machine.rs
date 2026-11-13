@@ -14,7 +14,7 @@ pub(super) use region::HostRootCompletion;
 
 #[cfg(test)]
 #[path = "machine_test_hooks.rs"]
-mod machine_test_hooks;
+pub(crate) mod machine_test_hooks;
 #[cfg(test)]
 pub(super) fn refuse_disposal_growth() -> bool {
     machine_test_hooks::FAIL_DISPOSAL_GROWTH.replace(false)
@@ -570,8 +570,40 @@ impl fmt::Display for RuntimeFailure {
 
 impl Error for RuntimeFailure {}
 
+// One heap-backed variant replaces exactly one existing continuation frame.
+#[derive(Debug)]
+enum AdvanceFrame {
+    Match {
+        arms: Box<[CoreMatchArm]>,
+        environment: Environment,
+        guard: syntax::AdvanceGuard,
+    },
+    ApplyFunction {
+        argument: NodeId,
+        caller_environment: Environment,
+        observation: syntax::AdvanceReference,
+    },
+    ApplyArgument {
+        function: Value,
+        observation: syntax::AdvanceReference,
+    },
+}
+
+fn boxed_advance_frame(frame: AdvanceFrame) -> Result<Box<[AdvanceFrame]>, RuntimeFailure> {
+    #[cfg(test)]
+    if machine_test_hooks::FAIL_ADVANCE_BOX.replace(false) {
+        return Err(RuntimeFailure::HeapCapacity);
+    }
+    let mut slot = Vec::new();
+    slot.try_reserve_exact(1)
+        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+    slot.push(frame);
+    Ok(slot.into_boxed_slice())
+}
+
 #[derive(Debug)]
 enum Frame {
+    GeneratorAdvance(Box<[AdvanceFrame]>),
     NetworkCapacity {
         node: NodeId,
         environment: Environment,
@@ -850,6 +882,43 @@ struct RetainedStore {
     api: crate::resolved::StoreApi,
     slots: Vec<RetainedSlot>,
     active_roots: usize,
+}
+
+// The experiment observes the same nested owners that continuation teardown visits.
+#[cfg(test)]
+fn experiment_advance_guards(frames: &[Frame]) -> usize {
+    let mut pending = vec![frames];
+    let mut guards = 0;
+    while let Some(frames) = pending.pop() {
+        for frame in frames {
+            match frame {
+                Frame::GeneratorAdvance(advance)
+                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }]) =>
+                {
+                    guards += 1;
+                }
+                Frame::RegionAllocated { segment, .. } => pending.push(&segment.frames),
+                Frame::ClauseBoundary {
+                    continuation: Some(segment),
+                    ..
+                } => {
+                    pending.push(&segment.frames);
+                }
+                Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } => {
+                    for slot in &store.slots {
+                        if let Some(segment) = &slot.continuation {
+                            pending.push(&segment.frames);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    guards
 }
 
 struct RestorePreparation {
@@ -1148,7 +1217,8 @@ impl Drop for TransformerDropObserver {
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     worker: Option<WorkerStartup>,
-    syntax_host: Option<syntax::SyntaxHost>,
+    syntax_host: Option<syntax::SyntaxHost<'runtime>>,
+    quote_guards: Arc<[NodeId]>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -1334,6 +1404,7 @@ fn run_network_worker(
 // coordinator publishes the one joint commit after both threads exist.
 struct CarrierInput {
     program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+    quote_guards: Option<Arc<[NodeId]>>,
     root: NodeId,
     result: NodeId,
     entry: BinderId,
@@ -1636,6 +1707,7 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
     }
     let CarrierInput {
         program,
+        quote_guards,
         root,
         result,
         entry,
@@ -1665,6 +1737,9 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
             return;
         }
     };
+    if let Some(quote_guards) = quote_guards {
+        machine.quote_guards = quote_guards;
+    }
     machine.source_bindings = bindings.as_ref();
     let evaluation = machine.run_loop();
     if evaluation.is_err() {
@@ -1740,6 +1815,7 @@ impl<'runtime> Machine<'runtime> {
         Self {
             worker: None,
             syntax_host: None,
+            quote_guards: Arc::from([]),
             source_bindings: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
@@ -1789,6 +1865,7 @@ impl<'runtime> Machine<'runtime> {
         Self {
             worker: None,
             syntax_host: None,
+            quote_guards: Arc::from([]),
             source_bindings: None,
             program: ExecutableProgram::Effect(program),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
@@ -1884,6 +1961,21 @@ impl<'runtime> Machine<'runtime> {
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    if self.syntax_host.is_none() {
+                        for guard in self.quote_guards.iter() {
+                            charge_effect_work(
+                                &mut self.instantiation_work,
+                                1,
+                                RuntimePhase::Evaluation,
+                            )?;
+                            if *guard == node {
+                                return Err(RuntimeFailure::ForeignBinding);
+                            }
+                        }
+                    }
+                    if let Some(host) = &mut self.syntax_host {
+                        host.reach_quote(node)?;
+                    }
                     if let Some(host) = &mut self.syntax_host
                         && host.occurrence == node
                         && !host.started
@@ -1951,8 +2043,50 @@ impl<'runtime> Machine<'runtime> {
                             RuntimePhase::Evaluation,
                         )?;
                     }
-                    let transition =
+                    let mut transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    let advance = if let Some(host) = &mut self.syntax_host {
+                        host.advance_entry(node)?
+                    } else {
+                        None
+                    };
+                    if let Some(advance) = advance {
+                        let host = self
+                            .syntax_host
+                            .as_mut()
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        host.pay_advance_box()?;
+                        let frame = match (advance, transition.frame.take()) {
+                            (
+                                syntax::AdvanceEntry::Completion(site),
+                                Some(Frame::Match { arms, environment }),
+                            ) => {
+                                let guard = host.begin_advance(site)?;
+                                AdvanceFrame::Match {
+                                    arms,
+                                    environment,
+                                    guard,
+                                }
+                            }
+                            (
+                                syntax::AdvanceEntry::Application(site),
+                                Some(Frame::ApplyFunction {
+                                    argument,
+                                    caller_environment,
+                                }),
+                            ) => {
+                                let observation = host.application_advance(site)?;
+                                AdvanceFrame::ApplyFunction {
+                                    argument,
+                                    caller_environment,
+                                    observation,
+                                }
+                            }
+                            _ => return Err(RuntimeFailure::InvalidControlState),
+                        };
+                        transition.frame =
+                            Some(Frame::GeneratorAdvance(boxed_advance_frame(frame)?));
+                    }
                     if matches!(
                         &transition.frame,
                         Some(Frame::NativeInterpretBoundary { .. })
@@ -2206,8 +2340,13 @@ impl<'runtime> Machine<'runtime> {
             RuntimePhase::Acquisition,
         )?;
         reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        // Each carrier retains the same nonempty program-local guard list.
+        if !self.quote_guards.is_empty() {
+            charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Acquisition)?;
+        }
         let input = |side, index: usize, bytes, bindings| CarrierInput {
             program: Arc::clone(&program),
+            quote_guards: (!self.quote_guards.is_empty()).then(|| Arc::clone(&self.quote_guards)),
             root: program.root(),
             result,
             entry: admission.entries[index].binder,
@@ -2974,14 +3113,129 @@ impl<'runtime> Machine<'runtime> {
         self.return_from_preflighted(frame, value, false)
     }
 
+    #[inline(never)]
+    fn return_from_generator_advance(
+        &mut self,
+        frames: Box<[AdvanceFrame]>,
+        value: Value,
+        preflighted: bool,
+    ) -> Result<(), RuntimeFailure> {
+        let mut frames = frames.into_vec();
+        if frames.len() != 1 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        match frames.pop().ok_or(RuntimeFailure::InvalidControlState)? {
+            AdvanceFrame::Match {
+                arms,
+                environment,
+                guard,
+            } => {
+                let result = (|| {
+                    self.syntax_host
+                        .as_mut()
+                        .ok_or(RuntimeFailure::InvalidControlState)?
+                        .verify_advance_guard(&guard)?;
+                    return_match(arms, environment, value, &self.heap)
+                })();
+                if result.is_err()
+                    && let Some(host) = &mut self.syntax_host
+                {
+                    host.snapshot_advance_guard(&guard);
+                }
+                drop(guard);
+                self.apply(result?);
+            }
+            AdvanceFrame::ApplyFunction {
+                argument,
+                caller_environment,
+                observation,
+            } => {
+                self.syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .verify_advance(&observation)?;
+                let function = if matches!(value, Value::RegionFunction(_) | Value::Location(_)) {
+                    Value::Function(self.read_callable(&value)?)
+                } else {
+                    value
+                };
+                let mut transition =
+                    return_application_function(argument, caller_environment, function)?;
+                let Some(Frame::ApplyArgument { function }) = transition.frame.take() else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                self.syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .pay_advance_box()?;
+                transition.frame = Some(Frame::GeneratorAdvance(boxed_advance_frame(
+                    AdvanceFrame::ApplyArgument {
+                        function,
+                        observation,
+                    },
+                )?));
+                self.apply(transition);
+            }
+            AdvanceFrame::ApplyArgument {
+                function,
+                observation,
+            } => {
+                #[cfg(test)]
+                if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+                    let direct = self
+                        .frames
+                        .iter()
+                        .filter(|frame| {
+                            matches!(frame,
+                                Frame::GeneratorAdvance(advance)
+                                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
+                            )
+                        })
+                        .count();
+                    observe("call", experiment_advance_guards(&self.frames), direct, 0);
+                }
+                let host = self
+                    .syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                host.verify_advance(&observation)?;
+                if let Value::Function(closure) = &function {
+                    #[cfg(test)]
+                    if let Some(observe) = machine_test_hooks::ADVANCE_CALLABLE_OBSERVER.get() {
+                        observe(&closure.origin);
+                    }
+                    host.observe_advance(&observation, &closure.origin)?;
+                }
+                // The ordinary dispatch owns every callable case and unchanged reason.
+                self.return_from_preflighted(
+                    Frame::ApplyArgument { function },
+                    value,
+                    preflighted,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn return_from_preflighted(
         &mut self,
         frame: Frame,
         value: Value,
         preflighted: bool,
     ) -> Result<(), RuntimeFailure> {
-        disposal::check()?;
+        if let Err(failure) = disposal::check() {
+            if let Frame::GeneratorAdvance(frames) = &frame
+                && let [AdvanceFrame::Match { guard, .. }] = frames.as_ref()
+                && let Some(host) = &mut self.syntax_host
+            {
+                host.snapshot_advance_guard(guard);
+            }
+            return Err(failure);
+        }
         match frame {
+            Frame::GeneratorAdvance(frames) => {
+                self.return_from_generator_advance(frames, value, preflighted)?;
+            }
             Frame::NetworkCapacity { node, environment } => {
                 let capacity = read_integer(&value, &self.heap, &mut self.instantiation_work)?
                     .to_usize()
@@ -3386,7 +3640,18 @@ impl<'runtime> Machine<'runtime> {
                     .captured_cells
                     .checked_sub(segment.frames.len())
                     .ok_or(RuntimeFailure::InvalidControlState)?;
+                #[cfg(test)]
+                let restored_guards = machine_test_hooks::ADVANCE_TRACE_OBSERVER
+                    .get()
+                    .map(|_| experiment_advance_guards(&segment.frames));
                 self.frames.append(&mut segment.frames);
+                #[cfg(test)]
+                if let Some(guards) = restored_guards
+                    && guards != 0
+                    && let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get()
+                {
+                    observe("restore", guards, 0, self.frames.len());
+                }
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ApplyArgument {
@@ -4755,7 +5020,52 @@ impl<'runtime> Machine<'runtime> {
         if let Some(trace) = &mut self.effect_trace {
             reserve_control(trace, 3, RuntimeResource::EffectTrace, false)?;
         }
+        #[cfg(test)]
+        let capture_observation = if machine_test_hooks::CAPTURE_RANGE_OBSERVER.get().is_some() {
+            let first_direct_guard = self.frames.iter().position(|frame| {
+                matches!(frame,
+                    Frame::GeneratorAdvance(advance)
+                        if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
+                )
+            });
+            let handler_effect = match &self.frames[selected] {
+                Frame::HandlerBoundary { node, .. } => {
+                    self.handler(*node).map(|handler| handler.effect().effect())
+                }
+                _ => None,
+            };
+            let canonical_default = handler_effect.is_some_and(|effect| {
+                crate::resolved::RegionApi::for_module(effect.module())
+                    .is_some_and(|api| api.default_alloc() == effect)
+            });
+            Some(machine_test_hooks::AdvanceCaptureObservation {
+                selected,
+                depth: self.frames.len(),
+                first_direct_guard,
+                live_guards: experiment_advance_guards(&self.frames),
+                captured_guards: experiment_advance_guards(&self.frames[selected..]),
+                handler_effect,
+                operation,
+                canonical_default,
+            })
+        } else {
+            None
+        };
         let continuation = self.capture_from(selected)?;
+        #[cfg(test)]
+        {
+            if let Some(observation) = capture_observation
+                && let Some(observe) = machine_test_hooks::CAPTURE_RANGE_OBSERVER.get()
+            {
+                observe(observation);
+            }
+            if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+                let guards = experiment_advance_guards(&continuation.frames);
+                if guards != 0 {
+                    observe("capture", guards, 0, selected);
+                }
+            }
+        }
         if let Some((index, pending)) = registration_owner
             && let Frame::RegistrationBoundary {
                 handler_active,
@@ -5308,7 +5618,18 @@ impl<'runtime> Machine<'runtime> {
             };
             *completion_count = merged_count;
         }
+        #[cfg(test)]
+        let resumed_guards = machine_test_hooks::ADVANCE_TRACE_OBSERVER
+            .get()
+            .map(|_| experiment_advance_guards(&continuation.frames));
         self.frames.append(&mut continuation.frames);
+        #[cfg(test)]
+        if let Some(guards) = resumed_guards
+            && guards != 0
+            && let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get()
+        {
+            observe("resume", guards, 0, self.frames.len());
+        }
         if let Some(index) = registration_owner
             && let Frame::RegistrationBoundary { handler_active, .. } = &mut self.frames[index]
         {
@@ -6894,7 +7215,18 @@ pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, R
     Machine::new_effect(program).run()
 }
 
-pub(crate) fn evaluate_transformer(
+pub(crate) fn evaluate_effect_with_quote_guards(
+    program: &ValidatedEffectProgram,
+    quote_guards: &Arc<[NodeId]>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let mut machine = Machine::new_effect(program);
+    machine.quote_guards = Arc::clone(quote_guards);
+    machine.run()
+}
+
+// Keep invocation inputs separate so their borrows and ownership stay explicit.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_transformer_with_owners<'a>(
     entry: &crate::core::validate::ValidatedMacroEntry,
     captures: &[crate::surface::SurfaceSyntaxCapture],
     source: &crate::source::SourceFile,
@@ -6902,11 +7234,101 @@ pub(crate) fn evaluate_transformer(
     introduction: usize,
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
     frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    let mut contexts = Some(contexts);
+    evaluate_transformer_with_context_slot(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        &mut contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_generator_transformer<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: Arc<crate::syntax::SyntaxContexts>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+    capsule: &crate::driver::GeneratorDiagnosticCapsule<'_>,
+    failure: &mut Option<crate::syntax::AdvanceLocations>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    *failure = None;
+    let mut contexts = Some(contexts);
+    evaluate_transformer_inner(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        &mut contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+        Some(capsule),
+        Some(failure),
+    )
+}
+
+// The quote-input route recovers the same context allocation after the host has
+// finished, before the ordinary machine teardown.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_transformer_with_context_slot<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: &mut Option<std::sync::Arc<crate::syntax::SyntaxContexts>>,
+    frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    evaluate_transformer_inner(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_transformer_inner<'a>(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: &mut Option<Arc<crate::syntax::SyntaxContexts>>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
+    capsule: Option<&crate::driver::GeneratorDiagnosticCapsule<'_>>,
+    mut failure: Option<&mut Option<crate::syntax::AdvanceLocations>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
-        machine.syntax_host = Some(syntax::SyntaxHost::new(
+        machine.syntax_host = Some(syntax::SyntaxHost::new_with_owners(
             entry,
             captures,
             source,
@@ -6914,32 +7336,79 @@ pub(crate) fn evaluate_transformer(
             introduction,
             contexts,
             frame,
+            syntax_work,
+            staged_owners,
         )?);
+        if let Some(capsule) = capsule {
+            machine
+                .syntax_host
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .install_advance(capsule, entry)?;
+        }
         #[cfg(test)]
         {
             machine.transformer_drop_observer = Some(TransformerDropObserver);
         }
-        let evaluation = machine.run_loop()?;
-        let (value, heap) = evaluation.into_observation_parts();
-        let host = machine
+        let mut transferred = (|| {
+            let evaluation = match machine.run_loop() {
+                Ok(evaluation) => evaluation,
+                Err(cause) => {
+                    if let Some(destination) = failure.as_deref_mut() {
+                        *destination = machine
+                            .syntax_host
+                            .as_ref()
+                            .and_then(syntax::SyntaxHost::advance_failure);
+                    }
+                    return Err(cause);
+                }
+            };
+            #[cfg(test)]
+            if let Some(observe) = machine_test_hooks::TRANSFORMER_EVALUATION_OBSERVER.get() {
+                observe(entry, &evaluation);
+            }
+            let (value, heap) = evaluation.into_observation_parts();
+            let host = machine
+                .syntax_host
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            #[cfg(test)]
+            {
+                let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
+                machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+            }
+            let transferred = host
+                .transfer(&value, heap.cells(), &mut machine.instantiation_work)
+                .map(|output| (output, host.fresh_count()));
+            #[cfg(test)]
+            if captures.iter().any(|capture| {
+                matches!(
+                    capture,
+                    crate::surface::SurfaceSyntaxCapture::Declaration(_)
+                )
+            }) && transferred.is_ok()
+                && machine_test_hooks::TRANSFORMER_DROPS.get() == 0
+                && machine_test_hooks::ROOT_CLOSES.get() == 0
+            {
+                let count = machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get();
+                machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.set(count + 1);
+            }
+            #[cfg(test)]
+            if transferred.is_err() {
+                let failures = machine_test_hooks::TRANSFER_FAILURES.get();
+                machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
+            }
+            drop(value);
+            drop(heap);
+            transferred
+        })();
+        *contexts = machine
             .syntax_host
-            .as_ref()
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        #[cfg(test)]
-        {
-            let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
-            machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+            .as_mut()
+            .and_then(syntax::SyntaxHost::take_contexts);
+        if contexts.is_none() && transferred.is_ok() {
+            transferred = Err(RuntimeFailure::InvalidControlState);
         }
-        let transferred = host
-            .transfer(&value, heap.cells(), &mut machine.instantiation_work)
-            .map(|output| (output, host.fresh_count()));
-        #[cfg(test)]
-        if transferred.is_err() {
-            let failures = machine_test_hooks::TRANSFER_FAILURES.get();
-            machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
-        }
-        drop(value);
-        drop(heap);
         drop(machine);
         transferred
     })();
@@ -6974,6 +7443,17 @@ pub fn evaluate_effect_with_source_native_program(
     machine.run()
 }
 
+pub(crate) fn evaluate_effect_with_source_native_quote_guards(
+    admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
+    quote_guards: &Arc<[NodeId]>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let (program, bindings) = admitted.into_parts();
+    let mut machine = Machine::new_effect(program);
+    machine.source_bindings = Some(bindings);
+    machine.quote_guards = Arc::clone(quote_guards);
+    machine.run()
+}
+
 fn apply_primitive(
     primitive: Primitive,
     left: Value,
@@ -6991,6 +7471,201 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn declaration_host_runs_the_unchanged_public_graph() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration/main.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let program = compile_path(configuration).expect("the fixed declaration graph compiles");
+        assert_eq!(super::machine_test_hooks::DECLARATION_CAPTURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::DECLARATION_UNWRAPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(
+            super::machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(),
+            1
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let result = execute(&program).expect("the staged graph executes");
+        assert_eq!(result.value_display(), "42");
+        assert_eq!(result.type_display(), "Int");
+        eprintln!(
+            "declaration capture, unwrap, owned transfer before drop, root close, staged 42 : Int"
+        );
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn declaration_host_rejection_retains_both_sources_and_publishes_no_program() {
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            message::{Catalogue, Locale},
+            module::ModuleRoots,
+            presentation::{compile_file_diagnostics, write_human, write_json, write_short},
+        };
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration/rejected.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let failure = compile_path(configuration).expect_err("rejection publishes no program");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("the authored rejection must be retained: {failure:?}");
+        };
+        assert_eq!(rejection.message(), "declaration rejected");
+        assert!(rejection.teardown().is_none());
+        let caller = failure
+            .sources()
+            .iter()
+            .find(|source| source.display_path().ends_with("rejected.ash"))
+            .expect("caller source retained");
+        let definition = failure
+            .sources()
+            .iter()
+            .find(|source| source.display_path().ends_with("forms.ash"))
+            .expect("definition source retained");
+        assert_ne!(caller.id(), definition.id());
+        assert_eq!(rejection.primary_span().source(), caller.id());
+        assert_eq!(rejection.definition.source(), definition.id());
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("one authored rejection");
+        };
+        let mut human = Vec::new();
+        write_short(
+            &mut human,
+            diagnostic,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(human)
+                .unwrap()
+                .contains("declaration rejected")
+        );
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            diagnostic,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("declaration rejected"));
+        assert!(human.contains("rejected.ash"));
+        assert!(human.contains("forms.ash"));
+        let mut json = Vec::new();
+        write_json(&mut json, diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["reason"], "syntax.rejected");
+        let labels = json["labels"].as_array().unwrap();
+        for source in ["rejected.ash", "forms.ash"] {
+            assert!(labels.iter().any(|label| {
+                label["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(source))
+            }));
+        }
+        eprintln!(
+            "authored rejection, distinct caller and definition SourceIds, no compiled program, root close"
+        );
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn declaration_host_injected_teardown_failure_keeps_success_and_rejection_unpublished() {
+        use super::machine_test_hooks as hooks;
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            eval::CleanupStatus,
+            module::ModuleRoots,
+        };
+
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("main.ash"))
+            .expect_err("an injected close failure prevents publishing the output");
+        let Some(PipelineFailure::SyntaxRuntime(failure)) = failure.pipeline_failure() else {
+            panic!("the close failure is retained as a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = failure.cause() else {
+            panic!("the injected close failure retains its resource details");
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().phase,
+            super::RuntimePhase::Teardown
+        );
+        assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+        assert_eq!(super::machine_test_hooks::DECLARATION_CAPTURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::DECLARATION_UNWRAPS.get(), 1);
+        assert_eq!(
+            super::machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(),
+            1
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+
+        hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("rejected.ash"))
+            .expect_err("an authored rejection publishes no program");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("the authored rejection remains primary");
+        };
+        assert_eq!(rejection.message(), "declaration rejected");
+        let teardown = rejection
+            .teardown()
+            .expect("the injected close failure remains related");
+        assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+        assert_eq!(
+            teardown.resource,
+            super::RuntimeResource::EnvironmentDisposal
+        );
+        assert_eq!(
+            teardown.cause,
+            super::ResourceFailureCause::ConfiguredCapacity
+        );
+        assert!(
+            failure
+                .sources()
+                .iter()
+                .any(|source| source.display_path().ends_with("rejected.ash"))
+        );
+        assert!(
+            failure
+                .sources()
+                .iter()
+                .any(|source| source.display_path().ends_with("forms.ash"))
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        hooks::reset();
+        eprintln!(
+            "fixed declaration success and authored rejection: injected root-close refusal retained, no program"
+        );
+    }
+
     #[test]
     fn copied_nested_transformers_each_execute_before_the_runtime_program() {
         use crate::{
@@ -9024,6 +9699,7 @@ value ignored => {handler}
         );
         let make_input = |side| CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,
@@ -9326,6 +10002,7 @@ value ignored => {handler}
         let transport = NetworkTransport::prepare(1).unwrap();
         let input = |side| CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,
@@ -9699,6 +10376,7 @@ value ignored => {handler}
         .unwrap();
         let input = CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,

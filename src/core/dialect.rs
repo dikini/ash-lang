@@ -11,7 +11,10 @@ use std::{
 };
 
 mod catalog_relocation;
+pub(crate) mod checked_owner_anchors;
 mod zonk;
+
+pub(super) use checked_owner_anchors::PreparationError as OwnerAnchorPreparationError;
 
 pub(crate) use catalog_relocation::{
     CompletedCatalogOffsets, compose_completed_catalogs, relocate_completed_anchor,
@@ -1776,24 +1779,74 @@ pub(crate) struct CheckedFragmentNode<'a, F: CoreOperationFamily> {
 // These original parser records are independent of the mutable registry rows.
 // Only a successfully validated linked program may create a nonempty set.
 #[derive(Debug, Default)]
-pub(super) struct GeneratedParameterAnchors(crate::resolved::GeneratedParameterOrders);
+pub(super) struct GeneratedParameterAnchors {
+    orders: crate::resolved::GeneratedParameterOrders,
+    checked_owners: checked_owner_anchors::CheckedOwnerOrders,
+    nominal_pairs: Box<[checked_owner_anchors::OriginalNominalPair]>,
+}
 
 impl GeneratedParameterAnchors {
-    pub(super) fn from_linked(
+    pub(super) fn prepare_from_linked(
         linked: &crate::evidence_validation::ValidatedInterfaceProgram,
-    ) -> Self {
-        Self(
-            linked
-                .groups()
-                .iter()
-                .flat_map(|group| group.generated_parameter_orders())
-                .map(|(owner, order)| (*owner, Arc::clone(order)))
-                .collect(),
+        sources: &[&crate::source::SourceFile],
+        module_sources: &[(ModuleId, crate::source::SourceId)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, OwnerAnchorPreparationError> {
+        let checked_owners = checked_owner_anchors::CheckedOwnerOrders::prepare(
+            linked,
+            sources,
+            module_sources,
+            work,
+        )?;
+        let nominal_pairs =
+            checked_owner_anchors::prepare_nominal_pairs(linked, &checked_owners, sources, work)?;
+        let mut order_count = 0usize;
+        for group in linked.groups() {
+            work.charge(1)
+                .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+            order_count = order_count
+                .checked_add(group.generated_parameter_orders().len())
+                .ok_or(OwnerAnchorPreparationError::Resource)?;
+        }
+        work.charge(
+            order_count
+                .checked_mul(3)
+                .ok_or(OwnerAnchorPreparationError::Resource)?,
         )
+        .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+        let mut orders = crate::resolved::GeneratedParameterOrders::default();
+        orders
+            .try_reserve(order_count)
+            .map_err(|_| OwnerAnchorPreparationError::Resource)?;
+        for group in linked.groups() {
+            work.charge(1)
+                .map_err(|()| OwnerAnchorPreparationError::Resource)?;
+            for (owner, order) in group.generated_parameter_orders() {
+                // The complete map allocation, lookup and each retained Arc were prepaid.
+                if owner.module() != group.module()
+                    || orders.insert(*owner, Arc::clone(order)).is_some()
+                {
+                    return Err(OwnerAnchorPreparationError::Invalid);
+                }
+            }
+        }
+        Ok(Self {
+            orders,
+            checked_owners,
+            nominal_pairs,
+        })
     }
 
     pub(super) fn orders(&self) -> &crate::resolved::GeneratedParameterOrders {
-        &self.0
+        &self.orders
+    }
+
+    pub(super) fn checked_owners(&self) -> &checked_owner_anchors::CheckedOwnerOrders {
+        &self.checked_owners
+    }
+
+    pub(super) fn nominal_pairs(&self) -> &[checked_owner_anchors::OriginalNominalPair] {
+        &self.nominal_pairs
     }
 }
 
@@ -2100,6 +2153,17 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
 
     pub(super) fn generated_parameter_anchors(&self) -> &Arc<GeneratedParameterAnchors> {
         &self.0.generated_parameter_anchors
+    }
+
+    /// Borrows only the original checked rows retained by this validated program.
+    pub(crate) fn checked_owner_modules(&self) -> &[checked_owner_anchors::OriginalModuleOwners] {
+        self.0.generated_parameter_anchors.checked_owners.modules()
+    }
+
+    pub(crate) fn checked_original_nominal_pairs(
+        &self,
+    ) -> &[checked_owner_anchors::OriginalNominalPair] {
+        self.0.generated_parameter_anchors.nominal_pairs()
     }
 }
 

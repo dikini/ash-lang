@@ -8,7 +8,10 @@ expand_fresh : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_fresh input = {
     let origin = Syntax.invocation_origin(input)
     match Syntax.fresh_identifier(input, "let", origin) {
-        Syntax.InvalidIdentifier => fresh_name(input, origin)
+        Syntax.InvalidIdentifier => match Syntax.fresh_identifier(input, "syntax", origin) {
+            Syntax.InvalidIdentifier => fresh_name(input, origin)
+            _ => Syntax.Rejected(Syntax.MacroDiagnostic("reserved syntax accepted", origin, Syntax.NoOrigins))
+        }
         _ => Syntax.Rejected(Syntax.MacroDiagnostic("invalid identifier accepted", origin, Syntax.NoOrigins))
     }
 }

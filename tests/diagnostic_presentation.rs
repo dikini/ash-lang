@@ -342,6 +342,7 @@ fn unclosed_group_renders_from_parser_facts_in_both_languages() {
             {"name":"found", "kind":"syntax", "value":"end-of-file"}
         ])
     );
+    assert_eq!(json["labels"].as_array().unwrap().len(), 2);
     assert_eq!(json["labels"][0]["relationship"], "opening_group");
     assert_eq!(json["labels"][1]["relationship"], "recovery_position");
     assert_eq!(json["labels"][0]["facts"], serde_json::json!([]));

@@ -41,14 +41,14 @@ expand_reparsed input = {
 }
 
 emit : (Syntax.Syntax, Syntax.Origin) -> Syntax.MacroResult ! {Syntax.Ops}
-emit (syntax, origin) = match Syntax.make_token(Syntax.Star, "*") {
-    Syntax.MadeToken(star) => emit_ten(syntax, origin, star)
+emit (syntax_value, origin) = match Syntax.make_token(Syntax.Star, "*") {
+    Syntax.MadeToken(star) => emit_ten(syntax_value, origin, star)
     _ => Syntax.Rejected(Syntax.MacroDiagnostic("invalid star", origin, Syntax.NoOrigins))
 }
 
 emit_ten : (Syntax.Syntax, Syntax.Origin, Syntax.Token) -> Syntax.MacroResult ! {Syntax.Ops}
-emit_ten (syntax, origin, star) = match Syntax.make_token(Syntax.IntegerLiteral, "10") {
-    Syntax.MadeToken(ten) => match syntax {
+emit_ten (syntax_value, origin, star) = match Syntax.make_token(Syntax.IntegerLiteral, "10") {
+    Syntax.MadeToken(ten) => match syntax_value {
         Syntax.Syntax(nodes) => {
             let tail = Syntax.MoreNodes(Syntax.TokenNode(ten, origin), Syntax.NoNodes)
             let suffix = Syntax.MoreNodes(Syntax.TokenNode(star, origin), tail)

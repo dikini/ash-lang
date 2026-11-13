@@ -19,8 +19,8 @@ use crate::{
     parser::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
         finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
-        parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
-        project_module_retaining_templates,
+        parse_module_header, parse_with_budget_and_header, project_module,
+        project_module_header_with_syntax,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -286,6 +286,14 @@ enum ModuleIdNamespace {
 }
 
 impl ModuleId {
+    pub(crate) const fn is_admitted_source(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::Admitted)
+    }
+
+    pub(crate) const fn is_direct_core_source(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::DirectCoreSource)
+    }
+
     /// Reconstructs one graph-local module identity from its numeric value.
     ///
     /// Compiler stages should normally obtain identities from [`LoadedModule`].
@@ -449,12 +457,16 @@ pub struct ModuleDependency {
     target: ModuleId,
     import_span: Span,
     // A compiler dependency is not a fabricated SurfaceImport and binds no names.
-    region_service: bool,
+    compiler_private: bool,
 }
 
 impl ModuleDependency {
     pub(crate) const fn is_region_service(self) -> bool {
-        self.region_service
+        self.compiler_private && self.target.is_builtin_region()
+    }
+
+    pub(crate) const fn is_compiler_private(self) -> bool {
+        self.compiler_private
     }
     /// Returns the imported module identity.
     #[must_use]
@@ -470,16 +482,61 @@ impl ModuleDependency {
 }
 
 /// One parsed module and its source-ordered dependency edges.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct LoadedModule {
     id: ModuleId,
     canonical_path: PathBuf,
     source: std::sync::Arc<SourceFile>,
     surface: SurfaceModule,
     dependencies: Box<[ModuleDependency]>,
+    quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
+    quote_introduction: Option<usize>,
+    caller_quote_owner: Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>,
 }
 
+// A cloned surface has different Box allocations. Its source syntax is still
+// equal, but the original module's transient quote authority must not follow it.
+impl Clone for LoadedModule {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            canonical_path: self.canonical_path.clone(),
+            source: self.source.clone(),
+            surface: self.surface.clone(),
+            dependencies: self.dependencies.clone(),
+            quote_sites: Vec::new(),
+            quote_introduction: None,
+            caller_quote_owner: None,
+        }
+    }
+}
+
+impl PartialEq for LoadedModule {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.canonical_path == other.canonical_path
+            && self.source == other.source
+            && self.surface == other.surface
+            && self.dependencies == other.dependencies
+    }
+}
+
+impl Eq for LoadedModule {}
+
 impl LoadedModule {
+    pub(crate) fn caller_quote_owner(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::syntax::CallerQuoteOwner>> {
+        self.caller_quote_owner.as_ref()
+    }
+
+    fn into_source(mut self) -> SourceFile {
+        // The completed-module association must not keep this module's own
+        // source alive while attempting the existing move into diagnostics.
+        drop(self.caller_quote_owner.take());
+        std::sync::Arc::try_unwrap(self.source).unwrap_or_else(|source| (*source).clone())
+    }
+
     /// Returns this module's graph-local identity.
     #[must_use]
     pub const fn id(&self) -> ModuleId {
@@ -513,6 +570,36 @@ impl LoadedModule {
     pub fn dependencies(&self) -> &[ModuleDependency] {
         &self.dependencies
     }
+
+    pub(crate) fn quote_sites(&self) -> &[crate::syntax::SurfaceQuoteSite] {
+        &self.quote_sites
+    }
+
+    pub(crate) fn quote_introduction(&self) -> Option<usize> {
+        self.quote_introduction
+    }
+
+    pub(crate) fn prepare_escape_probes(
+        &mut self,
+        budget: &mut SyntaxBudget,
+    ) -> Result<Vec<usize>, crate::parser::MacroParseFailure> {
+        crate::syntax::prepare_escape_probes(&mut self.surface, self.quote_introduction, budget)
+    }
+
+    pub(crate) fn finish_escape_probes(
+        &mut self,
+        probes: &[usize],
+        categories: &[(crate::syntax::EscapeResultCategory, bool, bool)],
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), crate::parser::MacroParseFailure> {
+        crate::syntax::finish_escape_probes(
+            &mut self.surface,
+            self.quote_introduction,
+            probes,
+            categories,
+            budget,
+        )
+    }
 }
 
 /// A canonical module graph ordered with dependencies before dependents.
@@ -528,9 +615,7 @@ impl ModuleGraph {
         self.modules
             .into_vec()
             .into_iter()
-            .map(|module| {
-                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
-            })
+            .map(LoadedModule::into_source)
             .collect::<Vec<_>>()
             .into_boxed_slice()
     }
@@ -539,6 +624,11 @@ impl ModuleGraph {
     #[must_use]
     pub fn modules(&self) -> &[LoadedModule] {
         &self.modules
+    }
+
+    #[cfg(test)]
+    pub(crate) fn module_at_mut(&mut self, index: usize) -> Option<&mut LoadedModule> {
+        self.modules.get_mut(index)
     }
 
     /// Looks up one canonical module by graph-local identity.
@@ -873,6 +963,56 @@ impl Error for ModuleFailure {}
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn staged_resource_location_requires_each_admitted_source() {
+        use crate::{
+            presentation::{PresentationError, compile_graph_diagnostics, write_json},
+            source::ByteRange,
+            syntax::{DiagnosticLocation, ExpansionFrame},
+            syntax_resource::ResourceFailure,
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("caller.ash", "invoke").unwrap();
+        let missing = SourceFile::new("forms.ash", "definition").unwrap();
+        let invocation = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let definition = missing.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let mut location = DiagnosticLocation::new(invocation.into());
+        location.frames.push(Arc::new(ExpansionFrame {
+            invocation,
+            definition,
+        }));
+        let mut graph = GraphDiagnostic {
+            failure: Box::new(GraphFailure {
+                failure: LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    source,
+                    import_span: None,
+                    lexical: Vec::new(),
+                    parser: Vec::new(),
+                    resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                })),
+                resource_location: Some(location),
+            }),
+            sources: Box::default(),
+            compilation_work: None,
+        };
+        assert!(matches!(
+            compile_graph_diagnostics(&graph),
+            Err(PresentationError::MissingSource)
+        ));
+
+        graph.failure.resource_location = None;
+        let diagnostics = compile_graph_diagnostics(&graph).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.resource.structural-depth");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["labels"], serde_json::json!([]));
+    }
+
     #[test]
     fn corrupt_projected_paths_report_compiler_failures_with_specific_causes() {
         for (input, missing_parent, expected_cause) in [
@@ -884,7 +1024,7 @@ mod presentation_tests {
                 "missing-path-segments",
             ),
         ] {
-            let (source, mut surface) = parse_surface_module(
+            let (source, mut surface, needs_generator_dependency) = parse_surface_module(
                 Path::new("entry.ash"),
                 input.into(),
                 None,
@@ -909,7 +1049,7 @@ mod presentation_tests {
                     membership: HashSet::new(),
                 },
                 source,
-                surface: StagedSyntax::parsed(surface, None),
+                surface: StagedSyntax::parsed(surface, None, needs_generator_dependency),
                 dependencies: Vec::new(),
                 relative_edges: Vec::new(),
                 state: VisitState::Active,
@@ -924,7 +1064,10 @@ mod presentation_tests {
                 "corrupt compiler data must not reject source"
             );
             let context = GraphDiagnostic {
-                failure: Box::new(failure),
+                failure: Box::new(GraphFailure {
+                    failure,
+                    resource_location: None,
+                }),
                 sources: vec![module.source].into_boxed_slice(),
                 compilation_work: None,
             };
@@ -1224,12 +1367,24 @@ impl Error for LoadGraphError {}
 /// Sources are moved out of traversal state only after loading fails.
 #[derive(Debug)]
 pub struct GraphDiagnostic {
-    failure: Box<LoadGraphError>,
+    failure: Box<GraphFailure>,
     sources: Box<[SourceFile]>,
     compilation_work: Option<Box<crate::compiler_work::CompilationWork>>,
 }
 
+// Keep the optional context in the existing failure allocation so preserving
+// a paid resource location does not require another allocation on failure.
+#[derive(Debug)]
+struct GraphFailure {
+    failure: LoadGraphError,
+    resource_location: Option<crate::syntax::DiagnosticLocation>,
+}
+
 impl GraphDiagnostic {
+    pub(crate) fn resource_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        self.failure.resource_location.as_ref()
+    }
+
     pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
         self.compilation_work.as_deref()
     }
@@ -1245,18 +1400,28 @@ impl GraphDiagnostic {
     /// Borrows the unchanged graph-loading failure.
     #[must_use]
     pub const fn failure(&self) -> &LoadGraphError {
-        &self.failure
+        &self.failure.failure
     }
 
     /// Consumes the diagnostic when only its semantic failure is needed.
     #[must_use]
     pub fn into_failure(self) -> LoadGraphError {
-        *self.failure
+        self.failure.failure
+    }
+
+    pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
+        let mut sources = self.sources.into_vec();
+        match self.failure.failure {
+            LoadGraphError::Syntax(failure) => sources.push(failure.source),
+            LoadGraphError::Projection { source, .. } => sources.push(source),
+            _ => {}
+        }
+        sources.into_boxed_slice()
     }
 
     /// Borrows all admitted sources, including a rejected syntax source.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
-        let rejected = match &*self.failure {
+        let rejected = match &self.failure.failure {
             LoadGraphError::Syntax(failure) => Some(&failure.source),
             LoadGraphError::Projection { source, .. } => Some(source),
             _ => None,
@@ -1267,25 +1432,25 @@ impl GraphDiagnostic {
     /// Returns the module-stage failure, if present.
     #[must_use]
     pub const fn as_module_failure(&self) -> Option<&ModuleFailure> {
-        self.failure.as_module_failure()
+        self.failure.failure.as_module_failure()
     }
 
     /// Returns the stable module-stage reason, if present.
     #[must_use]
     pub const fn module_reason(&self) -> Option<ModuleReason> {
-        self.failure.module_reason()
+        self.failure.failure.module_reason()
     }
 
     /// Preserves the original source-rejection classification.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        self.failure.is_source_rejection()
+        self.failure.failure.is_source_rejection()
     }
 }
 
 impl fmt::Display for GraphDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.failure.fmt(formatter)
+        self.failure.failure.fmt(formatter)
     }
 }
 
@@ -1294,7 +1459,10 @@ impl Error for GraphDiagnostic {}
 impl From<LoadGraphError> for GraphDiagnostic {
     fn from(failure: LoadGraphError) -> Self {
         Self {
-            failure: Box::new(failure),
+            failure: Box::new(GraphFailure {
+                failure,
+                resource_location: None,
+            }),
             sources: Box::default(),
             compilation_work: None,
         }
@@ -1380,11 +1548,227 @@ struct StagedModule {
     state: VisitState,
 }
 
+// The view exists only while this actual module is being projected. Its
+// snapshot is populated lazily by a reached checked generator adapter.
+pub(crate) struct StagedModuleLoan<'a> {
+    id: ModuleId,
+    source_id: SourceId,
+    canonical_path: &'a Path,
+    imports: &'a [SurfaceImport],
+    dependencies: &'a [ModuleDependency],
+    span: Span,
+    source_snapshot: &'a std::cell::RefCell<Option<std::sync::Arc<SourceFile>>>,
+    caller_quote_owner:
+        &'a std::cell::RefCell<Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>>,
+    quote_projection: Option<&'a std::cell::RefCell<crate::parser::QuoteProjection>>,
+}
+
+pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut(
+        &'call crate::syntax::SelectedSyntax,
+        crate::syntax::DeclarationAdapter<'call>,
+        &'call [crate::surface::SurfaceSyntaxCapture],
+        &'call SourceFile,
+        &'call StagedModuleLoan<'module>,
+        &'call crate::surface::SurfaceName,
+        usize,
+        std::sync::Arc<crate::syntax::SyntaxContexts>,
+        std::sync::Arc<crate::syntax::ExpansionFrame>,
+        &'call mut Vec<crate::syntax::SyntaxOwner>,
+        &'call mut SyntaxBudget,
+    ) -> Result<(Vec<crate::syntax::MacroOutputNode>, usize), Span>
+    + 'a;
+
+impl StagedModuleLoan<'_> {
+    #[cfg(test)]
+    pub(crate) fn dependencies(&self) -> &[ModuleDependency] {
+        self.dependencies
+    }
+
+    pub(crate) fn quote_projection(
+        &self,
+    ) -> Option<&std::cell::RefCell<crate::parser::QuoteProjection>> {
+        self.quote_projection
+    }
+
+    fn retained_source(
+        &self,
+        source: &SourceFile,
+        budget: &mut SyntaxBudget,
+    ) -> Result<std::sync::Arc<SourceFile>, ResourceFailure> {
+        debug_assert_eq!(source.id(), self.source_id);
+        if let Some(source) = self.source_snapshot.borrow().as_ref() {
+            budget.charge()?;
+            return Ok(std::sync::Arc::clone(source));
+        }
+        // Pay the one deep snapshot, its Arc, and the returned Arc retain
+        // before constructing or publishing any part of the snapshot.
+        budget.charge_units(
+            source
+                .snapshot_work()
+                .unwrap_or(usize::MAX)
+                .saturating_add(2),
+        )?;
+        let retained = std::sync::Arc::new(source.clone());
+        let result = std::sync::Arc::clone(&retained);
+        *self.source_snapshot.borrow_mut() = Some(retained);
+        Ok(result)
+    }
+
+    pub(crate) fn retain_caller_quote_owner(
+        &self,
+        source: &SourceFile,
+        selected: &[crate::syntax::SelectedSyntax],
+        budget: &mut SyntaxBudget,
+    ) -> Result<Option<std::sync::Arc<crate::syntax::CallerQuoteOwner>>, ResourceFailure> {
+        if source.id() != self.source_id {
+            return Ok(None);
+        }
+        if let Some(owner) = self.caller_quote_owner.borrow().as_ref() {
+            budget.charge()?;
+            return Ok(Some(std::sync::Arc::clone(owner)));
+        }
+        // Selection records, temporary/final slice slots, the record and its
+        // cached and returned Arc retains are paid before any construction.
+        budget.charge_units(selected.len().saturating_mul(2).saturating_add(3))?;
+        for selection in selected {
+            crate::syntax::charge_selected(selection, budget)?;
+        }
+        let retained = self.retained_source(source, budget)?;
+        let owner = std::sync::Arc::new(crate::syntax::CallerQuoteOwner {
+            module: self.id,
+            source: retained,
+            selected: std::sync::Arc::from(selected.to_vec().into_boxed_slice()),
+        });
+        *self.caller_quote_owner.borrow_mut() = Some(std::sync::Arc::clone(&owner));
+        Ok(Some(owner))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn no_quote_adapter_view(
+        &self,
+        source: &SourceFile,
+        definition: crate::surface::SurfaceDefinition,
+        budget: &mut SyntaxBudget,
+    ) -> Result<LoadedModule, ResourceFailure> {
+        self.adapter_view(source, definition, Vec::new(), None, None, budget)
+    }
+
+    pub(crate) fn adapter_view(
+        &self,
+        source: &SourceFile,
+        definition: crate::surface::SurfaceDefinition,
+        quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
+        quote_introduction: Option<usize>,
+        redundant_syntax_owner: Option<ModuleId>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<LoadedModule, ResourceFailure> {
+        use crate::surface::{
+            SurfaceDeclarationIndex, SurfaceImportItem, SurfaceImportSelection, SurfaceModulePath,
+        };
+
+        fn charge_name(
+            name: &crate::surface::SurfaceName,
+            budget: &mut SyntaxBudget,
+        ) -> Result<(), ResourceFailure> {
+            crate::syntax::charge_type_name_copy(name, 0, budget)?;
+            if let Some(location) = name.diagnostic.as_deref() {
+                budget.charge_units(location.frames.len())?;
+            }
+            Ok(())
+        }
+
+        // The view retains the caller's import syntax and dependency order.
+        budget.charge_units(
+            self.imports
+                .len()
+                .saturating_add(self.dependencies.len().saturating_mul(2))
+                .saturating_add(self.canonical_path.as_os_str().as_encoded_bytes().len())
+                .saturating_add(2),
+        )?;
+        for import in self.imports {
+            let segments = match &import.path {
+                SurfaceModulePath::Relative(segments) => segments,
+                SurfaceModulePath::Absolute { root, segments } => {
+                    charge_name(root, budget)?;
+                    segments
+                }
+            };
+            budget.charge_units(segments.len())?;
+            for name in segments {
+                charge_name(name, budget)?;
+            }
+            match &import.selection {
+                SurfaceImportSelection::Qualified { alias } => charge_name(alias, budget)?,
+                SurfaceImportSelection::Targeted(items) => {
+                    budget.charge_units(items.len())?;
+                    for item in items {
+                        match item {
+                            SurfaceImportItem::Syntax { name, alias, .. }
+                            | SurfaceImportItem::Name { name, alias, .. } => {
+                                charge_name(name, budget)?;
+                                if let Some(alias) = alias {
+                                    charge_name(alias, budget)?;
+                                }
+                            }
+                            SurfaceImportItem::Implementation { interface, .. } => {
+                                charge_name(interface, budget)?
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let search_redundant = quote_sites.is_empty()
+            && quote_introduction.is_none()
+            && redundant_syntax_owner.is_some();
+        if search_redundant {
+            // Prepay one bounded scan and at most one vector shift.
+            budget.charge_units(self.dependencies.len().saturating_mul(2))?;
+        }
+        let source = self.retained_source(source, budget)?;
+        let mut dependencies = self.dependencies.to_vec();
+        if search_redundant
+            && let Some(index) = dependencies.iter().position(|edge| {
+                edge.is_compiler_private()
+                    && edge.target().is_builtin_compiler_syntax()
+                    && Some(edge.target()) == redundant_syntax_owner
+            })
+        {
+            dependencies.remove(index);
+        }
+        Ok(LoadedModule {
+            id: self.id,
+            canonical_path: self.canonical_path.to_path_buf(),
+            source,
+            surface: SurfaceModule {
+                imports: self.imports.to_vec(),
+                syntax_declarations: Vec::new(),
+                declaration_order: vec![SurfaceDeclarationIndex::Global(0)],
+                foreign_libraries: Vec::new(),
+                type_declarations: Vec::new(),
+                interfaces: Vec::new(),
+                effects: Vec::new(),
+                implementations: Vec::new(),
+                resources: Vec::new(),
+                definitions: vec![definition],
+                span: self.span,
+            },
+            dependencies: dependencies.into_boxed_slice(),
+            quote_sites,
+            quote_introduction,
+            caller_quote_owner: None,
+        })
+    }
+}
+
 struct StagedSyntax {
     imports: Vec<SurfaceImport>,
     span: Span,
     body: ModuleBody,
     import_span: Option<Span>,
+    needs_quote_dependency: bool,
+    needs_generator_dependency: bool,
+    syntax_import_quote_dependency: bool,
 }
 
 enum ModuleBody {
@@ -1393,28 +1777,55 @@ enum ModuleBody {
 }
 
 impl StagedSyntax {
-    fn parsed(mut surface: SurfaceModule, import_span: Option<Span>) -> Self {
+    fn parsed(
+        mut surface: SurfaceModule,
+        import_span: Option<Span>,
+        needs_generator_dependency: bool,
+    ) -> Self {
         Self {
             imports: std::mem::take(&mut surface.imports),
             span: surface.span,
             body: ModuleBody::Parsed(surface),
             import_span,
+            needs_quote_dependency: false,
+            needs_generator_dependency,
+            syntax_import_quote_dependency: false,
         }
     }
 }
 
 impl StagedModule {
+    #[allow(clippy::too_many_arguments)] // Independent staging, quote, and work loans stay explicit.
     fn into_loaded(
         self,
         budget: &mut SyntaxBudget,
         syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
+        quote: (
+            Option<crate::syntax::SyntaxOwner>,
+            &mut usize,
+            Option<ModuleDependency>,
+        ),
+        resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
     ) -> Result<LoadedModule, LoadGraphError> {
+        let (quote_owner, next_quote_ordinal, redundant_quote_dependency) = quote;
+        let initial_quote_ordinal = *next_quote_ordinal;
         let StagedSyntax {
             imports,
             span,
             body,
             import_span,
+            needs_quote_dependency,
+            needs_generator_dependency: _,
+            syntax_import_quote_dependency,
         } = self.surface;
+        let mut completed_owners = None;
+        let mut completed_sites = Vec::new();
+        let mut completed_quote_introduction = None;
+        let source_snapshot = std::cell::RefCell::new(None);
+        let caller_quote_owner = std::cell::RefCell::new(None);
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1428,8 +1839,108 @@ impl StagedModule {
                     syntax,
                 );
                 *budget = retained;
-                let (source, mut surface) =
-                    project_finished_module(self.source, tree, import_span)?;
+                if let Err(resource) = budget
+                    .charge_units(owners.len())
+                    .and_then(|()| crate::syntax::charge_caller_owner_retains(owners, budget))
+                {
+                    return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                        lexical: Vec::new(),
+                        parser: Vec::new(),
+                        resource: Some(resource),
+                        source: self.source,
+                        import_span,
+                    })));
+                }
+                let mut staged_owners = owners.clone();
+                let quote_projection = if needs_quote_dependency {
+                    if let Some(quote_owner) = quote_owner {
+                        let owner_work = if staged_owners.len() == staged_owners.capacity() {
+                            staged_owners.len().saturating_mul(2).saturating_add(1)
+                        } else {
+                            1
+                        };
+                        if let Err(resource) = budget.charge_units(owner_work) {
+                            return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                                lexical: Vec::new(),
+                                parser: Vec::new(),
+                                resource: Some(resource),
+                                source: self.source,
+                                import_span,
+                            })));
+                        }
+                        if staged_owners.len() == staged_owners.capacity() {
+                            staged_owners.reserve_exact(1);
+                        }
+                        staged_owners.push(quote_owner);
+                        completed_quote_introduction = Some(staged_owners.len());
+                        Some(std::cell::RefCell::new(crate::parser::QuoteProjection {
+                            introduction: staged_owners.len(),
+                            next_ordinal: *next_quote_ordinal,
+                            sites: Vec::new(),
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let (source, mut surface) = {
+                    let loan = StagedModuleLoan {
+                        id: self.id,
+                        source_id: self.source.id(),
+                        canonical_path: &self.canonical_path,
+                        imports: &imports,
+                        dependencies: &self.dependencies,
+                        span,
+                        source_snapshot: &source_snapshot,
+                        caller_quote_owner: &caller_quote_owner,
+                        quote_projection: quote_projection.as_ref(),
+                    };
+                    let enabled = transformer.is_some();
+                    let mut transformer = transformer;
+                    let mut routed =
+                        |selection: &crate::syntax::SelectedSyntax,
+                         adapter: crate::syntax::DeclarationAdapter<'_>,
+                         captures: &[crate::surface::SurfaceSyntaxCapture],
+                         source: &SourceFile,
+                         caller: &crate::surface::SurfaceName,
+                         introduction: usize,
+                         contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+                         frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+                         owners: &mut Vec<crate::syntax::SyntaxOwner>,
+                         budget: &mut SyntaxBudget| {
+                            let Some(transformer) = transformer.as_deref_mut() else {
+                                return Err(caller.span);
+                            };
+                            transformer(
+                                selection,
+                                adapter,
+                                captures,
+                                source,
+                                &loan,
+                                caller,
+                                introduction,
+                                contexts,
+                                frame,
+                                owners,
+                                budget,
+                            )
+                        };
+                    let callback = enabled
+                        .then_some(&mut routed as &mut crate::syntax::DeclarationTransformer<'_>);
+                    project_finished_module(
+                        self.source,
+                        tree,
+                        import_span,
+                        syntax,
+                        owner_imports,
+                        &mut staged_owners,
+                        budget,
+                        callback,
+                        quote_projection.as_ref(),
+                        resource_location,
+                    )?
+                };
                 if surface.imports != imports {
                     return Err(LoadGraphError::Projection {
                         source,
@@ -1440,6 +1951,12 @@ impl StagedModule {
                     });
                 }
                 surface.imports = imports;
+                completed_owners = Some(staged_owners);
+                if let Some(quote_projection) = quote_projection {
+                    let quote_projection = quote_projection.into_inner();
+                    *next_quote_ordinal = quote_projection.next_ordinal;
+                    completed_sites = quote_projection.sites;
+                }
                 (source, surface)
             }
         };
@@ -1450,12 +1967,45 @@ impl StagedModule {
                 import_span,
             });
         }
+        let caller_quote_owner = caller_quote_owner.into_inner();
+        let mut dependencies = self.dependencies;
+        if let Some(redundant_edge) = redundant_quote_dependency
+            && redundant_edge.is_compiler_private()
+            && redundant_edge.target().is_builtin_compiler_syntax()
+            && syntax_import_quote_dependency
+            && *next_quote_ordinal == initial_quote_ordinal
+            && completed_sites.is_empty()
+            && caller_quote_owner.is_none()
+        {
+            if let Err(resource) = budget.charge_units(dependencies.len().saturating_mul(2)) {
+                return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    lexical: Vec::new(),
+                    parser: Vec::new(),
+                    resource: Some(resource),
+                    source,
+                    import_span,
+                })));
+            }
+            if let Some(index) = dependencies.iter().position(|edge| *edge == redundant_edge) {
+                dependencies.remove(index);
+            }
+        }
+        if let Some(staged_owners) = completed_owners {
+            *owners = staged_owners;
+        }
+        let source = match source_snapshot.into_inner() {
+            Some(retained) => retained,
+            None => std::sync::Arc::new(source),
+        };
         Ok(LoadedModule {
             id: self.id,
             canonical_path: self.canonical_path,
-            source: std::sync::Arc::new(source),
+            source,
             surface,
-            dependencies: self.dependencies.into_boxed_slice(),
+            dependencies: dependencies.into_boxed_slice(),
+            quote_sites: completed_sites,
+            quote_introduction: completed_quote_introduction,
+            caller_quote_owner,
         })
     }
 }
@@ -1466,6 +2016,7 @@ pub(crate) struct HeaderGraph {
     completed: Option<ModuleGraph>,
     entry: ModuleId,
     syntax_budget: SyntaxBudget,
+    next_quote_ordinal: usize,
 }
 
 impl HeaderGraph {
@@ -1495,11 +2046,23 @@ impl HeaderGraph {
         })
     }
 
+    pub(crate) fn next_quote_dependency(&self) -> Option<ModuleDependency> {
+        let module = self.pending.front()?;
+        module.surface.needs_quote_dependency.then(|| {
+            module
+                .dependencies
+                .iter()
+                .copied()
+                .find(|edge| edge.target().is_builtin_compiler_syntax())
+        })?
+    }
+
     #[cfg(feature = "resource-calibration")]
     pub(crate) fn all_loaded(&self) -> bool {
         self.pending.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn current_module(&self) -> Option<&LoadedModule> {
         match &self.completed {
             Some(graph) => graph.modules.last(),
@@ -1507,18 +2070,67 @@ impl HeaderGraph {
         }
     }
 
+    pub(crate) fn current_module_with_syntax_budget(
+        &mut self,
+    ) -> Option<(&mut LoadedModule, &mut SyntaxBudget, &mut usize)> {
+        let module = match &mut self.completed {
+            Some(graph) => graph.modules.last_mut(),
+            None => self.loaded.last_mut(),
+        }?;
+        Some((
+            module,
+            &mut self.syntax_budget,
+            &mut self.next_quote_ordinal,
+        ))
+    }
+
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
-        self.next_module_with_syntax(&[])
+        self.next_module_with_syntax(&[], &[], &mut Vec::new(), None)
     }
 
     pub(crate) fn next_module_with_syntax(
         &mut self,
         syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
+    ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
+        self.next_module_with_syntax_and_quote_owner(
+            syntax,
+            owner_imports,
+            owners,
+            transformer,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn next_module_with_syntax_and_quote_owner(
+        &mut self,
+        syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
+        quote_owner: Option<crate::syntax::SyntaxOwner>,
+        redundant_quote_dependency: Option<ModuleDependency>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
-        match module.into_loaded(&mut self.syntax_budget, syntax) {
+        let mut resource_location = None;
+        match module.into_loaded(
+            &mut self.syntax_budget,
+            syntax,
+            owner_imports,
+            owners,
+            transformer,
+            (
+                quote_owner,
+                &mut self.next_quote_ordinal,
+                redundant_quote_dependency,
+            ),
+            &mut resource_location,
+        ) {
             Ok(module) => {
                 self.loaded.push(module);
                 Ok(self.loaded.last())
@@ -1527,13 +2139,13 @@ impl HeaderGraph {
                 let loaded = std::mem::take(&mut self.loaded);
                 let pending = std::mem::take(&mut self.pending);
                 Err(GraphDiagnostic {
-                    failure: Box::new(failure),
+                    failure: Box::new(GraphFailure {
+                        failure,
+                        resource_location,
+                    }),
                     sources: loaded
                         .into_iter()
-                        .map(|module| {
-                            std::sync::Arc::try_unwrap(module.source)
-                                .unwrap_or_else(|source| (*source).clone())
-                        })
+                        .map(LoadedModule::into_source)
                         .chain(pending.into_iter().map(|module| module.source))
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
@@ -1556,15 +2168,20 @@ impl HeaderGraph {
         self.completed.as_ref()
     }
 
+    pub(crate) fn completed_graph_with_syntax_budget(
+        &mut self,
+    ) -> Option<(&ModuleGraph, &mut SyntaxBudget)> {
+        self.completed_graph()?;
+        Some((self.completed.as_ref()?, &mut self.syntax_budget))
+    }
+
     pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
         if let Some(graph) = self.completed {
             return graph.into_sources();
         }
         self.loaded
             .into_iter()
-            .map(|module| {
-                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
-            })
+            .map(LoadedModule::into_source)
             .chain(self.pending.into_iter().map(|module| module.source))
             .collect::<Vec<_>>()
             .into_boxed_slice()
@@ -1815,7 +2432,7 @@ fn discover_graph_with_budget(
                 staged[module_index].dependencies.push(ModuleDependency {
                     target,
                     import_span: span,
-                    region_service: true,
+                    compiler_private: true,
                 });
             }
             if import_index == staged[module_index].surface.imports.len() {
@@ -1825,9 +2442,45 @@ fn discover_graph_with_budget(
                 if staged[module_index]
                     .dependencies
                     .first()
-                    .is_some_and(|edge| edge.region_service)
+                    .is_some_and(|edge| edge.is_compiler_private())
                 {
                     staged[module_index].dependencies.rotate_left(1);
+                }
+                if (staged[module_index].surface.needs_quote_dependency
+                    || staged[module_index].surface.needs_generator_dependency)
+                    && !staged[module_index]
+                        .dependencies
+                        .iter()
+                        .any(|edge| edge.target.is_builtin_compiler_syntax())
+                {
+                    let span = staged[module_index].surface.span;
+                    let target = if let Some(id) = builtin_compiler_syntax {
+                        id
+                    } else {
+                        let region = builtin_region
+                            .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?;
+                        let id = admit_builtin_packed(
+                            "compiler.syntax",
+                            region,
+                            graph_identity,
+                            span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?;
+                        builtin_compiler_syntax = Some(id);
+                        id
+                    };
+                    budget.charge_edge()?;
+                    staged[module_index]
+                        .dependencies
+                        .try_reserve(1)
+                        .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+                    staged[module_index].dependencies.push(ModuleDependency {
+                        target,
+                        import_span: span,
+                        compiler_private: true,
+                    });
                 }
                 staged[module_index].state = VisitState::Finished;
                 dependency_order.push(completed);
@@ -1996,7 +2649,7 @@ fn discover_graph_with_budget(
                 staged[module_index].dependencies.push(ModuleDependency {
                     target,
                     import_span: import.span,
-                    region_service: false,
+                    compiler_private: false,
                 });
                 continue;
             }
@@ -2023,7 +2676,7 @@ fn discover_graph_with_budget(
             staged[module_index].dependencies.push(ModuleDependency {
                 target,
                 import_span: import.span,
-                region_service: false,
+                compiler_private: false,
             });
             if relative {
                 staged[module_index].relative_edges.push(RelativeEdge {
@@ -2063,10 +2716,14 @@ fn discover_graph_with_budget(
             completed: None,
             entry: entry_id,
             syntax_budget: budget.syntax_work,
+            next_quote_ordinal: 0,
         })
     })();
     result.map_err(|failure| GraphDiagnostic {
-        failure: Box::new(failure),
+        failure: Box::new(GraphFailure {
+            failure,
+            resource_location: None,
+        }),
         sources: staged
             .into_iter()
             .map(|module| module.source)
@@ -2123,7 +2780,7 @@ fn admit_builtin_region_facade(
     dependencies.push(ModuleDependency {
         target: service,
         import_span: span,
-        region_service: false,
+        compiler_private: false,
     });
     staged.push(StagedModule {
         id,
@@ -2193,7 +2850,7 @@ fn admit_builtin_region(
     dependencies.push(ModuleDependency {
         target: foreign,
         import_span,
-        region_service: false,
+        compiler_private: false,
     });
     staged.push(StagedModule {
         id,
@@ -2326,7 +2983,7 @@ fn admit_builtin_packed(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2433,7 +3090,7 @@ fn admit_builtin_retained_control(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2483,7 +3140,7 @@ fn admit_builtin_network(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2551,8 +3208,12 @@ fn parse_graph_module(
     mode: BodyMode,
 ) -> Result<(SourceFile, StagedSyntax), LoadGraphError> {
     if matches!(mode, BodyMode::Complete) {
-        let (source, surface) = parse_surface_module(path, text, import_span, syntax_budget)?;
-        return Ok((source, StagedSyntax::parsed(surface, import_span)));
+        let (source, surface, needs_generator_dependency) =
+            parse_surface_module(path, text, import_span, syntax_budget)?;
+        return Ok((
+            source,
+            StagedSyntax::parsed(surface, import_span, needs_generator_dependency),
+        ));
     }
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
         LoadGraphError::SourceModel {
@@ -2569,6 +3230,8 @@ fn parse_graph_module(
             operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
+    let needs_quote_dependency = lexed.needs_quote_dependency();
+    let needs_generator_dependency = lexed.needs_generator_dependency();
     let (tokens, lexical, _, lexical_failure) = lexed.into_parts();
     if let Some(resource) = lexical_failure {
         return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
@@ -2581,7 +3244,8 @@ fn parse_graph_module(
     }
     let (checkpoint, retained) = parse_module_header(tokens, lexical, syntax_budget.clone());
     *syntax_budget = retained;
-    let imports = match project_module_header(&source, &checkpoint) {
+    let (imports, has_syntax_import) = match project_module_header_with_syntax(&source, &checkpoint)
+    {
         Ok(imports) => imports,
         Err(error) => {
             if matches!(
@@ -2606,6 +3270,24 @@ fn parse_graph_module(
             });
         }
     };
+    if has_syntax_import
+        && !needs_quote_dependency
+        && let Err(resource) = syntax_budget.charge()
+    {
+        // The checkpoint already owns these diagnostics; move them without
+        // copying after the continuing budget refuses the new activation.
+        let (lexical, parser) = checkpoint.into_diagnostics();
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical,
+            parser,
+            resource: Some(resource),
+            source,
+            import_span,
+        })));
+    }
+    let syntax_import_quote_dependency =
+        has_syntax_import && !needs_quote_dependency && !needs_generator_dependency;
+    let needs_quote_dependency = needs_quote_dependency || has_syntax_import;
     let span = match module_span_from_checkpoint(&source, &checkpoint) {
         Ok(span) => span,
         Err(error) => {
@@ -2623,14 +3305,26 @@ fn parse_graph_module(
             span,
             body: ModuleBody::Header(checkpoint),
             import_span,
+            needs_quote_dependency,
+            needs_generator_dependency,
+            syntax_import_quote_dependency,
         },
     ))
 }
 
+// Source, syntax owners and the budget are separate projection inputs.
+#[allow(clippy::too_many_arguments)]
 fn project_finished_module(
     source: SourceFile,
     tree: crate::parser::ConcreteTree,
     import_span: Option<Span>,
+    syntax: &[crate::syntax::SelectedSyntax],
+    owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut SyntaxBudget,
+    transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+    quote_sites: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
+    resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -2644,13 +3338,35 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match project_module_retaining_templates(&source, &tree) {
+    match crate::parser::project_declaration_expansions_with_resource(
+        &source,
+        &tree,
+        syntax,
+        owner_imports,
+        owners,
+        budget,
+        transformer,
+        quote_sites,
+        resource_location,
+    ) {
         Ok(surface) => Ok((source, surface)),
-        Err(error) => Err(LoadGraphError::Projection {
+        Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {
+            Err(LoadGraphError::Projection {
+                source,
+                error,
+                import_span,
+            })
+        }
+        Err(crate::parser::DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource,
+        }) => Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical: Vec::new(),
+            parser: diagnostics,
+            resource,
             source,
-            error,
             import_span,
-        }),
+        }))),
     }
 }
 
@@ -2659,7 +3375,7 @@ fn parse_surface_module(
     text: String,
     import_span: Option<Span>,
     syntax_budget: &mut SyntaxBudget,
-) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
+) -> Result<(SourceFile, SurfaceModule, bool), LoadGraphError> {
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
         LoadGraphError::SourceModel {
             path: path.to_path_buf(),
@@ -2675,6 +3391,7 @@ fn parse_surface_module(
             operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
+    let needs_generator_dependency = lexed.needs_generator_dependency();
     let (tree, header_imports) = parse_with_budget_and_header(&source, lexed, syntax_budget);
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -2707,7 +3424,7 @@ fn parse_surface_module(
             });
         }
     };
-    Ok((source, surface))
+    Ok((source, surface, needs_generator_dependency))
 }
 
 fn resolve_import(
@@ -2931,6 +3648,7 @@ fn is_reserved_word(name: &str) -> bool {
             | "type"
             | "match"
             | "import"
+            | "syntax"
             | "as"
             | "pub"
             | "opaque"
@@ -2950,6 +3668,144 @@ mod tests {
     use crate::parser::parse_with_budget;
 
     use super::*;
+
+    fn h1_staged_fixture(text: &str) -> (HeaderGraph, crate::syntax::SelectedSyntax) {
+        let definition = SourceFile::new(
+            "definition.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let declaration = crate::parser::project_module_retaining_templates(
+            &definition,
+            &crate::parser::parse(crate::lexer::lex(&definition).unwrap()),
+        )
+        .unwrap()
+        .syntax_declarations
+        .remove(0);
+        let selected = crate::syntax::SelectedSyntax {
+            name: "make".into(),
+            owner: 0,
+            import_span: declaration.span,
+            declaration,
+        };
+        let source = SourceFile::new("caller.ash", text).unwrap();
+        let mut budget = SyntaxBudget::default();
+        let lexed = lex_with_budget(&source, &mut budget).unwrap();
+        let (tokens, diagnostics, _, resource) = lexed.into_parts();
+        assert!(resource.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let imports = crate::parser::project_module_header(&source, &checkpoint).unwrap();
+        let span = module_span_from_checkpoint(&source, &checkpoint).unwrap();
+        let entry = ModuleId::new(0);
+        let staged = StagedModule {
+            id: entry,
+            canonical_path: PathBuf::from("caller.ash"),
+            owners: OwnerSet {
+                ordered: Vec::new(),
+                membership: HashSet::new(),
+            },
+            source,
+            surface: StagedSyntax {
+                imports,
+                span,
+                body: ModuleBody::Header(checkpoint),
+                import_span: None,
+                needs_quote_dependency: false,
+                needs_generator_dependency: false,
+                syntax_import_quote_dependency: false,
+            },
+            dependencies: Vec::new(),
+            relative_edges: Vec::new(),
+            state: VisitState::Finished,
+        };
+        (
+            HeaderGraph {
+                pending: VecDeque::from([staged]),
+                loaded: Vec::new(),
+                completed: None,
+                entry,
+                syntax_budget: budget,
+                next_quote_ordinal: 0,
+            },
+            selected,
+        )
+    }
+
+    #[test]
+    fn current_module_borrows_the_same_syntax_ledger_before_and_after_completion() {
+        let (mut graph, selected) = h1_staged_fixture("make good\n");
+        assert!(graph.current_module_with_syntax_budget().is_none());
+        graph
+            .next_module_with_syntax(&[selected], &[], &mut Vec::new(), None)
+            .unwrap()
+            .unwrap();
+        let consumed = graph.syntax_budget.consumed();
+        let loaded_id = {
+            let (module, budget, ordinal) = graph.current_module_with_syntax_budget().unwrap();
+            budget.charge_units(7).unwrap();
+            *ordinal = 11;
+            module.id()
+        };
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 7);
+        assert_eq!(graph.next_quote_ordinal, 11);
+        assert!(graph.completed_graph().is_some());
+        let (module, budget, ordinal) = graph.current_module_with_syntax_budget().unwrap();
+        assert_eq!(module.id(), loaded_id);
+        assert_eq!(budget.consumed(), consumed + 7);
+        assert_eq!(*ordinal, 11);
+        *ordinal += 1;
+        budget.charge().unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 8);
+        assert_eq!(graph.next_quote_ordinal, 12);
+    }
+
+    #[test]
+    fn h1_late_output_failure_never_reaches_the_loaded_module_boundary() {
+        let (mut graph, selected) = h1_staged_fixture("make good\nmake Upper\n");
+        let mut owners = Vec::new();
+        assert!(
+            graph
+                .next_module_with_syntax(&[selected], &[], &mut owners, None)
+                .is_err()
+        );
+        assert!(graph.loaded.is_empty());
+        assert!(graph.current_module().is_none());
+        assert!(graph.completed.is_none());
+        assert!(owners.is_empty());
+    }
+
+    #[test]
+    fn h1_header_consistency_failure_keeps_preexisting_owners_unchanged() {
+        let (mut graph, selected) = h1_staged_fixture("make good\n");
+        let staged = graph.pending.front_mut().unwrap();
+        staged.surface.span = staged
+            .source
+            .span(crate::source::ByteRange::new(0, 0).unwrap())
+            .unwrap();
+        let previous = crate::syntax::SyntaxOwner {
+            caller_quote_owner: None,
+            owner: Some(9),
+            declaration: selected.declaration.span,
+            import_span: selected.import_span,
+        };
+        let mut owners = vec![previous.clone()];
+        let error = graph
+            .next_module_with_syntax(&[selected], &[], &mut owners, None)
+            .unwrap_err();
+        assert!(matches!(
+            error.failure(),
+            LoadGraphError::Projection {
+                error: ProjectionError::MalformedTree(crate::parser::InternalReason::InvalidSpan),
+                ..
+            }
+        ));
+        assert!(graph.loaded.is_empty());
+        assert!(graph.current_module().is_none());
+        assert!(graph.completed.is_none());
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, previous.owner);
+        assert_eq!(owners[0].declaration, previous.declaration);
+        assert_eq!(owners[0].import_span, previous.import_span);
+    }
 
     #[test]
     fn common_foreign_identity_and_admission_remain_distinct_and_retryable() {
@@ -3179,6 +4035,449 @@ mod tests {
         assert!(!failure.is_source_rejection());
     }
 
+    #[test]
+    fn caller_quote_name_authenticates_completed_module_and_keeps_lexical_precedence() {
+        use crate::{
+            interface::InterfaceConstraintBudget,
+            resolve::{ResolveModuleError, ResolveReason, resolve_module_with_syntax},
+            resolved::{
+                ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
+                ResolvedPatternKind,
+            },
+            surface::{
+                SurfaceDefinitionKind, SurfaceExprKind, SurfaceLocalDeclaration,
+                SurfacePatternKind, SurfaceReference,
+            },
+            syntax::{CallerQuoteOwner, SyntaxExpansion, SyntaxOwner},
+            types::TypeWorkBudget,
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        #[derive(Clone, Copy)]
+        enum Case {
+            Valid,
+            Local,
+            WrongModule,
+            CopiedSource,
+            SwappedRecord,
+            Missing,
+            Clone,
+            Adapter,
+        }
+
+        let run = |case: Case, limit: usize| {
+            let source = Arc::new(SourceFile::new(
+                "caller-quote-auth.ash",
+                "value : Unit -> Int\nvalue () = 42\nmain : Unit -> Int\nmain () = {\n    let value = 99\n    value\n}\n",
+            ).unwrap());
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let mut surface = crate::parser::project_module(&source, &tree).unwrap();
+            let span = surface.span;
+            let main = surface
+                .definitions
+                .iter_mut()
+                .find_map(|definition| match &mut definition.kind {
+                    SurfaceDefinitionKind::Equational(global)
+                        if global.interface.name.text == "main" =>
+                    {
+                        Some(global)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let SurfaceExprKind::Block(block) = &mut main.equations[0].body.kind else {
+                panic!("main block")
+            };
+            let SurfaceExprKind::Name(SurfaceReference::Unqualified(reference)) =
+                &mut block.result.kind
+            else {
+                panic!("block reference")
+            };
+            reference.introduction = 1;
+            reference.introduced_at = Some(span);
+            reference.written = false;
+            if matches!(case, Case::Local) {
+                let [SurfaceLocalDeclaration::Binding(binding)] = block.declarations.as_mut_slice()
+                else {
+                    panic!("local binding")
+                };
+                let SurfacePatternKind::Binder(binder) = &mut binding.pattern.kind else {
+                    panic!("local binder")
+                };
+                binder.name.introduction = 1;
+                binder.name.introduced_at = Some(span);
+                binder.name.written = false;
+            }
+            let id = ModuleId::new(90_399);
+            let owner = Arc::new(CallerQuoteOwner {
+                module: if matches!(case, Case::WrongModule) {
+                    ModuleId::new(90_400)
+                } else {
+                    id
+                },
+                source: if matches!(case, Case::CopiedSource) {
+                    Arc::new(source.as_ref().clone())
+                } else {
+                    Arc::clone(&source)
+                },
+                selected: Arc::from([]),
+            });
+            let completed = if matches!(case, Case::SwappedRecord) {
+                Arc::new(CallerQuoteOwner {
+                    module: id,
+                    source: Arc::clone(&source),
+                    selected: Arc::from([]),
+                })
+            } else {
+                Arc::clone(&owner)
+            };
+            let mut loaded = LoadedModule {
+                id,
+                canonical_path: PathBuf::from("caller-quote-auth.ash"),
+                source: Arc::clone(&source),
+                surface,
+                dependencies: Box::new([]),
+                quote_sites: Vec::new(),
+                quote_introduction: None,
+                caller_quote_owner: (!matches!(case, Case::Missing)).then_some(completed),
+            };
+            if matches!(case, Case::Clone) {
+                loaded = loaded.clone();
+            }
+            if matches!(case, Case::Adapter) {
+                let source_slot = RefCell::new(Some(Arc::clone(&source)));
+                let owner_slot = RefCell::new(Some(Arc::clone(&owner)));
+                let loan = StagedModuleLoan {
+                    id,
+                    source_id: source.id(),
+                    canonical_path: &loaded.canonical_path,
+                    imports: &loaded.surface.imports,
+                    dependencies: &loaded.dependencies,
+                    span,
+                    source_snapshot: &source_slot,
+                    caller_quote_owner: &owner_slot,
+                    quote_projection: None,
+                };
+                let definition = loaded.surface.definitions.iter().find(|definition| matches!(&definition.kind,
+                    SurfaceDefinitionKind::Equational(global) if global.interface.name.text == "main")).unwrap().clone();
+                loaded = loan
+                    .no_quote_adapter_view(&source, definition, &mut SyntaxBudget::default())
+                    .unwrap();
+                assert!(Arc::ptr_eq(loaded.retained_source(), &owner.source));
+            }
+            let mut transformer =
+                |_: &crate::syntax::SelectedSyntax,
+                 _: &[crate::surface::SurfaceSyntaxCapture],
+                 span: Span,
+                 _: &crate::surface::SurfaceName,
+                 _: usize,
+                 _: &[Option<usize>],
+                 _: &Arc<crate::syntax::ExpansionFrame>,
+                 _: &mut InterfaceConstraintBudget,
+                 _: Option<crate::syntax::QuoteExpansionLoan<'_>>|
+                 -> Result<(crate::syntax::ExpandedExpression, usize), Span> {
+                    Err(span)
+                };
+            let mut expansion = SyntaxExpansion::new(
+                loaded.source(),
+                &[],
+                &[],
+                vec![SyntaxOwner {
+                    owner: None,
+                    caller_quote_owner: Some(owner),
+                    declaration: span,
+                    import_span: span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let result = resolve_module_with_syntax(
+                &loaded,
+                &[],
+                &mut work,
+                &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+                &[],
+                &[],
+                &[],
+                Some(&mut expansion),
+            );
+            (result, work.used())
+        };
+
+        let (resolved, exact) = run(Case::Valid, usize::MAX);
+        let resolved = resolved.expect("authenticated current caller resolves");
+        let global = resolved
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "value" =>
+                {
+                    Some(global.interface.name.id)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let main = resolved
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "main" =>
+                {
+                    Some(global)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+            panic!("resolved main block")
+        };
+        let [ResolvedLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+            panic!("resolved local")
+        };
+        let ResolvedPatternKind::Binder(local) = &binding.pattern.kind else {
+            panic!("resolved binder")
+        };
+        let ResolvedExprKind::Occurrence(reference) = &block.result.kind else {
+            panic!("resolved reference")
+        };
+        assert_eq!(reference.global_binder(), Some(global));
+        assert_ne!(reference.global_binder(), Some(local.id));
+        let (local, _) = run(Case::Local, usize::MAX);
+        let local = local.unwrap();
+        let main = local
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "main" =>
+                {
+                    Some(global)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+            panic!("resolved main block")
+        };
+        let [ResolvedLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+            panic!("resolved local")
+        };
+        let ResolvedPatternKind::Binder(local) = &binding.pattern.kind else {
+            panic!("resolved binder")
+        };
+        let ResolvedExprKind::Occurrence(reference) = &block.result.kind else {
+            panic!("resolved reference")
+        };
+        assert_eq!(reference.global_binder(), Some(local.id));
+
+        for case in [
+            Case::WrongModule,
+            Case::CopiedSource,
+            Case::SwappedRecord,
+            Case::Missing,
+            Case::Clone,
+            Case::Adapter,
+        ] {
+            let (result, _) = run(case, usize::MAX);
+            assert!(
+                matches!(result, Err(ResolveModuleError::Resolution(error)) if error.reason == ResolveReason::InternalState)
+            );
+        }
+        assert!(matches!(run(Case::Valid, exact - 1).0,
+            Err(ResolveModuleError::Resolution(error)) if error.reason == ResolveReason::TypeResourceExhausted));
+        for _ in 0..2 {
+            let (result, used) = run(Case::Valid, exact);
+            result.expect("fresh exact retry resolves");
+            assert_eq!(used, exact);
+        }
+    }
+
+    #[test]
+    fn caller_quote_interface_lookup_pays_reached_type_scopes() {
+        use crate::{
+            interface::InterfaceConstraintBudget,
+            resolve::{ResolveModuleError, ResolveReason, resolve_module_with_syntax},
+            surface::{
+                SurfaceDefinitionKind, SurfaceExprKind, SurfaceLocalDeclaration, SurfaceReference,
+            },
+            syntax::{CallerQuoteOwner, SyntaxExpansion, SyntaxOwner},
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let run = |depth: usize,
+                   reference_introduction: usize,
+                   binder_introduction: usize,
+                   limit: usize,
+                   spent: usize| {
+            let mut text = String::from("main : Unit -> Int\nmain () = region<A> outer {\n");
+            for (name, handle) in [("B", "inner_b"), ("C", "inner_c"), ("D", "inner_d")]
+                .iter()
+                .take(depth)
+            {
+                text.push_str(&format!("region<{name}> {handle} {{\n"));
+            }
+            text.push_str("with A<Int> {\nunused value = value\n}\n42\n");
+            for _ in 0..=depth {
+                text.push_str("}\n");
+            }
+            let source =
+                Arc::new(SourceFile::new("caller-quote-interface-budget.ash", &text).unwrap());
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let mut surface = crate::parser::project_module(&source, &tree).unwrap();
+            let span = surface.span;
+            let SurfaceDefinitionKind::Equational(main) = &mut surface.definitions[0].kind else {
+                panic!("equational main")
+            };
+            let SurfaceExprKind::Region(outer) = &mut main.equations[0].body.kind else {
+                panic!("outer region")
+            };
+            outer.identity.introduction = binder_introduction;
+            if binder_introduction != 0 {
+                outer.identity.introduced_at = Some(span);
+                outer.identity.written = false;
+            }
+            let mut body = &mut outer.body;
+            for _ in 0..depth {
+                let SurfaceExprKind::Region(inner) = &mut body.result.kind else {
+                    panic!("inner region")
+                };
+                body = &mut inner.body;
+            }
+            let [SurfaceLocalDeclaration::Evidence(evidence)] = body.declarations.as_mut_slice()
+            else {
+                panic!("lexical evidence")
+            };
+            let SurfaceReference::Unqualified(member) = &mut evidence.application.interface else {
+                panic!("unqualified interface")
+            };
+            member.introduction = reference_introduction;
+            if reference_introduction != 0 {
+                member.introduced_at = Some(span);
+                member.written = false;
+            }
+            let id = ModuleId::new(90_402);
+            let owner = Arc::new(CallerQuoteOwner {
+                module: id,
+                source: Arc::clone(&source),
+                selected: Arc::from([]),
+            });
+            let loaded = LoadedModule {
+                id,
+                canonical_path: PathBuf::from("caller-quote-interface-budget.ash"),
+                source: Arc::clone(&source),
+                surface,
+                dependencies: Box::new([]),
+                quote_sites: Vec::new(),
+                quote_introduction: None,
+                caller_quote_owner: Some(Arc::clone(&owner)),
+            };
+            let mut transformer =
+                |_: &crate::syntax::SelectedSyntax,
+                 _: &[crate::surface::SurfaceSyntaxCapture],
+                 span: Span,
+                 _: &crate::surface::SurfaceName,
+                 _: usize,
+                 _: &[Option<usize>],
+                 _: &Arc<crate::syntax::ExpansionFrame>,
+                 _: &mut InterfaceConstraintBudget,
+                 _: Option<crate::syntax::QuoteExpansionLoan<'_>>|
+                 -> Result<(crate::syntax::ExpandedExpression, usize), Span> {
+                    Err(span)
+                };
+            let mut expansion = SyntaxExpansion::new(
+                loaded.source(),
+                &[],
+                &[],
+                vec![SyntaxOwner {
+                    owner: None,
+                    caller_quote_owner: Some(owner),
+                    declaration: span,
+                    import_span: span,
+                }],
+                None,
+                None,
+                &mut transformer,
+            );
+            let mut work = TypeWorkBudget::with_limit(limit);
+            work.charge(spent).unwrap();
+            let result = resolve_module_with_syntax(
+                &loaded,
+                &[],
+                &mut work,
+                &mut InterfaceConstraintBudget::with_limit(usize::MAX),
+                &[],
+                &[],
+                &[],
+                Some(&mut expansion),
+            );
+            let Err(ResolveModuleError::Resolution(error)) = result else {
+                panic!("the fixture reaches the interface lookup")
+            };
+            (
+                error.reason,
+                error.diagnostic().primary.message().to_owned(),
+                work.used(),
+            )
+        };
+
+        for depth in 0..=3 {
+            let (ordinary, _, ordinary_work) = run(depth, 0, 0, usize::MAX, 0);
+            assert_eq!(ordinary, ResolveReason::InterfaceKind);
+            let (introduced, _, exact) = run(depth, 1, 1, usize::MAX, 0);
+            assert_eq!(introduced, ResolveReason::InterfaceKind);
+            // Retaining the introduced region's Expansion origin costs two;
+            // owner authentication costs three, the key copy one byte, and
+            // each reached scope costs a hash, comparison, and visit.
+            assert_eq!(exact - ordinary_work, 2 + 3 + 1 + 3 * (depth + 1));
+            assert_eq!(
+                run(depth, 1, 2, usize::MAX, 0).0,
+                ResolveReason::UnknownInterface
+            );
+            for spent in [0, 17] {
+                let (reason, message, _) = run(depth, 1, 1, exact + spent - 1, spent);
+                assert_eq!(reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(
+                    message,
+                    "caller quote interface type-scope lookup exceeded its type-work budget"
+                );
+                for _ in 0..2 {
+                    let (reason, _, used) = run(depth, 1, 1, exact + spent, spent);
+                    assert_eq!(reason, ResolveReason::InterfaceKind);
+                    assert_eq!(used, exact + spent);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completed_caller_record_releases_its_source_before_extraction() {
+        use std::sync::Arc;
+        for external in [false, true] {
+            let mut module = loaded_module_for_lookup(ModuleId::new(90_401), "source-move.ash");
+            let original_pointer = module.source.text().as_ptr();
+            module.caller_quote_owner = Some(Arc::new(crate::syntax::CallerQuoteOwner {
+                module: module.id,
+                source: Arc::clone(&module.source),
+                selected: Arc::from([]),
+            }));
+            let clone = module.clone();
+            assert!(clone.caller_quote_owner.is_none());
+            drop(clone);
+            let outside = external.then(|| Arc::clone(module.caller_quote_owner.as_ref().unwrap()));
+            let weak = Arc::downgrade(module.caller_quote_owner.as_ref().unwrap());
+            let source = module.into_source();
+            assert_eq!(source.text().as_ptr() == original_pointer, !external);
+            assert_eq!(weak.upgrade().is_some(), external);
+            drop(outside);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
     fn loaded_module_for_lookup(id: ModuleId, name: &str) -> LoadedModule {
         let source = SourceFile::new(name, "main : Unit -> Unit\nmain value = value\n")
             .expect("test module source");
@@ -3204,6 +4503,9 @@ mod tests {
                 span,
             },
             dependencies: Box::new([]),
+            quote_sites: Vec::new(),
+            quote_introduction: None,
+            caller_quote_owner: None,
         }
     }
 }

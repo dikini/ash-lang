@@ -1,7 +1,8 @@
 # Deriving-clause fixtures
 
-These proposed I09 and R03–R05 graphs use unimplemented CP-0034 syntax. Every
-entry is a separate module; none of the derive expansions has run.
+These fixed I09 and R03–R05 graphs use declaration and derive syntax. Every
+entry is a separate module. [TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md)
+records the delivery evidence and remaining gates.
 
 - `main.ash` applies two derives to a type and a newtype. It must return
   `42 : Int`; the original subjects are each retained once and the private
@@ -16,8 +17,8 @@ entry is a separate module; none of the derive expansions has run.
   equivalent. This particular derive assumes one `Type` parameter; it is not
   a general algorithm for arbitrary parameter lists or constraints. The
   handwritten control returned 42, and the transformer's ordinary Ash body
-  checked after removing its unimplemented derive header; the generated
-  implementation and its fresh parameter have not run through slice 2.
+  checked after removing its derive header; that earlier check alone did not
+  exercise the generated implementation or its fresh parameter.
 - `opaque.ash` imports a public derived implementation for an opaque newtype
   and must return 42. `opaque_hidden.ash` must reject direct constructor use.
   Their `control_opaque...` counterparts use a handwritten public impl and the

@@ -1,8 +1,26 @@
 # Module hygiene fixture
 
-This proposed I12/I13/I16 graph exercises declaration and derive macros under
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md). It
-uses unimplemented syntax and is not a passing product test.
+This fixed I12/I13/I16 graph exercises declaration and derive macros under
+historical [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
+
+`early_terms.ash` is a supplemental focused case using the same `make_value`
+definition in `early_terms_forms.ash`, isolated from the derive and
+definition-private helper paths in the full graph. The two generated functions
+return 42 each, giving 84, as does `control_early_terms.ash` on current Ash.
+`early_terms_duplicate.ash` supplies the same helper twice;
+`early_terms_handwritten_duplicate.ash` supplies the handwritten `helper` as
+the second helper. Ordinary downstream resolution rejects each duplicate and
+identifies the conflicting declarations and macro origins. This focused case
+does not replace the full I12 graph.
+
+`early_owner.ash` is a supplemental focused case using the same `use_private`
+definition in `early_owner_forms.ash`. Its definition-private helper and
+renamed facade import must resolve despite same-spelled caller functions; it
+returns 42, as does `control_early_owner.ash`. `early_owner_private.ash`
+rejects the caller's direct import of the private helper under ordinary access
+rules. This focused case does not replace the full I13 and opacity graphs.
 
 `main.ash` must return `252 : Int`: `first`, `second`, and `owner_result` each
 return 42, and `checked` returns 126. The first two generated functions use the explicitly supplied names

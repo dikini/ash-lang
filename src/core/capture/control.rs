@@ -3417,6 +3417,14 @@ impl<'a> Analysis<'a> {
                         &mut visited,
                         budget,
                     )?,
+                    Control::Request(request) => self.discover_request(
+                        state,
+                        request,
+                        &mut value_requests,
+                        &mut pending,
+                        &mut visited,
+                        budget,
+                    )?,
                     _ => self.discover_step(
                         state,
                         &mut calls,
@@ -3542,42 +3550,6 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
             }
-            Control::Request(request) => {
-                if request.region_service
-                    || request
-                        .effect
-                        .as_ref()
-                        .is_some_and(|effect| effect.effect().module().is_builtin_resource())
-                {
-                    state.charge_key(budget)?;
-                    if !value_requests.contains(&state) {
-                        value_requests
-                            .try_reserve(1)
-                            .map_err(|_| Failure::Resource)?;
-                        let saved = state.copy(budget)?;
-                        state.charge_key(budget)?;
-                        value_requests.insert(saved);
-                    }
-                }
-                let label = self.label(code, state.context, budget)?;
-                let port = self
-                    .data
-                    .as_mut()
-                    .map(|data| data.port(code, state.value_context, budget))
-                    .transpose()?;
-                self.requested(
-                    &state,
-                    Event {
-                        code,
-                        label,
-                        unknown: false,
-                        port,
-                    },
-                    pending,
-                    visited,
-                    budget,
-                )?;
-            }
             Control::Call { .. } => {
                 self.discover_call(
                     state,
@@ -3608,6 +3580,55 @@ impl<'a> Analysis<'a> {
             }
             _ => return Err(Failure::Invalid),
         }
+        Ok(())
+    }
+
+    // Request handling does not need the other dispatch branches' stack space.
+    #[inline(never)]
+    fn discover_request(
+        &mut self,
+        state: State,
+        request: &Request,
+        value_requests: &mut HashSet<State>,
+        pending: &mut CompletionQueue,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        if request.region_service
+            || request
+                .effect
+                .as_ref()
+                .is_some_and(|effect| effect.effect().module().is_builtin_resource())
+        {
+            state.charge_key(budget)?;
+            if !value_requests.contains(&state) {
+                value_requests
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                let saved = state.copy(budget)?;
+                state.charge_key(budget)?;
+                value_requests.insert(saved);
+            }
+        }
+        let label = self.label(code, state.context, budget)?;
+        let port = self
+            .data
+            .as_mut()
+            .map(|data| data.port(code, state.value_context, budget))
+            .transpose()?;
+        self.requested(
+            &state,
+            Event {
+                code,
+                label,
+                unknown: false,
+                port,
+            },
+            pending,
+            visited,
+            budget,
+        )?;
         Ok(())
     }
 

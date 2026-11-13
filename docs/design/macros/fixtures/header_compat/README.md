@@ -13,9 +13,9 @@ CP-0033 and continue to do so after CP-0034. The previously proposed derive
 headers share its prefix but are distinguishable by their complete forms:
 slice 1 requires an expression capture at the end of a matcher.
 
-`forms.ash` adds the proposed parenthesized declaration-macro header, and
-`both.ash` invokes both macro categories. It must also return `42 : Int` once
-CP-0034 is implemented. The parenthesized header is not a valid CP-0033 matcher
+`forms.ash` adds the parenthesized declaration-macro header, and `both.ash`
+invokes both macro categories. It must also return `42 : Int`. The parenthesized
+header is not a valid CP-0033 matcher
 group, so it does not steal the expression definition's syntax.
 
 `renamed.ash` imports the declaration macro under another name and must return
@@ -24,6 +24,6 @@ reject the colliding import. `own_definition.ash` attempts to invoke its own
 definition and must reject the unimported syntax use, preserving CP-0033's
 module staging rule.
 
-Both expression-only graphs have returned 42 with the in-progress
-expression-slice compiler. The mixed graph is not implemented and has not been
-run.
+Both expression-only graphs returned 42 with the earlier expression-slice
+compiler. [TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md)
+records the later delivery evidence and remaining gates.
