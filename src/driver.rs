@@ -1965,6 +1965,16 @@ where
                                 }
                             };
                         }
+                        #[cfg(test)]
+                        if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                            observe(
+                                selection,
+                                OrdinaryQuoteResourceEvent::PrepareStart {
+                                    budget: loan.budget,
+                                    cache_entries: transformer_entries.len(),
+                                },
+                            );
+                        }
                         let entry = match selected_transformer_entry(
                             selection,
                             None,
@@ -1975,6 +1985,17 @@ where
                         ) {
                             Ok(entry) => entry,
                             Err(error) => {
+                                #[cfg(test)]
+                                if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                    observe(
+                                        selection,
+                                        OrdinaryQuoteResourceEvent::PrepareFailure {
+                                            budget: loan.budget,
+                                            cache_entries: transformer_entries.len(),
+                                            failure: &error,
+                                        },
+                                    );
+                                }
                                 transformer_failure = Some(error);
                                 return Err(span);
                             }
@@ -1997,6 +2018,15 @@ where
                                 return Err(span);
                             }
                             let mut contexts = Some(Arc::new(contexts));
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::ContextCreated(
+                                        contexts.as_ref().expect("context was just created"),
+                                    ),
+                                );
+                            }
                             let evaluated = evaluate_prepared_transformer(
                                 entry,
                                 selection,
@@ -2009,7 +2039,23 @@ where
                                 Some(&mut *loan.budget),
                                 Some(&mut *loan.owners),
                             );
-                            return match finish_ordinary_expression_output(
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::AdmissionStart {
+                                        budget: loan.budget,
+                                        contexts: contexts.as_ref(),
+                                        owners: loan.owners,
+                                        invocation: span,
+                                        host_expanded: matches!(
+                                            &evaluated,
+                                            Ok((crate::syntax::TransformerOutput::Expanded(_), _))
+                                        ),
+                                    },
+                                );
+                            }
+                            let result = finish_ordinary_expression_output(
                                 evaluated,
                                 selection,
                                 captures,
@@ -2018,7 +2064,18 @@ where
                                 contexts.as_deref(),
                                 frame,
                                 Some(&mut *loan.budget),
-                            ) {
+                            );
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::AdmissionEnd {
+                                        budget: loan.budget,
+                                        result: &result,
+                                    },
+                                );
+                            }
+                            return match result {
                                 Ok(result) => Ok(result),
                                 Err(error) => {
                                     transformer_failure = error;
@@ -2759,9 +2816,55 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
+    static ORDINARY_QUOTE_RESOURCE_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteResourceObserver>> = const { std::cell::Cell::new(None) };
+    static ORDINARY_QUOTE_OWNER_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteOwnerObserver>> = const { std::cell::Cell::new(None) };
     static LOADED_QUOTE_OBSERVER: std::cell::Cell<Option<fn(&crate::module::LoadedModule)>> = const { std::cell::Cell::new(None) };
     static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
     static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+enum OrdinaryQuoteResourceEvent<'a> {
+    PrepareStart {
+        budget: &'a mut crate::syntax_resource::SyntaxBudget,
+        cache_entries: usize,
+    },
+    PrepareFailure {
+        budget: &'a crate::syntax_resource::SyntaxBudget,
+        cache_entries: usize,
+        failure: &'a FileFailure,
+    },
+    ContextCreated(&'a Arc<crate::syntax::SyntaxContexts>),
+    AdmissionStart {
+        budget: &'a mut crate::syntax_resource::SyntaxBudget,
+        contexts: Option<&'a Arc<crate::syntax::SyntaxContexts>>,
+        owners: &'a [crate::syntax::SyntaxOwner],
+        invocation: Span,
+        host_expanded: bool,
+    },
+    AdmissionEnd {
+        budget: &'a crate::syntax_resource::SyntaxBudget,
+        result: &'a Result<(crate::syntax::ExpandedExpression, usize), Option<FileFailure>>,
+    },
+}
+
+#[cfg(test)]
+type OrdinaryQuoteResourceObserver =
+    for<'a> fn(&crate::syntax::SelectedSyntax, OrdinaryQuoteResourceEvent<'a>);
+
+#[cfg(test)]
+type OrdinaryQuoteOwnerObserver =
+    fn(&crate::syntax::SelectedSyntax, &[crate::syntax::SyntaxOwner], bool);
+
+#[cfg(test)]
+pub(crate) fn observe_ordinary_quote_owners(
+    selection: &crate::syntax::SelectedSyntax,
+    owners: &[crate::syntax::SyntaxOwner],
+    restored: bool,
+) {
+    if let Some(observe) = ORDINARY_QUOTE_OWNER_OBSERVER.get() {
+        observe(selection, owners, restored);
+    }
 }
 
 #[cfg(test)]
@@ -7632,6 +7735,405 @@ main () = one(()) + two(())
         });
         assert_eq!(execute(&program).unwrap().value_display(), "42");
         hooks::reset();
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum OrdinaryQuoteResourceTrial {
+        ColdPreparation,
+        MeasureAdmission,
+        LimitAdmission(usize),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct OrdinaryQuotePhaseCounts {
+        reaches: usize,
+        completions: usize,
+        transfers: usize,
+        transfer_failures: usize,
+        root_closes: usize,
+        drops: usize,
+        active_drops: usize,
+        preparations: usize,
+    }
+
+    impl OrdinaryQuotePhaseCounts {
+        fn current() -> Self {
+            use crate::eval::machine_test_hooks as hooks;
+            Self {
+                reaches: hooks::QUOTE_REACHES.get(),
+                completions: hooks::QUOTE_COMPLETIONS.get(),
+                transfers: hooks::TRANSFER_ATTEMPTS.get(),
+                transfer_failures: hooks::TRANSFER_FAILURES.get(),
+                root_closes: hooks::ROOT_CLOSES.get(),
+                drops: hooks::TRANSFORMER_DROPS.get(),
+                active_drops: hooks::ACTIVE_ROOT_DROPS.get(),
+                preparations: TRANSFORMER_ENTRY_PREPARATIONS.get(),
+            }
+        }
+
+        fn since(self, before: Self) -> Self {
+            Self {
+                reaches: self.reaches - before.reaches,
+                completions: self.completions - before.completions,
+                transfers: self.transfers - before.transfers,
+                transfer_failures: self.transfer_failures - before.transfer_failures,
+                root_closes: self.root_closes - before.root_closes,
+                drops: self.drops - before.drops,
+                active_drops: self.active_drops - before.active_drops,
+                preparations: self.preparations - before.preparations,
+            }
+        }
+    }
+
+    type OrdinaryOwnerSnapshot = (Option<usize>, Option<usize>, Span, Span);
+
+    struct OrdinaryQuoteResourceObservation {
+        trial: OrdinaryQuoteResourceTrial,
+        calls: usize,
+        prefix: Vec<OrdinaryOwnerSnapshot>,
+        restored: Option<Vec<OrdinaryOwnerSnapshot>>,
+        counts_before: Option<OrdinaryQuotePhaseCounts>,
+        budget_before: Option<(usize, usize)>,
+        admission_remaining: Option<usize>,
+        admission_work: Option<usize>,
+        admitted: Option<bool>,
+        invocation: Option<Span>,
+        context_address: Option<usize>,
+        initial_context_owners: Option<usize>,
+        context: Option<std::sync::Weak<crate::syntax::SyntaxContexts>>,
+        entry: Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>,
+        cache_before: Option<usize>,
+        preparation_failed: bool,
+    }
+
+    impl OrdinaryQuoteResourceObservation {
+        fn new(trial: OrdinaryQuoteResourceTrial) -> Self {
+            Self {
+                trial,
+                calls: 0,
+                prefix: Vec::new(),
+                restored: None,
+                counts_before: None,
+                budget_before: None,
+                admission_remaining: None,
+                admission_work: None,
+                admitted: None,
+                invocation: None,
+                context_address: None,
+                initial_context_owners: None,
+                context: None,
+                entry: None,
+                cache_before: None,
+                preparation_failed: false,
+            }
+        }
+    }
+
+    std::thread_local! {
+        static ORDINARY_QUOTE_RESOURCE_TRIAL: RefCell<Option<OrdinaryQuoteResourceObservation>> = const { RefCell::new(None) };
+    }
+
+    fn observe_ordinary_quote_resource_owners(
+        selection: &crate::syntax::SelectedSyntax,
+        owners: &[crate::syntax::SyntaxOwner],
+        restored: bool,
+    ) {
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        let snapshot = owners
+            .iter()
+            .map(|owner| {
+                (
+                    owner.owner,
+                    owner
+                        .caller_quote_owner
+                        .as_ref()
+                        .map(|caller| Arc::as_ptr(caller) as usize),
+                    owner.declaration,
+                    owner.import_span,
+                )
+            })
+            .collect();
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            if restored {
+                observation.restored = Some(snapshot);
+            } else {
+                observation.prefix = snapshot;
+            }
+        });
+    }
+
+    fn observe_ordinary_quote_resource_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            assert_eq!(entry.quote_sites.len(), 2);
+            if let Some(previous) = &observation.entry {
+                assert!(std::ptr::eq(
+                    previous.as_ptr(),
+                    Arc::as_ptr(&entry.quote_sites)
+                ));
+            } else {
+                observation.entry = Some(Arc::downgrade(&entry.quote_sites));
+            }
+        });
+    }
+
+    fn observe_ordinary_quote_resource(
+        selection: &crate::syntax::SelectedSyntax,
+        event: OrdinaryQuoteResourceEvent<'_>,
+    ) {
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            match event {
+                OrdinaryQuoteResourceEvent::PrepareStart {
+                    budget,
+                    cache_entries,
+                } => {
+                    observation.calls += 1;
+                    if matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ) || observation.calls == 2
+                    {
+                        observation.counts_before = Some(OrdinaryQuotePhaseCounts::current());
+                        observation.cache_before = Some(cache_entries);
+                    }
+                    if matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ) {
+                        assert_eq!(observation.calls, 1);
+                        assert_eq!(cache_entries, 0);
+                        assert!(budget.consumed() > 0);
+                        let remaining = budget.test_remaining();
+                        assert!(remaining > 0);
+                        observation.budget_before = Some((budget.test_limit(), remaining));
+                        budget.charge_units(remaining).unwrap();
+                    }
+                }
+                OrdinaryQuoteResourceEvent::PrepareFailure {
+                    budget,
+                    cache_entries,
+                    failure,
+                } => {
+                    assert!(matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ));
+                    let (limit, _) = observation.budget_before.unwrap();
+                    assert_eq!(budget.test_limit(), limit);
+                    assert_eq!(budget.test_remaining(), 0);
+                    assert_eq!(cache_entries, observation.cache_before.unwrap());
+                    let Some(PipelineFailure::Syntax(failure)) = failure.pipeline_failure() else {
+                        panic!("preparation must return its original syntax resource failure")
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit })
+                    );
+                    observation.preparation_failed = true;
+                }
+                OrdinaryQuoteResourceEvent::ContextCreated(contexts) if observation.calls == 2 => {
+                    // A Weak here would make Arc::get_mut fail inside the host.
+                    assert_eq!(Arc::strong_count(contexts), 1);
+                    assert_eq!(Arc::weak_count(contexts), 0);
+                    observation.context_address = Some(Arc::as_ptr(contexts) as usize);
+                    observation.initial_context_owners = Some(contexts.owner_count());
+                }
+                OrdinaryQuoteResourceEvent::AdmissionStart {
+                    budget,
+                    contexts,
+                    owners,
+                    invocation,
+                    host_expanded,
+                } if observation.calls == 2 => {
+                    assert!(host_expanded);
+                    let contexts = contexts.expect("the host must recover its contexts");
+                    assert_eq!(
+                        Some(Arc::as_ptr(contexts) as usize),
+                        observation.context_address
+                    );
+                    assert_eq!(Arc::strong_count(contexts), 1);
+                    assert_eq!(Arc::weak_count(contexts), 0);
+                    assert_eq!(
+                        contexts.owner_count(),
+                        observation.initial_context_owners.unwrap() + 2
+                    );
+                    assert_eq!(owners.len(), contexts.owner_count());
+                    assert_eq!(owners.len(), observation.prefix.len() + 3);
+                    assert_eq!(
+                        OrdinaryQuotePhaseCounts::current()
+                            .since(observation.counts_before.unwrap()),
+                        OrdinaryQuotePhaseCounts {
+                            reaches: 2,
+                            completions: 2,
+                            transfers: 1,
+                            transfer_failures: 0,
+                            root_closes: 1,
+                            drops: 1,
+                            active_drops: 0,
+                            preparations: 0,
+                        }
+                    );
+                    observation.context = Some(Arc::downgrade(contexts));
+                    observation.invocation = Some(invocation);
+                    let remaining = budget.test_remaining();
+                    assert!(budget.consumed() > 0);
+                    observation.budget_before = Some((budget.test_limit(), remaining));
+                    if let OrdinaryQuoteResourceTrial::LimitAdmission(target) = observation.trial {
+                        assert!(remaining > target);
+                        budget.charge_units(remaining - target).unwrap();
+                    }
+                    observation.admission_remaining = Some(budget.test_remaining());
+                }
+                OrdinaryQuoteResourceEvent::AdmissionEnd { budget, result }
+                    if observation.calls == 2 =>
+                {
+                    let (limit, _) = observation.budget_before.unwrap();
+                    assert_eq!(budget.test_limit(), limit);
+                    let before = observation.admission_remaining.unwrap();
+                    observation.admission_work = Some(before - budget.test_remaining());
+                    match result {
+                        Ok((expression, _)) => {
+                            let crate::surface::SurfaceExprKind::Integer(value) =
+                                &expression.expression.kind
+                            else {
+                                panic!("the actual second output must admit its integer expression")
+                            };
+                            assert_eq!(value.to_string(), "22");
+                            observation.admitted = Some(true);
+                        }
+                        Err(Some(failure)) => {
+                            let Some(PipelineFailure::SyntaxParse(failure)) =
+                                failure.pipeline_failure()
+                            else {
+                                panic!("admission must return its original parser failure")
+                            };
+                            assert_eq!(
+                                failure.resource,
+                                Some(ResourceFailure::SyntaxWork { limit })
+                            );
+                            assert_eq!(Some(failure.invocation), observation.invocation);
+                            assert_eq!(failure.definition, selection.declaration.span);
+                            assert!(failure.teardown.is_none());
+                            observation.admitted = Some(false);
+                        }
+                        Err(None) => panic!("admission must retain the parser resource failure"),
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
+    struct OrdinaryQuoteResourceObserverGuard;
+
+    impl Drop for OrdinaryQuoteResourceObserverGuard {
+        fn drop(&mut self) {
+            ORDINARY_QUOTE_RESOURCE_OBSERVER.set(None);
+            ORDINARY_QUOTE_OWNER_OBSERVER.set(None);
+            crate::eval::machine_test_hooks::reset();
+            ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    fn run_ordinary_quote_resource_trial(
+        trial: OrdinaryQuoteResourceTrial,
+    ) -> (
+        Result<CompiledProgram, FileFailure>,
+        OrdinaryQuoteResourceObservation,
+        OrdinaryQuotePhaseCounts,
+    ) {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        TRANSFORMER_ENTRY_PREPARATIONS.set(0);
+        TRANSFORMER_ENTRY_VALIDATIONS.set(0);
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            *slot.borrow_mut() = Some(OrdinaryQuoteResourceObservation::new(trial));
+        });
+        let _guard = OrdinaryQuoteResourceObserverGuard;
+        ORDINARY_QUOTE_RESOURCE_OBSERVER.set(Some(observe_ordinary_quote_resource));
+        ORDINARY_QUOTE_OWNER_OBSERVER.set(Some(observe_ordinary_quote_resource_owners));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_ordinary_quote_resource_entry));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/quote-constructed/control_twice.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        let counts = OrdinaryQuotePhaseCounts::current();
+        let observation =
+            ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| slot.borrow_mut().take().unwrap());
+        (result, observation, counts)
+    }
+
+    #[test]
+    fn ordinary_quote_cold_preparation_refusal_restores_the_owner_prefix() {
+        let (result, observation, counts) =
+            run_ordinary_quote_resource_trial(OrdinaryQuoteResourceTrial::ColdPreparation);
+        assert!(result.is_err());
+        assert_eq!(observation.calls, 1);
+        assert!(observation.preparation_failed);
+        assert_eq!(observation.restored.as_ref(), Some(&observation.prefix));
+        assert_eq!(
+            counts.since(observation.counts_before.unwrap()),
+            OrdinaryQuotePhaseCounts {
+                reaches: 0,
+                completions: 0,
+                transfers: 0,
+                transfer_failures: 0,
+                root_closes: 0,
+                drops: 0,
+                active_drops: 0,
+                preparations: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn ordinary_quote_warm_admission_uses_the_continuing_budget_and_rolls_back() {
+        let (measured_result, measured, _) =
+            run_ordinary_quote_resource_trial(OrdinaryQuoteResourceTrial::MeasureAdmission);
+        let program = measured_result.expect("the measurement compile succeeds");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+        assert_eq!(measured.calls, 2);
+        assert_eq!(measured.admitted, Some(true));
+        let work = measured.admission_work.unwrap();
+        assert!(work > 1);
+
+        for (allowance, expected) in [(work, true), (work - 1, false)] {
+            let (result, observation, _) = run_ordinary_quote_resource_trial(
+                OrdinaryQuoteResourceTrial::LimitAdmission(allowance),
+            );
+            assert_eq!(observation.calls, 2);
+            assert_eq!(observation.budget_before, measured.budget_before);
+            assert_eq!(observation.admission_remaining, Some(allowance));
+            assert_eq!(observation.admitted, Some(expected));
+            assert!(observation.context.unwrap().upgrade().is_none());
+            assert!(observation.entry.unwrap().upgrade().is_none());
+            if expected {
+                assert_eq!(observation.admission_work, Some(work));
+                eprintln!(
+                    "exact admission work={work}; enclosing compile succeeded={}",
+                    result.is_ok()
+                );
+            } else {
+                assert!(result.is_err(), "the compiler must not return a program");
+                assert!(!observation.prefix.is_empty());
+                assert_eq!(observation.restored.as_ref(), Some(&observation.prefix));
+            }
+        }
     }
 
     fn observe_failure_output(

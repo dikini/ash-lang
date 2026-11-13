@@ -67,6 +67,16 @@ impl SyntaxBudget {
         self.limit - self.remaining
     }
 
+    #[cfg(test)]
+    pub(crate) const fn test_remaining(&self) -> usize {
+        self.remaining
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn test_limit(&self) -> usize {
+        self.limit
+    }
+
     pub(crate) fn charge(&mut self) -> Result<(), ResourceFailure> {
         self.charge_units(1)
     }

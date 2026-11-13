@@ -4257,6 +4257,8 @@ impl<'a> SyntaxExpansion<'a> {
         let anchor = name.introduced_at.unwrap_or(invocation);
         let selection = self.selected(name).cloned().ok_or(invocation)?;
         let owner_checkpoint = self.owners.len();
+        #[cfg(test)]
+        crate::driver::observe_ordinary_quote_owners(&selection, &self.owners, false);
         self.owners.push(SyntaxOwner {
             caller_quote_owner: None,
             owner: Some(selection.owner),
@@ -4361,6 +4363,12 @@ impl<'a> SyntaxExpansion<'a> {
                     Ok(output) => output,
                     Err(span) => {
                         self.owners.truncate(owner_checkpoint);
+                        #[cfg(test)]
+                        crate::driver::observe_ordinary_quote_owners(
+                            &selection,
+                            &self.owners,
+                            true,
+                        );
                         return Err(span);
                     }
                 }
