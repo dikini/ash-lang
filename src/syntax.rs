@@ -59,6 +59,26 @@ pub(crate) struct SurfaceQuoteSite {
     pub(crate) template: Arc<QuoteTemplate>,
 }
 
+/// The selected callable's paid, scalar causal location projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AdvanceLocations {
+    pub(crate) primary: crate::source::Span,
+    pub(crate) definition: Option<crate::source::Span>,
+}
+
+/// Exact compiler-issued Advance binding while its adapter is borrowed.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceAdvanceSite {
+    pub(crate) binding: usize,
+}
+
+/// The issued binding's actual declaring owner and ordered tuple binders.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedAdvanceSite {
+    pub(crate) owner: crate::resolved::BinderId,
+    pub(crate) binders: [crate::resolved::BinderId; 2],
+}
+
 /// Immutable compiler-owned data shared by the successive checked stages.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct QuoteTemplate {
@@ -1897,6 +1917,41 @@ pub(crate) fn copy_fragment_output_with_type(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, FragmentCopy::Existing)
+        .map(|(contents, has_type, has_expression, _)| (contents, has_type, has_expression))
+}
+
+/// Copy a declaration-service packet without interpreting its quoted tokens.
+pub(crate) fn copy_declaration_output(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, FragmentCopy::DeclarationParse)
+        .map(|(contents, _, _, _)| contents)
+}
+
+/// Copy one retained declaration into its staged module parser.
+pub(crate) fn copy_forwarded_declaration(
+    output: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
+    copy_fragment_output_inner(output, budget, FragmentCopy::ForwardedDeclaration(prefix))
+        .map(|(contents, _, expression, pattern)| (contents, expression, pattern))
+}
+
+#[derive(Clone, Copy)]
+enum FragmentCopy {
+    Existing,
+    DeclarationParse,
+    ForwardedDeclaration(usize),
+}
+
+fn copy_fragment_output_inner(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+    mode: FragmentCopy,
+) -> Result<(Vec<MacroOutputNode>, bool, bool, bool), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1910,12 +1965,22 @@ pub(crate) fn copy_fragment_output_with_type(
     for _ in 0..3 {
         budget.charge_units(output.len()).map_err(resource)?;
     }
-    // The returned capture owns both its AST and this contents Arc.
-    let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
+    // Expression, Type and Pattern captures own an AST plus a contents Arc;
+    // a declaration capture owns only the contents Arc.
+    let base_depth = match mode {
+        FragmentCopy::Existing => 2,
+        FragmentCopy::DeclarationParse => 1,
+        FragmentCopy::ForwardedDeclaration(prefix) => prefix,
+    };
+    let mut pending = output
+        .iter()
+        .map(|node| (node, base_depth))
+        .collect::<Vec<_>>();
     let mut group_count = 0usize;
     let mut group_depth = 0usize;
     let mut contains_protected_type = false;
     let mut contains_expression = false;
+    let mut contains_pattern = false;
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(resource)?;
         match node {
@@ -1933,7 +1998,7 @@ pub(crate) fn copy_fragment_output_with_type(
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 group_count = group_count.saturating_add(1);
                 // The copy stack holds only actual Groups, not owner layers.
-                group_depth = group_depth.max(depth - 1);
+                group_depth = group_depth.max(depth - base_depth + 1);
                 // The copied child Vec and this walk's child entries.
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
@@ -1955,6 +2020,7 @@ pub(crate) fn copy_fragment_output_with_type(
                 charge_new_type_retention(capture, depth, budget)?;
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
+                contains_pattern = true;
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 if charge_new_pattern_copy(&capture.pattern, child, false, budget)
@@ -1980,6 +2046,14 @@ pub(crate) fn copy_fragment_output_with_type(
                 {
                     return Err(MacroParseFailure::Invalid);
                 }
+            }
+            MacroOutputNode::ForwardedDeclaration(capture, origin)
+                if matches!(mode, FragmentCopy::DeclarationParse) =>
+            {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                charge_declaration_retention(&capture.contents, depth, budget)?;
+                budget.charge().map_err(resource)?; // cloned contents Arc
             }
             MacroOutputNode::Splice(_)
             | MacroOutputNode::ForwardedDeclaration(_, _)
@@ -2021,7 +2095,12 @@ pub(crate) fn copy_fragment_output_with_type(
             Some(node) => copied.push(node.clone()),
             None => {
                 let Some(group) = groups.pop() else {
-                    return Ok((copied, contains_protected_type, contains_expression));
+                    return Ok((
+                        copied,
+                        contains_protected_type,
+                        contains_expression,
+                        contains_pattern,
+                    ));
                 };
                 let node = MacroOutputNode::Group(group.delimiter, copied, group.origin.clone());
                 nodes = group.nodes;
@@ -2030,6 +2109,81 @@ pub(crate) fn copy_fragment_output_with_type(
             }
         }
     }
+}
+
+/// Inspect the owners retained by a declaration capture without copying them.
+pub(crate) fn charge_declaration_retention(
+    contents: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    let prefix = type_depth(prefix, 1).map_err(resource)?;
+    budget.charge_units(contents.len()).map_err(resource)?;
+    let mut pending = contents
+        .iter()
+        .map(|node| (node, prefix))
+        .collect::<Vec<_>>();
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge().map_err(resource)?;
+        match node {
+            MacroOutputNode::Identifier(name, origin) => {
+                charge_type_name_inspection(name, depth, budget).map_err(resource)?;
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Token(_, _, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Group(_, children, origin) => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin(origin, child, budget).map_err(resource)?;
+                budget.charge_units(children.len()).map_err(resource)?;
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(resource)?;
+                    pending.reserve_exact(children.len());
+                }
+                pending.extend(children.iter().map(|node| (node, child)));
+            }
+            MacroOutputNode::ForwardedType(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                charge_new_type_retention(capture, depth, budget)?;
+            }
+            MacroOutputNode::ForwardedPattern(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                if charge_new_pattern_retention(capture, depth, budget).map_err(resource)?
+                    != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
+            MacroOutputNode::Expression(capture, origin)
+            | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                charge_type_origin(origin, depth, budget).map_err(resource)?;
+                if charge_new_expression_retention(capture, depth, budget).map_err(resource)?
+                    != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
+            MacroOutputNode::ForwardedDeclaration(_, _)
+            | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn charge_type_token_copy(
@@ -2692,6 +2846,13 @@ fn generator_resource(error: ResourceFailure, span: Span) -> TemplateSubstitutio
     )
 }
 
+type GeneratorAdapterDefinition = (
+    crate::surface::SurfaceDefinition,
+    Vec<SyntaxNameUse>,
+    Vec<SurfaceQuoteSite>,
+    Vec<SurfaceAdvanceSite>,
+);
+
 /// Construct the ordinary private entry consumed by the staged caller view.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generator_adapter_definition(
@@ -2707,14 +2868,7 @@ pub(crate) fn generator_adapter_definition(
     owners: &[SyntaxOwner],
     frame: &Arc<ExpansionFrame>,
     budget: &mut SyntaxBudget,
-) -> Result<
-    (
-        crate::surface::SurfaceDefinition,
-        Vec<SyntaxNameUse>,
-        Vec<SurfaceQuoteSite>,
-    ),
-    crate::parser::MacroParseFailure,
-> {
+) -> Result<GeneratorAdapterDefinition, crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
     use crate::surface::*;
     let span = frame.invocation;
@@ -3326,6 +3480,17 @@ pub(crate) fn generator_adapter_definition(
         }
     }
     let mut quote_sites = Vec::new();
+    budget.charge_units(plan.actions.len()).map_err(resource)?;
+    let advance_count = plan
+        .actions
+        .iter()
+        .filter(|action| matches!(action, GeneratorAction::Advance { .. }))
+        .count();
+    budget.charge_units(advance_count).map_err(resource)?;
+    let mut advance_sites = Vec::new();
+    advance_sites
+        .try_reserve_exact(advance_count)
+        .map_err(|_| MacroParseFailure::Invalid)?;
     let mut declarations = Vec::with_capacity(
         plan.actions
             .len()
@@ -3531,7 +3696,15 @@ pub(crate) fn generator_adapter_definition(
                     span,
                     diagnostic: step_pattern_location(generator, frame, budget)?,
                 };
-                declarations.push(local(pattern, application, span));
+                let issued = local(pattern, application, span);
+                let SurfaceLocalDeclaration::Binding(binding) = &issued else {
+                    return Err(MacroParseFailure::Invalid);
+                };
+                budget.charge().map_err(resource)?;
+                advance_sites.push(SurfaceAdvanceSite {
+                    binding: std::ptr::from_ref(binding.as_ref()) as usize,
+                });
+                declarations.push(issued);
                 let origin = invoke(
                     "invocation_origin",
                     builtin_introduction,
@@ -3867,7 +4040,7 @@ pub(crate) fn generator_adapter_definition(
             record("invocation_origin", builtin_introduction)?;
         }
     }
-    Ok((definition, uses, quote_sites))
+    Ok((definition, uses, quote_sites, advance_sites))
 }
 
 pub(crate) enum DeclarationAdapter<'a> {
@@ -3898,8 +4071,7 @@ pub(crate) struct ExpandedExpression {
 pub(crate) struct QuoteExpansionLoan<'a> {
     pub(crate) budget: &'a mut SyntaxBudget,
     pub(crate) owners: &'a mut Vec<SyntaxOwner>,
-    pub(crate) next_quote_ordinal: &'a mut usize,
-    pub(crate) quote_introduction: usize,
+    pub(crate) quote_source: Option<(&'a mut usize, usize)>,
 }
 
 pub(crate) fn has_quoted_capture(captures: &[SurfaceSyntaxCapture]) -> bool {
@@ -4083,6 +4255,9 @@ impl<'a> SyntaxExpansion<'a> {
         }
         let anchor = name.introduced_at.unwrap_or(invocation);
         let selection = self.selected(name).cloned().ok_or(invocation)?;
+        let owner_checkpoint = self.owners.len();
+        #[cfg(test)]
+        crate::driver::observe_ordinary_quote_owners(&selection, &self.owners, false);
         self.owners.push(SyntaxOwner {
             caller_quote_owner: None,
             owner: Some(selection.owner),
@@ -4164,17 +4339,39 @@ impl<'a> SyntaxExpansion<'a> {
                     0,
                 )
             }
-            SurfaceSyntaxImplementation::Transformer(_) => (self.transformer)(
-                &selection,
-                captures,
-                anchor,
-                name,
-                introduction,
-                &owners,
-                &frame,
-                constraint_work,
-                None,
-            )?,
+            SurfaceSyntaxImplementation::Transformer(_) => {
+                let loan = self
+                    .syntax_budget
+                    .as_deref_mut()
+                    .map(|budget| QuoteExpansionLoan {
+                        budget,
+                        owners: &mut self.owners,
+                        quote_source: None,
+                    });
+                match (self.transformer)(
+                    &selection,
+                    captures,
+                    anchor,
+                    name,
+                    introduction,
+                    &owners,
+                    &frame,
+                    constraint_work,
+                    loan,
+                ) {
+                    Ok(output) => output,
+                    Err(span) => {
+                        self.owners.truncate(owner_checkpoint);
+                        #[cfg(test)]
+                        crate::driver::observe_ordinary_quote_owners(
+                            &selection,
+                            &self.owners,
+                            true,
+                        );
+                        return Err(span);
+                    }
+                }
+            }
         };
         self.owners.extend((0..fresh_count).map(|_| SyntaxOwner {
             caller_quote_owner: None,
@@ -4272,8 +4469,7 @@ impl<'a> SyntaxExpansion<'a> {
                 Some(QuoteExpansionLoan {
                     budget,
                     owners: &mut self.owners,
-                    next_quote_ordinal,
-                    quote_introduction,
+                    quote_source: Some((next_quote_ordinal, quote_introduction)),
                 }),
             )
             .map_err(|_| charged())?;
@@ -5996,7 +6192,7 @@ pub(crate) fn prepare_escape_probes(
                 diagnostic: None,
             },
         };
-        function.domain = Box::new(domain);
+        *function.domain = domain;
         equation.patterns[0] = pattern;
         definitions.push(definition);
     }
@@ -6307,18 +6503,19 @@ pub(crate) fn finish_escape_probes(
                 diagnostic: None,
             };
         }
-        function.codomain = Box::new(ty);
+        *function.codomain = ty;
         if pure {
             // The ordinary probe finalized this initializer as effect-free;
             // the complete final module check verifies the narrower shell.
             function.effects = None;
         }
-        block.result = Box::new(returned);
+        *block.result = returned;
     }
     Ok(())
 }
 
 /// Inspect all splice uses, including those nested in another repetition.
+#[allow(clippy::too_many_arguments)] // Matcher, scope, and work inputs remain independent.
 fn repetition_length<'a>(
     repeat: &'a TemplateRepeat,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -6529,6 +6726,7 @@ fn charge_declaration_template(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // Keep the independent template and work inputs explicit.
 fn charge_template_inner(
     template: &[MacroOutputNode],
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -7062,6 +7260,7 @@ pub(crate) fn normalize_declaration_line_ends(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Recursive scope, substitutions, and work remain separate.
 fn substitute_contents_at(
     contents: &mut Vec<MacroOutputNode>,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -7172,169 +7371,202 @@ fn substitute_contents_at(
             continue;
         }
         let node = &mut contents[position];
-        match node {
-            MacroOutputNode::Splice(name) => {
-                if let Some(generator) = generator.as_deref_mut()
-                    && let Some(replacement) = generator.read(
-                        name,
-                        budget
-                            .as_deref_mut()
-                            .expect("generator substitution has a budget"),
-                    )?
-                {
-                    *node = replacement;
-                    position += 1;
-                    continue;
+        if let MacroOutputNode::Group(_, children, _) = node {
+            substitute_contents_at(
+                children,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+                indices,
+                budget,
+                generator_names,
+                generator.as_deref_mut(),
+                escapes,
+                admission_identifiers.as_deref_mut(),
+                escape_placeholders.as_deref_mut(),
+            )?;
+        } else {
+            substitute_leaf(
+                node,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+                indices,
+                budget,
+                generator.as_deref_mut(),
+                escapes,
+                admission_identifiers.as_deref_mut(),
+                escape_placeholders.as_deref_mut(),
+            )?;
+        }
+        position += 1;
+    }
+    Ok(())
+}
+
+// Leaf substitutions can carry large protected fragments. Keep their temporary
+// values out of every recursive group/repetition frame on the bounded stack.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn substitute_leaf(
+    node: &mut MacroOutputNode,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+    indices: &[usize],
+    budget: &mut Option<&mut SyntaxBudget>,
+    mut generator: Option<&mut GeneratorPlanner>,
+    escapes: Option<&Arc<[crate::surface::SurfaceTemplateEscape]>>,
+    admission_identifiers: Option<&mut Vec<SurfaceName>>,
+    escape_placeholders: Option<&mut Vec<SurfaceName>>,
+) -> Result<(), TemplateSubstitutionFailure> {
+    match node {
+        MacroOutputNode::Splice(name) => {
+            if let Some(generator) = generator.as_deref_mut()
+                && let Some(replacement) = generator.read(
+                    name,
+                    budget
+                        .as_deref_mut()
+                        .expect("generator substitution has a budget"),
+                )?
+            {
+                *node = replacement;
+                return Ok(());
+            }
+            let capture = match capture_by_name_at(name, matcher, captures, indices) {
+                Ok(capture) => capture,
+                Err(CaptureLookupFailure::Unknown(name)) => {
+                    return Err(TemplateSubstitutionFailure::Syntax(
+                        name.span,
+                        unknown_capture_failure(name, budget.as_deref_mut()),
+                    ));
                 }
-                let capture = match capture_by_name_at(name, matcher, captures, indices) {
-                    Ok(capture) => capture,
-                    Err(CaptureLookupFailure::Unknown(name)) => {
-                        return Err(TemplateSubstitutionFailure::Syntax(
-                            name.span,
-                            unknown_capture_failure(name, budget.as_deref_mut()),
-                        ));
-                    }
-                    Err(CaptureLookupFailure::Invalid(span)) => {
-                        return Err(TemplateSubstitutionFailure::Invalid(span));
-                    }
-                };
-                *node = match capture {
-                    SurfaceSyntaxCapture::Expression(capture) => {
-                        MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
-                    }
-                    SurfaceSyntaxCapture::Identifier(capture) => {
-                        MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
-                    }
-                    SurfaceSyntaxCapture::Type(capture) => MacroOutputNode::ForwardedType(
-                        capture.clone(),
-                        capture.ty.diagnostic.as_ref().map_or_else(
-                            || capture.ty.span.into(),
-                            |location| location.primary.clone(),
-                        ),
+                Err(CaptureLookupFailure::Invalid(span)) => {
+                    return Err(TemplateSubstitutionFailure::Invalid(span));
+                }
+            };
+            *node = match capture {
+                SurfaceSyntaxCapture::Expression(capture) => {
+                    MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
+                }
+                SurfaceSyntaxCapture::Identifier(capture) => {
+                    MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
+                }
+                SurfaceSyntaxCapture::Type(capture) => MacroOutputNode::ForwardedType(
+                    capture.clone(),
+                    capture.ty.diagnostic.as_ref().map_or_else(
+                        || capture.ty.span.into(),
+                        |location| location.primary.clone(),
                     ),
-                    SurfaceSyntaxCapture::Pattern(capture) => MacroOutputNode::ForwardedPattern(
-                        capture.clone(),
-                        capture.pattern.diagnostic.as_ref().map_or_else(
-                            || capture.pattern.span.into(),
-                            |location| location.primary.clone(),
-                        ),
+                ),
+                SurfaceSyntaxCapture::Pattern(capture) => MacroOutputNode::ForwardedPattern(
+                    capture.clone(),
+                    capture.pattern.diagnostic.as_ref().map_or_else(
+                        || capture.pattern.span.into(),
+                        |location| location.primary.clone(),
                     ),
-                    SurfaceSyntaxCapture::Declaration(capture) => {
-                        MacroOutputNode::ForwardedDeclaration(
-                            capture.clone(),
-                            declaration_capture_origin(capture)
-                                .cloned()
-                                .unwrap_or_else(|| invocation.into()),
-                        )
-                    }
-                    SurfaceSyntaxCapture::Repeated(_) => {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    }
-                };
-            }
-            MacroOutputNode::Identifier(name, _) => {
-                if introduction != 0 {
-                    name.introduction = introduction;
-                    name.introduced_at = Some(invocation);
-                    name.written = false;
+                ),
+                SurfaceSyntaxCapture::Declaration(capture) => {
+                    MacroOutputNode::ForwardedDeclaration(
+                        capture.clone(),
+                        declaration_capture_origin(capture)
+                            .cloned()
+                            .unwrap_or_else(|| invocation.into()),
+                    )
                 }
-            }
-            MacroOutputNode::Group(_, children, _) => {
-                substitute_contents_at(
-                    children,
-                    matcher,
-                    captures,
-                    introduction,
-                    invocation,
-                    indices,
-                    budget,
-                    generator_names,
-                    generator.as_deref_mut(),
-                    escapes,
-                    admission_identifiers.as_deref_mut(),
-                    escape_placeholders.as_deref_mut(),
-                )?;
-            }
-            MacroOutputNode::TemplateEscape(name) => {
-                if let Some(planner) = generator.as_deref_mut() {
-                    let Some(escapes) = escapes else {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    };
-                    let Some(budget) = budget.as_deref_mut() else {
-                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
-                    };
-                    *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
-                    position += 1;
-                    continue;
+                SurfaceSyntaxCapture::Repeated(_) => {
+                    return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 }
-                let Some(identifiers) = admission_identifiers.as_deref_mut() else {
+            };
+        }
+        MacroOutputNode::Identifier(name, _) => {
+            if introduction != 0 {
+                name.introduction = introduction;
+                name.introduced_at = Some(invocation);
+                name.written = false;
+            }
+        }
+        MacroOutputNode::TemplateEscape(name) => {
+            if let Some(planner) = generator {
+                let Some(escapes) = escapes else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
                 let Some(budget) = budget.as_deref_mut() else {
                     return Err(TemplateSubstitutionFailure::Invalid(name.span));
                 };
-                let resource = |error| {
-                    TemplateSubstitutionFailure::Syntax(
-                        name.span,
-                        crate::parser::MacroParseFailure::Syntax {
-                            diagnostics: Vec::new(),
-                            resource: Some(error),
-                        },
-                    )
-                };
-                let span = name.span;
-                let index = identifiers.len();
-                let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
-                let bytes = "__ash_escape_admission_".len().saturating_add(digits);
-                // The temporary name and its list copy both own text.
+                *node = planner.escape(name, escapes, matcher, captures, indices, budget)?;
+                return Ok(());
+            }
+            let Some(identifiers) = admission_identifiers else {
+                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+            };
+            let Some(budget) = budget.as_deref_mut() else {
+                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+            };
+            let resource = |error| {
+                TemplateSubstitutionFailure::Syntax(
+                    name.span,
+                    crate::parser::MacroParseFailure::Syntax {
+                        diagnostics: Vec::new(),
+                        resource: Some(error),
+                    },
+                )
+            };
+            let span = name.span;
+            let index = identifiers.len();
+            let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+            let bytes = "__ash_escape_admission_".len().saturating_add(digits);
+            // The temporary name and its list copy both own text.
+            budget
+                .charge_units(bytes.saturating_mul(2).saturating_add(2))
+                .map_err(resource)?;
+            if identifiers.len() == identifiers.capacity() {
+                let live = identifiers.len();
                 budget
-                    .charge_units(bytes.saturating_mul(2).saturating_add(2))
+                    .charge_units(live.saturating_mul(2).saturating_add(1))
                     .map_err(resource)?;
-                if identifiers.len() == identifiers.capacity() {
-                    let live = identifiers.len();
+                identifiers.reserve_exact(1);
+            } else {
+                budget.charge().map_err(resource)?;
+            }
+            let placeholder = SurfaceName {
+                text: format!("__ash_escape_admission_{index}"),
+                span,
+                introduction: usize::MAX - index,
+                introduced_at: Some(span),
+                written: false,
+                diagnostic: None,
+            };
+            identifiers.push(placeholder.clone());
+            if let Some(escapes) = escape_placeholders {
+                charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
+                if escapes.len() == escapes.capacity() {
                     budget
-                        .charge_units(live.saturating_mul(2).saturating_add(1))
+                        .charge_units(escapes.len().saturating_mul(2).saturating_add(1))
                         .map_err(resource)?;
-                    identifiers.reserve_exact(1);
+                    escapes.reserve_exact(1);
                 } else {
                     budget.charge().map_err(resource)?;
                 }
-                let placeholder = SurfaceName {
-                    text: format!("__ash_escape_admission_{index}"),
-                    span,
-                    introduction: usize::MAX - index,
-                    introduced_at: Some(span),
-                    written: false,
-                    diagnostic: None,
-                };
-                identifiers.push(placeholder.clone());
-                if let Some(escapes) = escape_placeholders.as_deref_mut() {
-                    charge_type_name_copy(&placeholder, 0, budget).map_err(resource)?;
-                    if escapes.len() == escapes.capacity() {
-                        budget
-                            .charge_units(escapes.len().saturating_mul(2).saturating_add(1))
-                            .map_err(resource)?;
-                        escapes.reserve_exact(1);
-                    } else {
-                        budget.charge().map_err(resource)?;
-                    }
-                    escapes.push(placeholder.clone());
-                }
-                *node = MacroOutputNode::Identifier(placeholder, span.into());
+                escapes.push(placeholder.clone());
             }
-            MacroOutputNode::TemplateRepeat(repeat) => {
-                return Err(TemplateSubstitutionFailure::Invalid(
-                    repeat.origin.primary(),
-                ));
-            }
-            MacroOutputNode::Token(_, _, _)
-            | MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedType(_, _)
-            | MacroOutputNode::ForwardedDeclaration(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _) => {}
+            *node = MacroOutputNode::Identifier(placeholder, span.into());
         }
-        position += 1;
+        MacroOutputNode::TemplateRepeat(repeat) => {
+            return Err(TemplateSubstitutionFailure::Invalid(
+                repeat.origin.primary(),
+            ));
+        }
+        MacroOutputNode::Group(_, _, _) => unreachable!("groups are handled by the caller"),
+        MacroOutputNode::Token(_, _, _)
+        | MacroOutputNode::Expression(_, _)
+        | MacroOutputNode::ForwardedExpression(_, _)
+        | MacroOutputNode::ForwardedType(_, _)
+        | MacroOutputNode::ForwardedDeclaration(_, _)
+        | MacroOutputNode::ForwardedPattern(_, _) => {}
     }
     Ok(())
 }
@@ -8299,7 +8531,8 @@ mod tests {
         };
         let mut measured = SyntaxBudget::default();
         measured.charge_units(17).unwrap();
-        let (definition, uses, sites) = run(&mut measured).unwrap();
+        let (definition, uses, sites, advances) = run(&mut measured).unwrap();
+        assert_eq!(advances.len(), 1);
         assert!(uses.is_empty());
         assert!(sites.is_empty());
         let used = measured.consumed();
@@ -8472,7 +8705,8 @@ mod tests {
         for _ in 0..2 {
             let mut exact = SyntaxBudget::with_limit(used);
             exact.charge_units(17).unwrap();
-            let (definition, _, _) = run(&mut exact).unwrap();
+            let (definition, _, _, advances) = run(&mut exact).unwrap();
+            assert_eq!(advances.len(), 1);
             assert_eq!(exact.consumed(), used);
             drop(definition);
             assert_eq!(

@@ -1,9 +1,10 @@
 # Executable template escapes
 
-These proposed I22 source graphs exercise the approved escape and subtemplate
-design in [CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md).
-They are fixed acceptance inputs for unimplemented syntax, not passing product
-tests. Each entry file is compiled independently in this directory.
+These fixed I22 source graphs exercise the escape and subtemplate design in
+historical [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+Each entry file is compiled independently in this directory.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 ## Successful cases
 
@@ -104,7 +105,4 @@ tests. Each entry file is compiled independently in this directory.
 The [I17 generator graphs](../generators/README.md) supply unused malformed
 quotes in an ordinary helper and generator. Diagnostics cases check both human
 and structured output with relevant definition, invocation, input and quote
-origins. A failed expansion publishes no partial declarations. The current
-compiler can run only the handwritten controls, `token_exhaustive.ash` and the
-four pre-reservation
-compatibility cases; it cannot execute the proposed escape graphs.
+origins. A failed expansion publishes no partial declarations.

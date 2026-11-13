@@ -1020,6 +1020,7 @@ pub struct ResolvedModule {
     effect_coordinates: Option<Arc<crate::core::validate::AdmittedEffectCoordinates>>,
     imported_lowerings: Vec<crate::elaborate::SharedModuleLowering>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
 }
 
 pub(crate) struct ResolvedModuleParts {
@@ -1110,12 +1111,13 @@ impl ResolvedModule {
 
     #[cfg(test)]
     pub(crate) fn new(parts: ResolvedModuleParts) -> Self {
-        Self::new_with_quote_sites(parts, Vec::new())
+        Self::new_with_sites(parts, Vec::new(), Vec::new())
     }
 
-    pub(crate) fn new_with_quote_sites(
+    pub(crate) fn new_with_sites(
         mut parts: ResolvedModuleParts,
         quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+        advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     ) -> Self {
         Self {
             module: parts.module,
@@ -1135,11 +1137,16 @@ impl ResolvedModule {
             effect_coordinates: None,
             imported_lowerings: Vec::new(),
             quote_sites,
+            advance_sites,
         }
     }
 
     pub(crate) fn quote_sites(&self) -> &[crate::syntax::ResolvedQuoteSite] {
         &self.quote_sites
+    }
+
+    pub(crate) fn advance_sites(&self) -> &[crate::syntax::ResolvedAdvanceSite] {
+        &self.advance_sites
     }
 
     /// Retains the same immutable defining records reached by dependency edges.

@@ -1,12 +1,16 @@
 # Top-level declaration and derive macros: working design
 
-This companion develops [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md).
-It accompanies an accepted but unimplemented proposal and contains a
-prospective delivery map, not an active task or current Ash. The expression
-slice is implemented and retained. Recheck its contract before fixing declaration
-producer/consumer interfaces or dispatching work.
-Use the [working issue-planning rules](../../project/issue-planning.md) when
-revising the delivery breakdown.
+> This design records the transition as it was developed. References below to
+> proposed work, current behavior, implementation and evidence describe that
+> historical stage. The [specification](../../../spec/syntax-expansion.md)
+> describes the language; [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
+> records delivery and remaining verification.
+
+This companion develops [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+It preserves the design and prospective delivery map that accompanied the
+proposal. It is informative rather than a task or language specification.
+The [working issue-planning rules](../../project/issue-planning.md) govern
+current delivery planning.
 
 ## Objective and difficulty
 
@@ -32,7 +36,8 @@ appear below; predicted and actual difficulty remain separate. The independent
 review identified grant-specific work not required by the retained expression
 slice and implementation choices that remain open. The 95 points are the
 recorded pre-review prediction, not a fresh estimate for the revised contract.
-The [local delivery plan](slice2-delivery-plan.md) records the later 126-point
+The [local delivery plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md)
+records the later 126-point
 prediction, the later 130-point forecast and the current 150-point scope
 prediction, including 142 points of remaining delivery work.
 
@@ -178,7 +183,7 @@ conversion interface. The public token constructors and spellings are specified 
 The expression host checks `Input -> MacroResult`, not an arbitrary generator
 step. Declaration staging, an adapter for steps and top-level identity behavior
 still require evidence. Slice 1 does not prove those additions work unchanged.
-The [local plan](slice2-delivery-plan.md#readiness-questions-before-implementation)
+The [local plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md#readiness-questions-before-implementation)
 records the outstanding checks and the syntax-only implementation boundary.
 
 ### Declaration syntax service
@@ -895,7 +900,9 @@ the combined production path after the independently progressing units connect.
 
 ## Before implementation
 
-1. Use the recalibrated [local plan](slice2-delivery-plan.md) for the accepted
+1. Use the recalibrated
+   [local plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md)
+   for the accepted
    scope. C3 reviewed the public-name contract and corpus; connected public-name
    behavior remains an implementation gate. The generator's ordinary function
    type is decided; no conversion interface or separate evidence mechanism is

@@ -19,7 +19,8 @@ use crate::{
     parser::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
         finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
-        parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
+        parse_module_header, parse_with_budget_and_header, project_module,
+        project_module_header_with_syntax,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -962,6 +963,56 @@ impl Error for ModuleFailure {}
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn staged_resource_location_requires_each_admitted_source() {
+        use crate::{
+            presentation::{PresentationError, compile_graph_diagnostics, write_json},
+            source::ByteRange,
+            syntax::{DiagnosticLocation, ExpansionFrame},
+            syntax_resource::ResourceFailure,
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("caller.ash", "invoke").unwrap();
+        let missing = SourceFile::new("forms.ash", "definition").unwrap();
+        let invocation = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let definition = missing.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        let mut location = DiagnosticLocation::new(invocation.into());
+        location.frames.push(Arc::new(ExpansionFrame {
+            invocation,
+            definition,
+        }));
+        let mut graph = GraphDiagnostic {
+            failure: Box::new(GraphFailure {
+                failure: LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    source,
+                    import_span: None,
+                    lexical: Vec::new(),
+                    parser: Vec::new(),
+                    resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                })),
+                resource_location: Some(location),
+            }),
+            sources: Box::default(),
+            compilation_work: None,
+        };
+        assert!(matches!(
+            compile_graph_diagnostics(&graph),
+            Err(PresentationError::MissingSource)
+        ));
+
+        graph.failure.resource_location = None;
+        let diagnostics = compile_graph_diagnostics(&graph).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.resource.structural-depth");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["labels"], serde_json::json!([]));
+    }
+
     #[test]
     fn corrupt_projected_paths_report_compiler_failures_with_specific_causes() {
         for (input, missing_parent, expected_cause) in [
@@ -1013,7 +1064,10 @@ mod presentation_tests {
                 "corrupt compiler data must not reject source"
             );
             let context = GraphDiagnostic {
-                failure: Box::new(failure),
+                failure: Box::new(GraphFailure {
+                    failure,
+                    resource_location: None,
+                }),
                 sources: vec![module.source].into_boxed_slice(),
                 compilation_work: None,
             };
@@ -1313,12 +1367,24 @@ impl Error for LoadGraphError {}
 /// Sources are moved out of traversal state only after loading fails.
 #[derive(Debug)]
 pub struct GraphDiagnostic {
-    failure: Box<LoadGraphError>,
+    failure: Box<GraphFailure>,
     sources: Box<[SourceFile]>,
     compilation_work: Option<Box<crate::compiler_work::CompilationWork>>,
 }
 
+// Keep the optional context in the existing failure allocation so preserving
+// a paid resource location does not require another allocation on failure.
+#[derive(Debug)]
+struct GraphFailure {
+    failure: LoadGraphError,
+    resource_location: Option<crate::syntax::DiagnosticLocation>,
+}
+
 impl GraphDiagnostic {
+    pub(crate) fn resource_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        self.failure.resource_location.as_ref()
+    }
+
     pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
         self.compilation_work.as_deref()
     }
@@ -1334,18 +1400,18 @@ impl GraphDiagnostic {
     /// Borrows the unchanged graph-loading failure.
     #[must_use]
     pub const fn failure(&self) -> &LoadGraphError {
-        &self.failure
+        &self.failure.failure
     }
 
     /// Consumes the diagnostic when only its semantic failure is needed.
     #[must_use]
     pub fn into_failure(self) -> LoadGraphError {
-        *self.failure
+        self.failure.failure
     }
 
     pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
         let mut sources = self.sources.into_vec();
-        match *self.failure {
+        match self.failure.failure {
             LoadGraphError::Syntax(failure) => sources.push(failure.source),
             LoadGraphError::Projection { source, .. } => sources.push(source),
             _ => {}
@@ -1355,7 +1421,7 @@ impl GraphDiagnostic {
 
     /// Borrows all admitted sources, including a rejected syntax source.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
-        let rejected = match &*self.failure {
+        let rejected = match &self.failure.failure {
             LoadGraphError::Syntax(failure) => Some(&failure.source),
             LoadGraphError::Projection { source, .. } => Some(source),
             _ => None,
@@ -1366,25 +1432,25 @@ impl GraphDiagnostic {
     /// Returns the module-stage failure, if present.
     #[must_use]
     pub const fn as_module_failure(&self) -> Option<&ModuleFailure> {
-        self.failure.as_module_failure()
+        self.failure.failure.as_module_failure()
     }
 
     /// Returns the stable module-stage reason, if present.
     #[must_use]
     pub const fn module_reason(&self) -> Option<ModuleReason> {
-        self.failure.module_reason()
+        self.failure.failure.module_reason()
     }
 
     /// Preserves the original source-rejection classification.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        self.failure.is_source_rejection()
+        self.failure.failure.is_source_rejection()
     }
 }
 
 impl fmt::Display for GraphDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.failure.fmt(formatter)
+        self.failure.failure.fmt(formatter)
     }
 }
 
@@ -1393,7 +1459,10 @@ impl Error for GraphDiagnostic {}
 impl From<LoadGraphError> for GraphDiagnostic {
     fn from(failure: LoadGraphError) -> Self {
         Self {
-            failure: Box::new(failure),
+            failure: Box::new(GraphFailure {
+                failure,
+                resource_location: None,
+            }),
             sources: Box::default(),
             compilation_work: None,
         }
@@ -1510,6 +1579,11 @@ pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut
     + 'a;
 
 impl StagedModuleLoan<'_> {
+    #[cfg(test)]
+    pub(crate) fn dependencies(&self) -> &[ModuleDependency] {
+        self.dependencies
+    }
+
     pub(crate) fn quote_projection(
         &self,
     ) -> Option<&std::cell::RefCell<crate::parser::QuoteProjection>> {
@@ -1576,7 +1650,7 @@ impl StagedModuleLoan<'_> {
         definition: crate::surface::SurfaceDefinition,
         budget: &mut SyntaxBudget,
     ) -> Result<LoadedModule, ResourceFailure> {
-        self.adapter_view(source, definition, Vec::new(), None, budget)
+        self.adapter_view(source, definition, Vec::new(), None, None, budget)
     }
 
     pub(crate) fn adapter_view(
@@ -1585,6 +1659,7 @@ impl StagedModuleLoan<'_> {
         definition: crate::surface::SurfaceDefinition,
         quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
         quote_introduction: Option<usize>,
+        redundant_syntax_owner: Option<ModuleId>,
         budget: &mut SyntaxBudget,
     ) -> Result<LoadedModule, ResourceFailure> {
         use crate::surface::{
@@ -1602,8 +1677,7 @@ impl StagedModuleLoan<'_> {
             Ok(())
         }
 
-        // The view owns an exact copy of the caller's real import syntax and
-        // dependency edge order; only its private adapter is new.
+        // The view retains the caller's import syntax and dependency order.
         budget.charge_units(
             self.imports
                 .len()
@@ -1644,7 +1718,24 @@ impl StagedModuleLoan<'_> {
                 }
             }
         }
+        let search_redundant = quote_sites.is_empty()
+            && quote_introduction.is_none()
+            && redundant_syntax_owner.is_some();
+        if search_redundant {
+            // Prepay one bounded scan and at most one vector shift.
+            budget.charge_units(self.dependencies.len().saturating_mul(2))?;
+        }
         let source = self.retained_source(source, budget)?;
+        let mut dependencies = self.dependencies.to_vec();
+        if search_redundant
+            && let Some(index) = dependencies.iter().position(|edge| {
+                edge.is_compiler_private()
+                    && edge.target().is_builtin_compiler_syntax()
+                    && Some(edge.target()) == redundant_syntax_owner
+            })
+        {
+            dependencies.remove(index);
+        }
         Ok(LoadedModule {
             id: self.id,
             canonical_path: self.canonical_path.to_path_buf(),
@@ -1662,7 +1753,7 @@ impl StagedModuleLoan<'_> {
                 definitions: vec![definition],
                 span: self.span,
             },
-            dependencies: self.dependencies.to_vec().into_boxed_slice(),
+            dependencies: dependencies.into_boxed_slice(),
             quote_sites,
             quote_introduction,
             caller_quote_owner: None,
@@ -1677,6 +1768,7 @@ struct StagedSyntax {
     import_span: Option<Span>,
     needs_quote_dependency: bool,
     needs_generator_dependency: bool,
+    syntax_import_quote_dependency: bool,
 }
 
 enum ModuleBody {
@@ -1697,11 +1789,13 @@ impl StagedSyntax {
             import_span,
             needs_quote_dependency: false,
             needs_generator_dependency,
+            syntax_import_quote_dependency: false,
         }
     }
 }
 
 impl StagedModule {
+    #[allow(clippy::too_many_arguments)] // Independent staging, quote, and work loans stay explicit.
     fn into_loaded(
         self,
         budget: &mut SyntaxBudget,
@@ -1709,9 +1803,15 @@ impl StagedModule {
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut StagedDeclarationTransformer<'_>>,
-        quote: (Option<crate::syntax::SyntaxOwner>, &mut usize),
+        quote: (
+            Option<crate::syntax::SyntaxOwner>,
+            &mut usize,
+            Option<ModuleDependency>,
+        ),
+        resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
     ) -> Result<LoadedModule, LoadGraphError> {
-        let (quote_owner, next_quote_ordinal) = quote;
+        let (quote_owner, next_quote_ordinal, redundant_quote_dependency) = quote;
+        let initial_quote_ordinal = *next_quote_ordinal;
         let StagedSyntax {
             imports,
             span,
@@ -1719,6 +1819,7 @@ impl StagedModule {
             import_span,
             needs_quote_dependency,
             needs_generator_dependency: _,
+            syntax_import_quote_dependency,
         } = self.surface;
         let mut completed_owners = None;
         let mut completed_sites = Vec::new();
@@ -1837,6 +1938,7 @@ impl StagedModule {
                         budget,
                         callback,
                         quote_projection.as_ref(),
+                        resource_location,
                     )?
                 };
                 if surface.imports != imports {
@@ -1866,6 +1968,28 @@ impl StagedModule {
             });
         }
         let caller_quote_owner = caller_quote_owner.into_inner();
+        let mut dependencies = self.dependencies;
+        if let Some(redundant_edge) = redundant_quote_dependency
+            && redundant_edge.is_compiler_private()
+            && redundant_edge.target().is_builtin_compiler_syntax()
+            && syntax_import_quote_dependency
+            && *next_quote_ordinal == initial_quote_ordinal
+            && completed_sites.is_empty()
+            && caller_quote_owner.is_none()
+        {
+            if let Err(resource) = budget.charge_units(dependencies.len().saturating_mul(2)) {
+                return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    lexical: Vec::new(),
+                    parser: Vec::new(),
+                    resource: Some(resource),
+                    source,
+                    import_span,
+                })));
+            }
+            if let Some(index) = dependencies.iter().position(|edge| *edge == redundant_edge) {
+                dependencies.remove(index);
+            }
+        }
         if let Some(staged_owners) = completed_owners {
             *owners = staged_owners;
         }
@@ -1878,7 +2002,7 @@ impl StagedModule {
             canonical_path: self.canonical_path,
             source,
             surface,
-            dependencies: self.dependencies.into_boxed_slice(),
+            dependencies: dependencies.into_boxed_slice(),
             quote_sites: completed_sites,
             quote_introduction: completed_quote_introduction,
             caller_quote_owner,
@@ -1977,6 +2101,7 @@ impl HeaderGraph {
             owners,
             transformer,
             None,
+            None,
         )
     }
 
@@ -1987,17 +2112,24 @@ impl HeaderGraph {
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
+        redundant_quote_dependency: Option<ModuleDependency>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
+        let mut resource_location = None;
         match module.into_loaded(
             &mut self.syntax_budget,
             syntax,
             owner_imports,
             owners,
             transformer,
-            (quote_owner, &mut self.next_quote_ordinal),
+            (
+                quote_owner,
+                &mut self.next_quote_ordinal,
+                redundant_quote_dependency,
+            ),
+            &mut resource_location,
         ) {
             Ok(module) => {
                 self.loaded.push(module);
@@ -2007,7 +2139,10 @@ impl HeaderGraph {
                 let loaded = std::mem::take(&mut self.loaded);
                 let pending = std::mem::take(&mut self.pending);
                 Err(GraphDiagnostic {
-                    failure: Box::new(failure),
+                    failure: Box::new(GraphFailure {
+                        failure,
+                        resource_location,
+                    }),
                     sources: loaded
                         .into_iter()
                         .map(LoadedModule::into_source)
@@ -2585,7 +2720,10 @@ fn discover_graph_with_budget(
         })
     })();
     result.map_err(|failure| GraphDiagnostic {
-        failure: Box::new(failure),
+        failure: Box::new(GraphFailure {
+            failure,
+            resource_location: None,
+        }),
         sources: staged
             .into_iter()
             .map(|module| module.source)
@@ -3106,7 +3244,8 @@ fn parse_graph_module(
     }
     let (checkpoint, retained) = parse_module_header(tokens, lexical, syntax_budget.clone());
     *syntax_budget = retained;
-    let imports = match project_module_header(&source, &checkpoint) {
+    let (imports, has_syntax_import) = match project_module_header_with_syntax(&source, &checkpoint)
+    {
         Ok(imports) => imports,
         Err(error) => {
             if matches!(
@@ -3131,6 +3270,24 @@ fn parse_graph_module(
             });
         }
     };
+    if has_syntax_import
+        && !needs_quote_dependency
+        && let Err(resource) = syntax_budget.charge()
+    {
+        // The checkpoint already owns these diagnostics; move them without
+        // copying after the continuing budget refuses the new activation.
+        let (lexical, parser) = checkpoint.into_diagnostics();
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical,
+            parser,
+            resource: Some(resource),
+            source,
+            import_span,
+        })));
+    }
+    let syntax_import_quote_dependency =
+        has_syntax_import && !needs_quote_dependency && !needs_generator_dependency;
+    let needs_quote_dependency = needs_quote_dependency || has_syntax_import;
     let span = match module_span_from_checkpoint(&source, &checkpoint) {
         Ok(span) => span,
         Err(error) => {
@@ -3150,6 +3307,7 @@ fn parse_graph_module(
             import_span,
             needs_quote_dependency,
             needs_generator_dependency,
+            syntax_import_quote_dependency,
         },
     ))
 }
@@ -3166,6 +3324,7 @@ fn project_finished_module(
     budget: &mut SyntaxBudget,
     transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     quote_sites: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
+    resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -3179,7 +3338,7 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match crate::parser::project_declaration_expansions_with_quotes(
+    match crate::parser::project_declaration_expansions_with_resource(
         &source,
         &tree,
         syntax,
@@ -3188,6 +3347,7 @@ fn project_finished_module(
         budget,
         transformer,
         quote_sites,
+        resource_location,
     ) {
         Ok(surface) => Ok((source, surface)),
         Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {
@@ -3533,7 +3693,7 @@ mod tests {
         let (tokens, diagnostics, _, resource) = lexed.into_parts();
         assert!(resource.is_none());
         let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
-        let imports = project_module_header(&source, &checkpoint).unwrap();
+        let imports = crate::parser::project_module_header(&source, &checkpoint).unwrap();
         let span = module_span_from_checkpoint(&source, &checkpoint).unwrap();
         let entry = ModuleId::new(0);
         let staged = StagedModule {
@@ -3551,6 +3711,7 @@ mod tests {
                 import_span: None,
                 needs_quote_dependency: false,
                 needs_generator_dependency: false,
+                syntax_import_quote_dependency: false,
             },
             dependencies: Vec::new(),
             relative_edges: Vec::new(),

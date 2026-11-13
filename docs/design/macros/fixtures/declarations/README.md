@@ -1,11 +1,12 @@
 # Declaration form fixtures
 
-These proposed I01–I07 graphs exercise every current top-level output category
-under [CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md).
+These fixed I01–I07 graphs exercise every top-level output category under
+historical [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
 `forms.ash` defines the declaration macros. Each `case_01.ash` through
 `case_07.ash` is a separate entry module in this directory and must return
-`42 : Int` through the public compiler driver after slice 2 is implemented.
-They are not passing product tests yet.
+`42 : Int` through the public compiler driver.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 The cases cover, in order: a `type`; a `newtype`; an `interface`; an `impl`;
 an `effect` and its handler; a `foreign library` without invoking its native

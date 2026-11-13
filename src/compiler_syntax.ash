@@ -124,6 +124,7 @@ pub effect Ops {
     parse_type : (Input, Syntax) -> ParseResult
     pattern_syntax : PatternFragment -> Syntax
     parse_pattern : (Input, Syntax) -> ParseResult
+    parse_declaration : (Input, Syntax) -> ParseResult
 }
 
 pub capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -162,3 +163,5 @@ pub pattern_syntax : PatternFragment -> Syntax ! {Ops}
 pattern_syntax value = perform Ops.pattern_syntax value
 pub parse_pattern : (Input, Syntax) -> ParseResult ! {Ops}
 parse_pattern value = perform Ops.parse_pattern value
+pub parse_declaration : (Input, Syntax) -> ParseResult ! {Ops}
+parse_declaration value = perform Ops.parse_declaration value

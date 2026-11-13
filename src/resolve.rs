@@ -1686,6 +1686,31 @@ pub(crate) fn resolve_module_with_syntax<'a>(
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
     expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
+    resolve_generator_module_with_syntax(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        uses,
+        owners,
+        terms,
+        &[],
+        expansion,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_generator_module_with_syntax<'a>(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    uses: &'a [crate::syntax::SyntaxNameUse],
+    owners: &'a [Arc<crate::resolved::CheckedModule>],
+    terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
+) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
         loaded,
         dependencies,
@@ -1696,6 +1721,7 @@ pub(crate) fn resolve_module_with_syntax<'a>(
             uses,
             owners,
             terms,
+            advance_sites,
         }),
         expansion,
     )
@@ -1706,6 +1732,7 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    advance_sites: &'a [crate::syntax::SurfaceAdvanceSite],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1821,7 +1848,11 @@ fn finish_module_resolution(
         .map_err(ResolveModuleError::Representation)?;
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
-    let mut resolved = ResolvedModule::new_with_quote_sites(admission.parts, admission.quote_sites);
+    let mut resolved = ResolvedModule::new_with_sites(
+        admission.parts,
+        admission.quote_sites,
+        admission.advance_sites,
+    );
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1876,6 +1907,7 @@ struct ResolvedModuleAdmission {
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     effect_coordinates: Arc<crate::core::validate::AdmittedEffectCoordinates>,
 }
 
@@ -2034,6 +2066,54 @@ fn resolve_module_names_with_budget<'a>(
     resolver.surface_quote_sites = loaded.quote_sites();
     resolver.current_caller = Some(loaded);
     let result = (|| {
+        let advance_count = resolver
+            .syntax_inputs
+            .map_or(0, |inputs| inputs.advance_sites.len());
+        let storage = advance_count.checked_mul(3).ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver.type_work.charge(storage).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "advance-site storage exceeded its work budget",
+            )
+        })?;
+        resolver
+            .advance_seen
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .pending_advance_bindings
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver
+            .advance_sites
+            .try_reserve_exact(advance_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site storage could not be reserved",
+                )
+            })?;
+        resolver.advance_seen.resize(advance_count, false);
         resolver
             .constraint_work
             .charge(dependencies.len())
@@ -2148,6 +2228,25 @@ fn resolve_module_names_with_budget<'a>(
                 })?;
             catalogue.extend(resolver.source_foreign_libraries.iter().map(Arc::clone));
         }
+        resolver
+            .type_work
+            .charge(resolver.advance_seen.len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "advance-site completion exceeded its work budget",
+                )
+            })?;
+        if resolver.advance_seen.iter().any(|seen| !seen)
+            || !resolver.pending_advance_bindings.is_empty()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "an issued advance binding did not resolve exactly once",
+            ));
+        }
         Ok(ResolvedModuleAdmission {
             parts: ResolvedModuleParts {
                 module,
@@ -2167,6 +2266,7 @@ fn resolve_module_names_with_budget<'a>(
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
             quote_sites: std::mem::take(&mut resolver.quote_sites),
+            advance_sites: std::mem::take(&mut resolver.advance_sites),
             effect_coordinates,
         })
     })();
@@ -2623,6 +2723,9 @@ struct Resolver<'state, 'inputs> {
     current_caller: Option<&'state LoadedModule>,
     replacement_quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
     quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
+    advance_seen: Vec<bool>,
+    pending_advance_bindings: Vec<[BinderId; 2]>,
+    advance_sites: Vec<crate::syntax::ResolvedAdvanceSite>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -3181,6 +3284,9 @@ impl Resolver<'_, '_> {
             current_caller: None,
             replacement_quote_sites: Vec::new(),
             quote_sites: Vec::new(),
+            advance_seen: Vec::new(),
+            pending_advance_bindings: Vec::new(),
+            advance_sites: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -10430,11 +10536,43 @@ impl Resolver<'_, '_> {
                                 self.resolve_pattern_vector(&equation.patterns)?;
                             let patterns = ResolvedPatternBuffer(patterns);
                             self.push_binder_scope_many(&binders);
+                            let advance_start = self.pending_advance_bindings.len();
                             let resolved_body = self
                                 .resolve_expr(&equation.body)
                                 .map(ResolvedExpressionOwner::new);
                             self.scopes.truncate(scope_checkpoint);
                             let resolved_body = resolved_body?;
+                            let count = self
+                                .pending_advance_bindings
+                                .len()
+                                .checked_sub(advance_start)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        definition.span,
+                                        "advance-site owner range is invalid",
+                                    )
+                                })?;
+                            let association_work = count.checked_mul(2).ok_or_else(|| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            self.type_work.charge(association_work).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    definition.span,
+                                    "advance-site owner association exceeded its work budget",
+                                )
+                            })?;
+                            for binders in self.pending_advance_bindings.drain(advance_start..) {
+                                self.advance_sites.push(crate::syntax::ResolvedAdvanceSite {
+                                    owner: global.id,
+                                    binders,
+                                });
+                            }
                             equations.0.push(ResolvedEquation {
                                 name: crate::resolved::ResolvedEquationHead {
                                     binder: global.id,
@@ -14668,6 +14806,75 @@ impl Resolver<'_, '_> {
                         problem: "missing",
                     })
                 })?;
+                let mut matched = None;
+                if let Some(inputs) = self.syntax_inputs {
+                    for (index, site) in inputs.advance_sites.iter().enumerate() {
+                        self.type_work.charge(2).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                binding.span,
+                                "advance-site matching exceeded its work budget",
+                            )
+                        })?;
+                        if site.binding == std::ptr::from_ref(binding) as usize
+                            && matched.replace(index).is_some()
+                        {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                binding.span,
+                                "an advance binding was issued more than once",
+                            ));
+                        }
+                    }
+                }
+                if let Some(index) = matched {
+                    self.type_work.charge(3).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site tuple inspection exceeded its work budget",
+                        )
+                    })?;
+                    let ResolvedPatternKind::Tuple(elements) = &pattern.kind else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple pattern",
+                        ));
+                    };
+                    let [first, second] = elements.as_slice() else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding has the wrong tuple arity",
+                        ));
+                    };
+                    let (ResolvedPatternKind::Binder(first), ResolvedPatternKind::Binder(second)) =
+                        (&first.kind, &second.kind)
+                    else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding lost its tuple binders",
+                        ));
+                    };
+                    if first.id == second.id || self.advance_seen[index] {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "an advance binding was duplicated",
+                        ));
+                    }
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            binding.span,
+                            "advance-site retention exceeded its work budget",
+                        )
+                    })?;
+                    self.advance_seen[index] = true;
+                    self.pending_advance_bindings.push([first.id, second.id]);
+                }
                 let pattern = ResolvedPatternOwner::new(pattern);
                 let annotation = binding
                     .annotation
@@ -16691,12 +16898,28 @@ pub(crate) fn unsupported_syntax_template(span: Span) -> ResolveError {
     )
 }
 
-pub(crate) fn duplicate_syntax_import(name: &SurfaceName) -> ResolveError {
-    error(
+pub(crate) fn duplicate_syntax_import(
+    name: &SurfaceName,
+    work: &mut TypeWorkBudget,
+) -> ResolveError {
+    const RESOURCE_MESSAGE: &str = "syntax import diagnostic exceeded its type-work budget";
+    if work.charge(name.text.len()).is_err() {
+        return error(
+            ResolveReason::TypeResourceExhausted,
+            name.span,
+            RESOURCE_MESSAGE,
+        );
+    }
+    let found = match try_clone_resolution_string(&name.text, name.span, RESOURCE_MESSAGE) {
+        Ok(found) => found,
+        Err(failure) => return failure,
+    };
+    let mut diagnostic = Diagnostic::new(
         ResolveReason::ImportConflict,
-        name.span,
-        "this syntax spelling is already imported",
-    )
+        SourceLabel::new(name.span, "this syntax spelling is already imported"),
+    );
+    diagnostic.found = Some(found);
+    diagnostic.into()
 }
 
 fn lookup_error(
@@ -21660,14 +21883,27 @@ mod tests {
         private.expect("the private name import should establish the staging baseline");
 
         let exact_limit = private_used + 2;
+        // The private baseline includes the later two-cell effect provenance
+        // record. Leave those cells out when cutting the candidate itself.
         let (short, short_used) =
-            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 3);
         let error = short.expect_err(
             "one missing candidate-order unit should reject resolution before summary freeze",
         );
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range().start(), 23);
-        assert_eq!(short_used, private_used);
+        assert_eq!(short_used, private_used - 2);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
@@ -21689,7 +21925,7 @@ mod tests {
         let (opaque_short, opaque_short_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
             OPAQUE_DEPENDENCY,
-            opaque_exact_limit - 1,
+            opaque_exact_limit - 3,
         );
         let error = opaque_short
             .expect_err("the opaque-family withheld entry should exhaust candidate staging");
@@ -21699,7 +21935,21 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(error.primary.span().range().start(), 23);
-        assert_eq!(opaque_short_used, private_opaque_used + 3);
+        assert_eq!(opaque_short_used, private_opaque_used + 1);
+
+        let (opaque_late, opaque_late_used) = resolve_import_fixture_with_type_limit(
+            PUBLIC_OPAQUE,
+            OPAQUE_DEPENDENCY,
+            opaque_exact_limit - 1,
+        );
+        let error = opaque_late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(opaque_late_used, opaque_exact_limit - 2);
 
         let (opaque_exact, opaque_exact_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
@@ -21743,8 +21993,8 @@ mod tests {
         private_result.expect("the private wide import should establish the staging baseline");
 
         let exact_limit = private_used + ALIAS_COUNT * 2;
-        let (short, _) =
-            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 1);
+        let (short, short_used) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 3);
         let error = short.expect_err("the final public alias should exhaust candidate staging");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(
@@ -21754,6 +22004,18 @@ mod tests {
                 .rfind("answer")
                 .expect("the last selector should exist"),
         );
+        assert_eq!(short_used, exact_limit - 4);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit);
@@ -21819,7 +22081,7 @@ mod tests {
                 short.unwrap_err().reason,
                 ResolveReason::TypeResourceExhausted
             );
-            assert!(used <= prefix + exact_work - 1);
+            assert!(used < prefix + exact_work);
             for _ in 0..2 {
                 let (result, used) = resolve_import_fixture_with_type_prefix(
                     ENTRY,
@@ -21893,7 +22155,7 @@ mod tests {
 
         let exact_limit = private_used + RETAINED_CANDIDATE_WORK + 2 * WITHHELD_ENTRY_COUNT;
         let (short, short_used) =
-            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 3);
         let error =
             short.expect_err("the second complete withheld-order scan should fail atomically");
         assert_eq!(
@@ -21912,7 +22174,18 @@ mod tests {
                 .find("Token as SecondToken")
                 .expect("the repeated selector should exist"),
         );
-        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 6 + 2,);
+        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 6);
+
+        let (late, late_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error = late.expect_err("one short of the total must refuse effect provenance");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effect syntax provenance could not be prepared"
+        );
+        assert_eq!(error.primary.span().range().start(), 0);
+        assert_eq!(late_used, exact_limit - 2);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
@@ -24232,23 +24505,62 @@ mod tests {
         );
         assert!(!mixed.lexical_nominal_scopes[0].contains_key(&(source_type.text.clone(), 0)));
 
-        // A fresh module cannot see an introduced constructor from another one.
+        // A zero-budget installation is free, but an introduced-name
+        // diagnostic must pay to retain the missing spelling.
         let introduced = &surface.type_declarations[0].constructors[0].name;
+        assert!(!introduced.text.is_empty());
         assert_eq!(
             plain
                 .constructor_reference(&SurfaceReference::Unqualified(introduced.clone()))
                 .unwrap_err()
                 .reason,
-            ResolveReason::UnknownConstructor,
+            ResolveReason::TypeResourceExhausted,
         );
+        assert_eq!(plain.type_work.used(), 0);
         let introduced_type = &surface.type_declarations[0].name;
+        assert!(!introduced_type.text.is_empty());
         assert_eq!(
             plain
                 .nominal_reference(&SurfaceReference::Unqualified(introduced_type.clone()))
                 .unwrap_err()
                 .reason,
+            ResolveReason::TypeResourceExhausted,
+        );
+        assert_eq!(plain.type_work.used(), 0);
+
+        // A fresh module still cannot see an introduced constructor or type
+        // from another one when each diagnostic has its exact spelling work.
+        let mut constructor_lookup =
+            Resolver::with_type_work(module, TypeWorkBudget::with_limit(introduced.text.len()));
+        constructor_lookup
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert_eq!(constructor_lookup.type_work.used(), 0);
+        assert_eq!(
+            constructor_lookup
+                .constructor_reference(&SurfaceReference::Unqualified(introduced.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownConstructor,
+        );
+        assert_eq!(constructor_lookup.type_work.used(), introduced.text.len());
+
+        let mut nominal_lookup = Resolver::with_type_work(
+            module,
+            TypeWorkBudget::with_limit(introduced_type.text.len()),
+        );
+        nominal_lookup
+            .install_nominal_identities(&ordinary.type_declarations)
+            .unwrap();
+        assert_eq!(nominal_lookup.type_work.used(), 0);
+        assert_eq!(
+            nominal_lookup
+                .nominal_reference(&SurfaceReference::Unqualified(introduced_type.clone()))
+                .unwrap_err()
+                .reason,
             ResolveReason::UnknownType,
         );
+        assert_eq!(nominal_lookup.type_work.used(), introduced_type.text.len());
 
         // Each base can be reached on its own through real captured names.
         for (index, has_nominal, has_constructor) in [(5, true, false), (6, false, true)] {
@@ -24870,8 +25182,8 @@ mod tests {
         let mut unrelated = source[1].name.clone();
         unrelated.introduction = 0;
         assert_eq!(resolver.contextual_type_variable(&unrelated), None);
-        resolver.type_scopes.truncate(0);
-        resolver.syntax_type_scopes.truncate(0);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
         assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
 
         resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
@@ -24883,8 +25195,8 @@ mod tests {
             Some(parameters[1].id)
         );
         assert_eq!(resolver.contextual_type_variable(&source[1].name), None);
-        resolver.type_scopes.truncate(0);
-        resolver.syntax_type_scopes.truncate(0);
+        resolver.type_scopes.clear();
+        resolver.syntax_type_scopes.clear();
 
         resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
         let failure = resolver
@@ -26026,6 +26338,7 @@ mod tests {
 
     #[test]
     fn implementation_head_requires_the_complete_owner_source_and_paid_lookup() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
         fn unused_transformer(
             _: &crate::syntax::SelectedSyntax,
             _: &[crate::surface::SurfaceSyntaxCapture],
@@ -26119,6 +26432,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &views,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let name = SurfaceName {
@@ -26234,6 +26548,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &views,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let name = SurfaceName {
@@ -26359,6 +26674,7 @@ mod tests {
 
     #[test]
     fn contextual_free_type_retention_preserves_authority_and_work_limits() {
+        #[allow(clippy::too_many_arguments)] // Matches the existing transformer callback signature.
         fn unused_transformer(
             _: &crate::syntax::SelectedSyntax,
             _: &[crate::surface::SurfaceSyntaxCapture],
@@ -26474,6 +26790,7 @@ mod tests {
                 uses: &[],
                 owners: &checked,
                 terms: &terms,
+                advance_sites: &[],
             });
             resolver.syntax_expansion = Some(&mut expansion);
             let ty = annotation(name);
@@ -26533,10 +26850,11 @@ mod tests {
 
     #[test]
     fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
-        // One outer nominal provenance record, one constructor provenance
-        // record, two field-provenance slots, one synthesized Tuple node, and
-        // two resolved Int nodes: 1 + 1 + 2 + 1 + 2 = 7.
-        const EXACT_WORK: usize = 7;
+        // One nominal record, one constructor record, one prepared group
+        // and two scope cells, two field slots, one Tuple node, and two Int
+        // nodes: 1 + 1 + 1 + 2 + 2 + 1 + 2 = 10.
+        const PREPARED_SCOPE_WORK: usize = 1 + 2;
+        const EXACT_WORK: usize = 1 + 1 + PREPARED_SCOPE_WORK + 2 + 1 + 2;
         let source = SourceFile::new(
             "constructor-tuple-budget.ash",
             "type Pair =\nPair(Int, Int)\n",
@@ -26567,7 +26885,7 @@ mod tests {
             .expect("the fixture leaves one cell fewer than the complete transaction");
         let error = short
             .resolve_registry(&module.type_declarations)
-            .expect_err("the tuple wrapper must consume the remaining budget");
+            .expect_err("the second field must consume the remaining budget");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range(), second_field_span.range());
     }
@@ -26575,9 +26893,11 @@ mod tests {
     #[test]
     fn wide_constructor_provenance_is_exact_atomic_and_stack_safe() {
         const WIDTH: usize = 32_768;
-        // One nominal provenance record, one constructor record, WIDTH field
-        // provenance slots, one Tuple wrapper, and WIDTH field Type nodes.
-        const EXACT_WORK: usize = 2 * WIDTH + 3;
+        // One nominal record, one constructor record, one prepared group and
+        // two scope cells, WIDTH field slots, one Tuple wrapper, and WIDTH
+        // field Type nodes.
+        const PREPARED_SCOPE_WORK: usize = 1 + 2;
+        const EXACT_WORK: usize = 2 * WIDTH + 3 + PREPARED_SCOPE_WORK;
         std::thread::Builder::new()
             .name("wide-constructor-provenance".into())
             .stack_size(256 * 1024)

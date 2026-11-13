@@ -39,11 +39,15 @@ type G1CaptureObserver =
     fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget);
 #[cfg(test)]
 type StagedModuleObserver = fn(&SourceFile, &SurfaceModule);
+#[cfg(test)]
+type StagedEnterObserver =
+    fn(&crate::syntax::ExpansionFrame, &crate::syntax_resource::SyntaxBudget, bool);
 
 #[cfg(test)]
 std::thread_local! {
     pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<G1CaptureObserver>> = const { std::cell::Cell::new(None) };
     pub(crate) static STAGED_MODULE_OBSERVER: std::cell::Cell<Option<StagedModuleObserver>> = const { std::cell::Cell::new(None) };
+    static STAGED_ENTER_OBSERVER: std::cell::Cell<Option<StagedEnterObserver>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -325,6 +329,13 @@ pub(crate) fn project_module_header(
     source: &SourceFile,
     checkpoint: &ParserCheckpoint,
 ) -> Result<Vec<SurfaceImport>, ProjectionError> {
+    project_module_header_with_syntax(source, checkpoint).map(|(imports, _)| imports)
+}
+
+pub(crate) fn project_module_header_with_syntax(
+    source: &SourceFile,
+    checkpoint: &ParserCheckpoint,
+) -> Result<(Vec<SurfaceImport>, bool), ProjectionError> {
     if let Some(failure) = checkpoint.resource_failure {
         return Err(ProjectionError::ResourceLimit(failure));
     }
@@ -353,15 +364,18 @@ pub(crate) fn project_module_header(
     require_kind(&root, NodeKind::Module)?;
     let mut shape = ShapeCursor::new(&root, &checkpoint.tokens);
     let mut imports = Vec::new();
+    let mut has_syntax_import = false;
     let projection_tokens = ProjectionTokens::source(&checkpoint.tokens);
     while let Some(node) = shape.peek_node() {
         validate_node_shape(node, &checkpoint.tokens)?;
-        imports.push(project_import(source, node, &projection_tokens)?);
+        let (import, has_syntax) = project_import(source, node, &projection_tokens)?;
+        has_syntax_import |= has_syntax;
+        imports.push(import);
         shape.node(NodeKind::ImportDeclaration)?;
         shape.token(&TokenKind::LineEnd)?;
     }
     shape.finish()?;
-    Ok(imports)
+    Ok((imports, has_syntax_import))
 }
 
 pub(crate) fn module_span_from_checkpoint(
@@ -676,10 +690,9 @@ fn validate_shallow_shape(
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             } else {
                 shape.node(NodeKind::TemplateBody)?;
-                if declaration || derive {
-                    if shape.peek_node_is(NodeKind::TemplateGeneratorClause) {
-                        shape.node(NodeKind::TemplateGeneratorClause)?;
-                    }
+                if (declaration || derive) && shape.peek_node_is(NodeKind::TemplateGeneratorClause)
+                {
+                    shape.node(NodeKind::TemplateGeneratorClause)?;
                 }
             }
         }
@@ -2154,7 +2167,7 @@ impl ModuleProjection {
             definitions,
         } = self;
         match child.kind {
-            NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
+            NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?.0),
             NodeKind::SyntaxDeclaration => {
                 if extended_matcher(child).is_some() {
                     return malformed(InternalReason::UnexpectedShape);
@@ -2867,6 +2880,16 @@ pub(crate) enum DeclarationExpansionFailure {
     },
 }
 
+impl DeclarationExpansionFailure {
+    fn resource(&self) -> Option<ResourceFailure> {
+        match self {
+            Self::Syntax { resource, .. } => *resource,
+            Self::Projection(ProjectionError::ResourceLimit(resource)) => Some(*resource),
+            Self::Projection(_) => None,
+        }
+    }
+}
+
 impl From<ProjectionError> for DeclarationExpansionFailure {
     fn from(error: ProjectionError) -> Self {
         Self::Projection(error)
@@ -2910,6 +2933,14 @@ fn staged_template_failure(
             mut diagnostics,
             resource,
         } => {
+            // Once the original resource is exhausted, do not perform more
+            // paid inheritance or replace its cause with a later failure.
+            if resource.is_some() {
+                return Ok(DeclarationExpansionFailure::Syntax {
+                    diagnostics,
+                    resource,
+                });
+            }
             for diagnostic in &mut diagnostics {
                 let existing = diagnostic
                     .primary
@@ -2945,6 +2976,7 @@ struct DeclarationFrame<'a> {
     frame: Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     expression_pattern: bool,
     pattern_accounting: bool,
+    forwarded_expression: bool,
     owns_staging_frame: bool,
     deferred: std::collections::VecDeque<DeclarationFrame<'a>>,
 }
@@ -3053,6 +3085,7 @@ fn prepare_deriving_outputs<'a>(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     staged_owners: &mut Vec<crate::syntax::SyntaxOwner>,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     transformer: &mut Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<std::collections::VecDeque<DeclarationFrame<'a>>, DeclarationExpansionFailure> {
@@ -3167,10 +3200,17 @@ fn prepare_deriving_outputs<'a>(
             owner_imports,
             staged_owners,
             staging_frames,
+            failure_frame,
             transformer,
             budget,
         )?;
-        outputs.push_back(admit_staged_output(output, source, staging_frames, budget)?);
+        outputs.push_back(admit_staged_output(
+            output,
+            source,
+            staging_frames,
+            failure_frame,
+            budget,
+        )?);
     }
     Ok(outputs)
 }
@@ -3187,6 +3227,7 @@ fn prepare_staged_output(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     staged_owners: &mut Vec<crate::syntax::SyntaxOwner>,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     transformer: &mut Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<PendingDeclarationOutput, DeclarationExpansionFailure> {
@@ -3209,46 +3250,151 @@ fn prepare_staged_output(
         invocation: anchor,
         definition: invocation.selection.declaration.span,
     });
-    let mut actual_pattern = false;
-    let mut actual_expression = false;
-    let output = match &invocation.selection.declaration.implementation {
-        SurfaceSyntaxImplementation::Template => {
-            if invocation.selection.declaration.contains_generators
-                || invocation.selection.declaration.template_escapes.is_some()
-            {
-                let (mut output, plan) = match crate::syntax::prepare_generator_template(
-                    &invocation.selection,
-                    template_captures,
-                    introduction,
-                    anchor,
-                    budget,
-                ) {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
+    let prepared = (|| -> Result<_, DeclarationExpansionFailure> {
+        let mut actual_pattern = false;
+        let mut actual_expression = false;
+        let output = match &invocation.selection.declaration.implementation {
+            SurfaceSyntaxImplementation::Template => {
+                if invocation.selection.declaration.contains_generators
+                    || invocation.selection.declaration.template_escapes.is_some()
+                {
+                    let (mut output, plan) = match crate::syntax::prepare_generator_template(
+                        &invocation.selection,
+                        template_captures,
+                        introduction,
+                        anchor,
+                        budget,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            return Err(staged_template_failure(
+                                error,
+                                staging_frames,
+                                &frame,
+                                budget,
+                            )?);
+                        }
+                    };
+                    let callback =
+                        transformer
+                            .as_deref_mut()
+                            .ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?;
+                    let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                        selected,
+                        owner_imports,
+                        staged_owners,
+                        budget,
+                    )?;
+                    budget.charge_units(2)?;
+                    let (results, fresh_count) = callback(
+                        &invocation.selection,
+                        crate::syntax::DeclarationAdapter::Generators(&plan),
+                        template_captures,
+                        source,
+                        &invocation.name,
+                        introduction,
+                        std::sync::Arc::new(contexts),
+                        std::sync::Arc::clone(&frame),
+                        staged_owners,
+                        budget,
+                    )
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                    budget.charge_units(fresh_count)?;
+                    staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                        caller_quote_owner: None,
+                        owner: None,
+                        declaration: invocation.selection.declaration.span,
+                        import_span: invocation.selection.import_span,
+                    }));
+                    if results.len() != plan.results {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    apply_generator_results(&mut output, &results, budget, 0)?;
+                    crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                    (actual_pattern, actual_expression) =
+                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                    output
+                } else {
+                    let mut output = match crate::syntax::prepare_declaration_template(
+                        &invocation.selection,
+                        template_captures,
+                        anchor,
+                        budget,
+                    ) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            return Err(staged_template_failure(
+                                error,
+                                staging_frames,
+                                &frame,
+                                budget,
+                            )?);
+                        }
+                    };
+                    let escaped = materialize_template_escapes(
+                        &mut output,
+                        &invocation.selection,
+                        template_captures,
+                        source,
+                        &invocation.name,
+                        introduction,
+                        selected,
+                        owner_imports,
+                        staged_owners,
+                        &frame,
+                        transformer,
+                        budget,
+                        0,
+                    )?;
+                    if let Err(error) = crate::syntax::substitute_contents(
+                        &mut output,
+                        &invocation.selection.declaration.matcher,
+                        template_captures,
+                        introduction,
+                        anchor,
+                        Some(&mut *budget),
+                    ) {
                         return Err(staged_template_failure(
-                            error,
+                            error.into_macro_failure(),
                             staging_frames,
                             &frame,
                             budget,
                         )?);
                     }
-                };
-                let callback = transformer
-                    .as_deref_mut()
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
+                    crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                    if escaped {
+                        (actual_pattern, actual_expression) =
+                            charge_transformer_type_metadata_copies_with_expression(
+                                &output, budget,
+                            )?;
+                    }
+                    output
+                }
+            }
+            SurfaceSyntaxImplementation::Transformer(_) => {
+                let transformer =
+                    transformer
+                        .as_deref_mut()
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
                 let contexts = crate::syntax::SyntaxContexts::new_budgeted(
                     selected,
                     owner_imports,
                     staged_owners,
                     budget,
                 )?;
+                // The context allocation and the passed frame retention.
                 budget.charge_units(2)?;
-                let (results, fresh_count) = callback(
+                let (output, fresh_count) = transformer(
                     &invocation.selection,
-                    crate::syntax::DeclarationAdapter::Generators(&plan),
-                    template_captures,
+                    crate::syntax::DeclarationAdapter::Transformer,
+                    &invocation.captures,
                     source,
                     &invocation.name,
                     introduction,
@@ -3265,138 +3411,63 @@ fn prepare_staged_output(
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
                 }));
-                if results.len() != plan.results {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-                apply_generator_results(&mut output, &results, budget, 0)?;
-                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
                 (actual_pattern, actual_expression) =
                     charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
                 output
-            } else {
-                let mut output = match crate::syntax::prepare_declaration_template(
-                    &invocation.selection,
-                    template_captures,
-                    anchor,
-                    budget,
-                ) {
-                    Ok(output) => output,
-                    Err(error) => {
-                        return Err(staged_template_failure(
-                            error,
-                            staging_frames,
-                            &frame,
-                            budget,
-                        )?);
-                    }
-                };
-                let escaped = materialize_template_escapes(
-                    &mut output,
-                    &invocation.selection,
-                    template_captures,
-                    source,
-                    &invocation.name,
-                    introduction,
-                    selected,
-                    owner_imports,
-                    staged_owners,
-                    &frame,
-                    transformer,
-                    budget,
-                    0,
-                )?;
-                if let Err(error) = crate::syntax::substitute_contents(
-                    &mut output,
-                    &invocation.selection.declaration.matcher,
-                    template_captures,
-                    introduction,
-                    anchor,
-                    Some(&mut *budget),
-                ) {
-                    return Err(staged_template_failure(
-                        error.into_macro_failure(),
-                        staging_frames,
-                        &frame,
-                        budget,
-                    )?);
-                }
-                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
-                if escaped {
-                    (actual_pattern, actual_expression) =
-                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-                }
-                output
             }
-        }
-        SurfaceSyntaxImplementation::Transformer(_) => {
-            let transformer = transformer
-                .as_deref_mut()
-                .ok_or(ProjectionError::MalformedTree(
-                    InternalReason::UnexpectedShape,
-                ))?;
-            let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-                selected,
-                owner_imports,
-                staged_owners,
-                budget,
-            )?;
-            // The context allocation and the passed frame retention.
-            budget.charge_units(2)?;
-            let (output, fresh_count) = transformer(
-                &invocation.selection,
-                crate::syntax::DeclarationAdapter::Transformer,
-                &invocation.captures,
-                source,
-                &invocation.name,
-                introduction,
-                std::sync::Arc::new(contexts),
-                std::sync::Arc::clone(&frame),
-                staged_owners,
-                budget,
-            )
-            .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
-            budget.charge_units(fresh_count)?;
-            staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
-                caller_quote_owner: None,
-                owner: None,
-                declaration: invocation.selection.declaration.span,
-                import_span: invocation.selection.import_span,
-            }));
-            (actual_pattern, actual_expression) =
-                charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-            output
-        }
-    };
-    expression_pattern |= actual_pattern;
-    let pattern_accounting = expression_pattern
-        && matches!(
+        };
+        expression_pattern |= actual_pattern;
+        let pattern_accounting = expression_pattern
+            && matches!(
+                invocation.selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+        let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+            selected,
+            owner_imports,
+            staged_owners,
+            budget,
+        )?;
+        budget.charge_units(2)?;
+        let transformer_output = matches!(
             invocation.selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
-    let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-        selected,
-        owner_imports,
-        staged_owners,
-        budget,
-    )?;
-    budget.charge_units(2)?;
-    let transformer_output = matches!(
-        invocation.selection.declaration.implementation,
-        SurfaceSyntaxImplementation::Transformer(_)
-    );
-    Ok(PendingDeclarationOutput {
-        output,
-        contexts,
-        anchor,
-        construction: (invocation.selection.declaration.span, introduction),
-        frame,
-        expression_pattern,
-        pattern_accounting,
-        actual_expression,
-        transformer_output,
-    })
+        Ok((
+            output,
+            contexts,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        ))
+    })();
+    match prepared {
+        Ok((
+            output,
+            contexts,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        )) => Ok(PendingDeclarationOutput {
+            output,
+            contexts,
+            anchor,
+            construction: (invocation.selection.declaration.span, introduction),
+            frame,
+            expression_pattern,
+            pattern_accounting,
+            actual_expression,
+            transformer_output,
+        }),
+        Err(error) => {
+            if error.resource().is_some() {
+                *failure_frame = Some(frame);
+            }
+            Err(error)
+        }
+    }
 }
 
 fn apply_generator_results(
@@ -3503,6 +3574,7 @@ fn admit_staged_output<'a>(
     pending: PendingDeclarationOutput,
     source: &SourceFile,
     staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    failure_frame: &mut Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<DeclarationFrame<'a>, DeclarationExpansionFailure> {
     let PendingDeclarationOutput {
@@ -3516,73 +3588,96 @@ fn admit_staged_output<'a>(
         actual_expression,
         transformer_output,
     } = pending;
-    // Admission sees the current expansion frame, but does not enter it on
-    // the traversal stack until this output is selected for descent.
-    budget.charge_units(staging_frames.len().saturating_mul(2).saturating_add(2))?;
-    let mut admission_frames = Vec::with_capacity(staging_frames.len().saturating_add(1));
-    admission_frames.extend(staging_frames.iter().cloned());
-    admission_frames.push(std::sync::Arc::clone(&frame));
-    let parsed = match super::parse_macro_tree_with_expression_scratch(
-        source,
-        anchor,
-        output,
-        &contexts,
-        &[],
-        super::MacroOutputPosition::StagedDeclarations,
-        pattern_accounting,
-        actual_expression,
-        budget,
-    ) {
-        Ok(parsed) => parsed,
-        Err(super::MacroParseFailure::Syntax {
-            mut diagnostics,
-            resource,
-        }) => {
-            for diagnostic in &mut diagnostics {
-                let existing = diagnostic
-                    .primary
-                    .diagnostic_location()
-                    .map_or(0, |location| location.frames.len());
-                charge_frame_additions(admission_frames.len(), existing, budget)?;
-                diagnostic
-                    .diagnostic
-                    .primary
-                    .inherit_frames(&admission_frames);
-            }
-            return Err(DeclarationExpansionFailure::Syntax {
-                diagnostics,
+    let admitted = (|| -> Result<_, DeclarationExpansionFailure> {
+        // Admission sees the current expansion frame, but does not enter it on
+        // the traversal stack until this output is selected for descent.
+        budget.charge_units(staging_frames.len().saturating_mul(2).saturating_add(2))?;
+        let mut admission_frames = Vec::with_capacity(staging_frames.len().saturating_add(1));
+        admission_frames.extend(staging_frames.iter().cloned());
+        admission_frames.push(std::sync::Arc::clone(&frame));
+        let parsed = match super::parse_macro_tree_with_expression_scratch(
+            source,
+            anchor,
+            output,
+            &contexts,
+            &[],
+            super::MacroOutputPosition::StagedDeclarations,
+            pattern_accounting,
+            actual_expression,
+            budget,
+        ) {
+            Ok(parsed) => parsed,
+            Err(super::MacroParseFailure::Syntax {
+                mut diagnostics,
                 resource,
-            });
+            }) => {
+                if resource.is_some() {
+                    return Err(DeclarationExpansionFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    });
+                }
+                for diagnostic in &mut diagnostics {
+                    let existing = diagnostic
+                        .primary
+                        .diagnostic_location()
+                        .map_or(0, |location| location.frames.len());
+                    charge_frame_additions(admission_frames.len(), existing, budget)?;
+                    diagnostic
+                        .diagnostic
+                        .primary
+                        .inherit_frames(&admission_frames);
+                }
+                return Err(DeclarationExpansionFailure::Syntax {
+                    diagnostics,
+                    resource,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // Recovery, depth, coverage, and shape checks each build a worklist.
+        for _ in 0..4 {
+            budget.charge_units(parsed.tree.events.len())?;
         }
-        Err(error) => return Err(error.into()),
-    };
-    // Recovery, depth, coverage, and shape checks each build a worklist.
-    for _ in 0..4 {
-        budget.charge_units(parsed.tree.events.len())?;
+        budget.charge_units(parsed.tree.tokens.len())?;
+        let output_root = validated_macro_root(source, &parsed.tree)?;
+        validate_node_shape_with_admission(
+            output_root,
+            &parsed.tree.tokens,
+            Some(&parsed.admission_identifiers),
+        )?;
+        if transformer_output {
+            check_narrow_protected_refusal(
+                output_root,
+                Some(&parsed.original_nodes),
+                true,
+                budget,
+            )?;
+        }
+        budget.charge_units(2)?;
+        Ok(parsed)
+    })();
+    match admitted {
+        Ok(parsed) => Ok(DeclarationFrame {
+            tree: DeclarationTree::Output(Box::new(parsed)),
+            contexts,
+            next: 0,
+            invocation: Some(anchor),
+            construction: Some(construction),
+            frame: Some(frame),
+            expression_pattern,
+            pattern_accounting,
+            forwarded_expression: false,
+            owns_staging_frame: true,
+            deferred: std::collections::VecDeque::new(),
+        }),
+        Err(error) => {
+            if error.resource().is_some() {
+                *failure_frame = Some(frame);
+            }
+            Err(error)
+        }
     }
-    budget.charge_units(parsed.tree.tokens.len())?;
-    let output_root = validated_macro_root(source, &parsed.tree)?;
-    validate_node_shape_with_admission(
-        output_root,
-        &parsed.tree.tokens,
-        Some(&parsed.admission_identifiers),
-    )?;
-    if transformer_output {
-        check_narrow_protected_refusal(output_root, Some(&parsed.original_nodes), true, budget)?;
-    }
-    budget.charge_units(2)?;
-    Ok(DeclarationFrame {
-        tree: DeclarationTree::Output(Box::new(parsed)),
-        contexts,
-        next: 0,
-        invocation: Some(anchor),
-        construction: Some(construction),
-        frame: Some(frame),
-        expression_pattern,
-        pattern_accounting,
-        owns_staging_frame: true,
-        deferred: std::collections::VecDeque::new(),
-    })
 }
 
 fn enter_staged_frame(
@@ -3606,6 +3701,33 @@ fn enter_staged_frame(
         budget.charge()?;
     }
     staging_frames.push(std::sync::Arc::clone(expansion));
+    Ok(())
+}
+
+#[cfg(test)]
+fn observe_staged_enter(
+    frame: &DeclarationFrame<'_>,
+    budget: &crate::syntax_resource::SyntaxBudget,
+    deferred: bool,
+) {
+    if let (Some(observe), Some(frame)) = (STAGED_ENTER_OBSERVER.get(), frame.frame.as_deref()) {
+        observe(frame, budget, deferred);
+    }
+}
+
+fn reserve_staged_failure_frame(
+    staging_frames: &mut Vec<std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    if staging_frames.len() == staging_frames.capacity() {
+        let live = staging_frames.len();
+        let work = live
+            .checked_add(1)
+            .and_then(|requested| requested.checked_add(live))
+            .unwrap_or(usize::MAX);
+        budget.charge_units(work)?;
+        staging_frames.reserve_exact(1);
+    }
     Ok(())
 }
 
@@ -3633,7 +3755,32 @@ pub(crate) fn project_declaration_expansions(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn project_declaration_expansions_with_quotes(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+    selected: &[crate::syntax::SelectedSyntax],
+    owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+    quote_sites: Option<&std::cell::RefCell<QuoteProjection>>,
+) -> Result<SurfaceModule, DeclarationExpansionFailure> {
+    project_declaration_expansions_with_resource(
+        source,
+        tree,
+        selected,
+        owner_imports,
+        owners,
+        budget,
+        transformer,
+        quote_sites,
+        &mut None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn project_declaration_expansions_with_resource(
     source: &SourceFile,
     tree: &ConcreteTree,
     selected: &[crate::syntax::SelectedSyntax],
@@ -3642,6 +3789,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
     budget: &mut crate::syntax_resource::SyntaxBudget,
     mut transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     quote_sites: Option<&std::cell::RefCell<QuoteProjection>>,
+    resource_location: &mut Option<crate::syntax::DiagnosticLocation>,
 ) -> Result<SurfaceModule, DeclarationExpansionFailure> {
     let (root, raw_tokens) = validated_root(source, tree)?;
     let source_tokens = ProjectionTokens::source(raw_tokens);
@@ -3685,276 +3833,340 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         frame: None,
         expression_pattern: false,
         pattern_accounting: false,
+        forwarded_expression: false,
         owns_staging_frame: false,
         deferred: std::collections::VecDeque::new(),
     }];
     let mut staging_frames = Vec::new();
-    let mut module = ModuleProjection::default();
-    loop {
-        if let Some(output) = pending
-            .last_mut()
-            .and_then(|frame| frame.deferred.pop_front())
-        {
-            enter_staged_frame(&output, &mut staging_frames, budget)?;
-            pending.push(output);
-            continue;
-        }
-        let depth = pending.len();
-        let Some(current) = pending.last_mut() else {
-            break;
-        };
-        let index = current.next;
-        current.next += 1;
-        let Some(element) = current
-            .tree()
-            .root
-            .as_ref()
-            .and_then(|root| root.children.get(index))
-        else {
-            if current.owns_staging_frame {
-                staging_frames.pop();
-            }
-            pending.pop();
-            continue;
-        };
-        let ConcreteElement::Node(child) = element else {
-            continue;
-        };
-        let mut tokens = current.tokens(&staging_frames);
-        if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
-            // Caller-authored capture quotes share this module's actual quote
-            // introduction and ordinal, while their sites remain capture-owned.
-            tokens.quote_sites = quote_sites;
-        }
-        let deriving = if matches!(
-            child.kind,
-            NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
-        ) {
-            child_nodes(child).find(|node| node.kind == NodeKind::DerivingClause)
-        } else {
-            None
-        };
-        let mut derived_outputs = if let Some(clause) = deriving {
-            if depth > super::STRUCTURAL_DEPTH_LIMIT {
-                return Err(ResourceFailure::StructuralDepth {
-                    limit: super::STRUCTURAL_DEPTH_LIMIT,
-                }
-                .into());
-            }
-            Some(prepare_deriving_outputs(
-                source,
-                child,
-                clause,
-                &tokens,
-                &current.contexts,
-                selected,
-                owner_imports,
-                &mut staged_owners,
-                &staging_frames,
-                &mut transformer,
-                budget,
-            )?)
-        } else {
-            None
-        };
-        if child.kind == NodeKind::DeclarationFragment {
-            let [ConcreteElement::Token(index)] = child.children.as_slice() else {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            };
-            let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, origin)) =
-                tokens.originals.and_then(|nodes| nodes.get(index))
-            else {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            };
-            charge_forwarded_declaration(capture, depth, budget)?;
-            let anchor = current.invocation.unwrap_or_else(|| origin.primary());
-            budget.charge()?;
-            let frame = current.frame.clone();
-            let expression_pattern = current.expression_pattern;
-            let pattern_accounting = current.pattern_accounting;
-            let contexts = crate::syntax::SyntaxContexts::new_budgeted(
-                selected,
-                owner_imports,
-                &staged_owners,
-                budget,
-            )?;
-            let parsed = super::parse_macro_tree_with_expression_scratch(
-                source,
-                anchor,
-                capture.contents.to_vec(),
-                &contexts,
-                &[],
-                super::MacroOutputPosition::StagedDeclarations,
-                pattern_accounting,
-                false,
-                budget,
-            )?;
-            for _ in 0..4 {
-                budget.charge_units(parsed.tree.events.len())?;
-            }
-            budget.charge_units(parsed.tree.tokens.len())?;
-            let root = validated_macro_root(source, &parsed.tree)?;
-            validate_node_shape_with_admission(
-                root,
-                &parsed.tree.tokens,
-                Some(&parsed.admission_identifiers),
-            )?;
-            let mut declarations = child_nodes(root);
-            if !declarations
-                .next()
-                .is_some_and(|node| is_capturable_declaration(node.kind))
-                || declarations.next().is_some()
+    let mut failure_frame = None;
+    let staged = (|| -> Result<SurfaceModule, DeclarationExpansionFailure> {
+        let mut module = ModuleProjection::default();
+        loop {
+            if let Some(mut output) = pending
+                .last_mut()
+                .and_then(|frame| frame.deferred.pop_front())
             {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+                #[cfg(test)]
+                observe_staged_enter(&output, budget, true);
+                if let Err(error) = enter_staged_frame(&output, &mut staging_frames, budget) {
+                    if error.resource().is_some() {
+                        failure_frame = output.frame.take();
+                    }
+                    return Err(error);
+                }
+                pending.push(output);
+                continue;
             }
-            drop(declarations);
-            budget.charge_units(2)?;
-            pending.push(DeclarationFrame {
-                tree: DeclarationTree::Output(Box::new(parsed)),
-                contexts,
-                next: 0,
-                invocation: Some(anchor),
-                construction: None,
-                frame,
-                expression_pattern,
-                pattern_accounting,
-                owns_staging_frame: false,
-                deferred: std::collections::VecDeque::new(),
-            });
-            continue;
-        }
-        if child.kind != NodeKind::DeclarationSyntaxInvocation {
-            if current.invocation.is_some() {
-                if matches!(
-                    child.kind,
-                    NodeKind::ImportDeclaration | NodeKind::SyntaxDeclaration
-                ) {
+            let depth = pending.len();
+            let Some(current) = pending.last_mut() else {
+                break;
+            };
+            let index = current.next;
+            current.next += 1;
+            let Some(element) = current
+                .tree()
+                .root
+                .as_ref()
+                .and_then(|root| root.children.get(index))
+            else {
+                if current.owns_staging_frame {
+                    staging_frames.pop();
+                }
+                pending.pop();
+                continue;
+            };
+            let ConcreteElement::Node(child) = element else {
+                continue;
+            };
+            let deriving = if matches!(
+                child.kind,
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
+            ) {
+                child_nodes(child).find(|node| node.kind == NodeKind::DerivingClause)
+            } else {
+                None
+            };
+            if deriving.is_some() || child.kind == NodeKind::DeclarationSyntaxInvocation {
+                if depth > super::STRUCTURAL_DEPTH_LIMIT {
+                    return Err(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    }
+                    .into());
+                }
+                reserve_staged_failure_frame(&mut staging_frames, budget)?;
+            }
+            let mut tokens = current.tokens(&staging_frames);
+            if current.invocation.is_none() && child.kind == NodeKind::DeclarationSyntaxInvocation {
+                // Caller-authored capture quotes share this module's actual quote
+                // introduction and ordinal, while their sites remain capture-owned.
+                tokens.quote_sites = quote_sites;
+            }
+            let mut derived_outputs = if let Some(clause) = deriving {
+                Some(prepare_deriving_outputs(
+                    source,
+                    child,
+                    clause,
+                    &tokens,
+                    &current.contexts,
+                    selected,
+                    owner_imports,
+                    &mut staged_owners,
+                    &staging_frames,
+                    &mut failure_frame,
+                    &mut transformer,
+                    budget,
+                )?)
+            } else {
+                None
+            };
+            if child.kind == NodeKind::DeclarationFragment {
+                let [ConcreteElement::Token(index)] = child.children.as_slice() else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, origin)) =
+                    tokens.originals.and_then(|nodes| nodes.get(index))
+                else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                let (contents, forwarded_expression, forwarded_pattern) =
+                    crate::syntax::copy_forwarded_declaration(&capture.contents, depth, budget)?;
+                let anchor = current.invocation.unwrap_or_else(|| origin.primary());
+                budget.charge()?;
+                let frame = current.frame.clone();
+                let expression_pattern =
+                    current.expression_pattern || forwarded_expression || forwarded_pattern;
+                let pattern_accounting = current.pattern_accounting || forwarded_pattern;
+                let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                    selected,
+                    owner_imports,
+                    &staged_owners,
+                    budget,
+                )?;
+                let parsed = super::parse_macro_tree_with_expression_scratch(
+                    source,
+                    anchor,
+                    contents,
+                    &contexts,
+                    &[],
+                    super::MacroOutputPosition::StagedDeclarations,
+                    pattern_accounting,
+                    forwarded_expression,
+                    budget,
+                )?;
+                for _ in 0..4 {
+                    budget.charge_units(parsed.tree.events.len())?;
+                }
+                budget.charge_units(parsed.tree.tokens.len())?;
+                let root = validated_macro_root(source, &parsed.tree)?;
+                validate_node_shape_with_admission(
+                    root,
+                    &parsed.tree.tokens,
+                    Some(&parsed.admission_identifiers),
+                )?;
+                let mut declarations = child_nodes(root);
+                if !declarations
+                    .next()
+                    .is_some_and(|node| is_capturable_declaration(node.kind))
+                    || declarations.next().is_some()
+                {
                     return Err(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
                     );
                 }
-                let protected_type = check_narrow_protected_refusal_inner(
-                    child,
-                    tokens.originals,
-                    false,
-                    Some(&current.contexts),
-                    budget,
-                )?;
-                if protected_type {
-                    if charge_projection_preflight_with_expression(
-                        child,
-                        &tokens,
-                        true,
-                        current.pattern_accounting,
-                        true,
-                        Some(&current.contexts),
-                        0,
-                        false,
-                        budget,
-                    )? {
-                        return Err(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        )
-                        .into());
-                    }
-                    let expression_budget = std::cell::RefCell::new(&mut *budget);
-                    let mut selected_tokens = current.tokens(&staging_frames);
-                    selected_tokens.expression_budget = Some(&expression_budget);
-                    if derived_outputs.is_some() {
-                        module.project_consumed_nominal(source, child, &selected_tokens)?;
-                    } else {
-                        module.project_child(source, child, &selected_tokens)?;
-                    }
-                    if let Some(outputs) = derived_outputs.take() {
-                        current.deferred = outputs;
-                    }
-                    continue;
-                } else if current.expression_pattern {
-                    if charge_projection_preflight_selected(
-                        child,
-                        &tokens,
-                        true,
-                        current.pattern_accounting,
-                        budget,
-                    )? {
-                        return Err(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        )
-                        .into());
-                    }
-                } else {
-                    charge_projection_preflight(child, &tokens, false, budget)?;
-                }
-            }
-            if derived_outputs.is_some() {
+                drop(declarations);
                 budget.charge_units(2)?;
-                module.project_consumed_nominal(source, child, &tokens)?;
-            } else {
-                match &current.tree {
-                    DeclarationTree::Source(tree) => project_staged_source_child_with_quotes(
-                        &mut module,
-                        source,
+                pending.push(DeclarationFrame {
+                    tree: DeclarationTree::Output(Box::new(parsed)),
+                    contexts,
+                    next: 0,
+                    invocation: Some(anchor),
+                    construction: None,
+                    frame,
+                    expression_pattern,
+                    pattern_accounting,
+                    forwarded_expression,
+                    owns_staging_frame: false,
+                    deferred: std::collections::VecDeque::new(),
+                });
+                continue;
+            }
+            if child.kind != NodeKind::DeclarationSyntaxInvocation {
+                if current.invocation.is_some() {
+                    if matches!(
+                        child.kind,
+                        NodeKind::ImportDeclaration | NodeKind::SyntaxDeclaration
+                    ) {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    let mut raw_quote = false;
+                    let protected_type = check_narrow_protected_refusal_with_quote(
                         child,
-                        &tree.tokens,
+                        tokens.originals,
+                        false,
+                        Some(&current.contexts),
+                        Some(&mut raw_quote),
                         budget,
-                        quote_sites,
-                    )?,
-                    DeclarationTree::Output(_) => module.project_child(source, child, &tokens)?,
+                    )?;
+                    if protected_type || current.forwarded_expression || raw_quote {
+                        if charge_projection_preflight_with_expression(
+                            child,
+                            &tokens,
+                            true,
+                            current.pattern_accounting,
+                            true,
+                            Some(&current.contexts),
+                            0,
+                            raw_quote,
+                            budget,
+                        )? {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        let expression_budget = std::cell::RefCell::new(&mut *budget);
+                        let mut selected_tokens = current.tokens(&staging_frames);
+                        selected_tokens.expression_budget = Some(&expression_budget);
+                        if raw_quote {
+                            selected_tokens.quote_sites = quote_sites;
+                        }
+                        if derived_outputs.is_some() {
+                            module.project_consumed_nominal(source, child, &selected_tokens)?;
+                        } else {
+                            module.project_child(source, child, &selected_tokens)?;
+                        }
+                        if let Some(outputs) = derived_outputs.take() {
+                            current.deferred = outputs;
+                        }
+                        continue;
+                    } else if current.expression_pattern {
+                        if charge_projection_preflight_selected(
+                            child,
+                            &tokens,
+                            true,
+                            current.pattern_accounting,
+                            budget,
+                        )? {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    } else {
+                        charge_projection_preflight(child, &tokens, false, budget)?;
+                    }
                 }
+                if derived_outputs.is_some() {
+                    budget.charge_units(2)?;
+                    module.project_consumed_nominal(source, child, &tokens)?;
+                } else {
+                    match &current.tree {
+                        DeclarationTree::Source(tree) => project_staged_source_child_with_quotes(
+                            &mut module,
+                            source,
+                            child,
+                            &tree.tokens,
+                            budget,
+                            quote_sites,
+                        )?,
+                        DeclarationTree::Output(_) => {
+                            module.project_child(source, child, &tokens)?
+                        }
+                    }
+                }
+                if let Some(outputs) = derived_outputs.take() {
+                    current.deferred = outputs;
+                }
+                continue;
             }
-            if let Some(outputs) = derived_outputs.take() {
-                current.deferred = outputs;
-            }
-            continue;
-        }
 
-        if depth > super::STRUCTURAL_DEPTH_LIMIT {
-            return Err(ResourceFailure::StructuralDepth {
-                limit: super::STRUCTURAL_DEPTH_LIMIT,
+            let expression_pattern = charge_declaration_invocation(
+                source,
+                child,
+                &tokens,
+                &current.contexts,
+                true,
+                budget,
+            )?;
+            let invocation = project_declaration_invocation_node_inner(
+                source,
+                child,
+                &tokens,
+                &current.contexts,
+                true,
+                Some(budget),
+            )?;
+            #[cfg(test)]
+            G1_CAPTURE_OBSERVER.with(|observer| {
+                if let Some(observe) = observer.get() {
+                    observe(source, &invocation.captures, budget);
+                }
+            });
+            let output = prepare_staged_output(
+                invocation,
+                expression_pattern,
+                false,
+                source,
+                selected,
+                owner_imports,
+                &mut staged_owners,
+                &staging_frames,
+                &mut failure_frame,
+                &mut transformer,
+                budget,
+            )?;
+            let mut next =
+                admit_staged_output(output, source, &staging_frames, &mut failure_frame, budget)?;
+            #[cfg(test)]
+            observe_staged_enter(&next, budget, false);
+            if let Err(error) = enter_staged_frame(&next, &mut staging_frames, budget) {
+                if error.resource().is_some() {
+                    failure_frame = next.frame.take();
+                }
+                return Err(error);
             }
-            .into());
+            pending.push(next);
         }
-        let expression_pattern =
-            charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
-        let invocation = project_declaration_invocation_node_inner(
-            source,
-            child,
-            &tokens,
-            &current.contexts,
-            true,
-            Some(budget),
-        )?;
+        *owners = staged_owners;
+        let module = module.finish(span);
         #[cfg(test)]
-        G1_CAPTURE_OBSERVER.with(|observer| {
+        STAGED_MODULE_OBSERVER.with(|observer| {
             if let Some(observe) = observer.get() {
-                observe(source, &invocation.captures, budget);
+                observe(source, &module);
             }
         });
-        let output = prepare_staged_output(
-            invocation,
-            expression_pattern,
-            false,
-            source,
-            selected,
-            owner_imports,
-            &mut staged_owners,
-            &staging_frames,
-            &mut transformer,
-            budget,
-        )?;
-        let next = admit_staged_output(output, source, &staging_frames, budget)?;
-        enter_staged_frame(&next, &mut staging_frames, budget)?;
-        pending.push(next);
-    }
-    *owners = staged_owners;
-    let module = module.finish(span);
-    #[cfg(test)]
-    STAGED_MODULE_OBSERVER.with(|observer| {
-        if let Some(observe) = observer.get() {
-            observe(source, &module);
+        Ok(module)
+    })();
+    match staged {
+        Err(error) if error.resource().is_some() => {
+            if let Some(frame) = failure_frame {
+                // The slot was paid before this frame was prepared/admitted.
+                debug_assert!(staging_frames.len() < staging_frames.capacity());
+                staging_frames.push(frame);
+            }
+            if let Some(frame) = staging_frames.last() {
+                let mut location = crate::syntax::DiagnosticLocation::new(frame.invocation.into());
+                location.frames = staging_frames;
+                *resource_location = Some(location);
+            }
+            if let DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) = error
+            {
+                Err(resource.into())
+            } else {
+                Err(error)
+            }
         }
-    });
-    Ok(module)
+        result => result,
+    }
 }
 
 // Evaluate each actual outer escape through its checked defining-module
@@ -4168,6 +4380,79 @@ fn charge_staged_name_frames(
     charge_frame_additions(frames.len(), previous, budget)
 }
 
+// Reserve the copies made by surface_name for an admitted staged transformer
+// invocation. The ordinary staged-frame search is paid by its caller.
+fn charge_staged_transformer_name(
+    token: ProjectionToken<'_>,
+    name: &SurfaceName,
+    origin: &crate::syntax::MacroOrigin,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    // The caller has already charged two shallow names in the legacy order.
+    // Upgrade one to charge_type_name_copy without charging its text again:
+    // that payer adds one unit, and for a location one unit plus its origins.
+    budget.charge()?;
+    if let Some(location) = name.diagnostic.as_deref() {
+        let depth = crate::syntax::type_depth(0, 1)?;
+        budget.charge()?;
+        crate::syntax::charge_type_origin_copy(&location.primary, depth, budget)?;
+        for related in &location.related {
+            crate::syntax::charge_type_origin_copy(related, depth, budget)?;
+        }
+    }
+    // surface_name also constructs a fresh boxed location with a separate
+    // copy of the original origin.
+    crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+    budget.charge()?;
+
+    let previous = name
+        .diagnostic
+        .as_deref()
+        .filter(|_| token.preserve_name_diagnostic);
+    if let Some(previous) = previous {
+        // Comparing the primary origins may visit both Combined trees. The
+        // previous causes are then copied into a new related vector; the
+        // primary is copied only when the two primary origins differ.
+        let comparison = previous
+            .primary
+            .span_count()
+            .saturating_add(origin.span_count())
+            .saturating_mul(2);
+        budget.charge_units(comparison)?;
+        budget.charge_units(previous.related.len().saturating_add(1).saturating_mul(12))?;
+        crate::syntax::charge_type_origin_copy(&previous.primary, 0, budget)?;
+        for related in &previous.related {
+            crate::syntax::charge_type_origin_copy(related, 0, budget)?;
+        }
+    }
+    let previous_frames = previous.map_or(0, |location| location.frames.len());
+    let added_frames = token
+        .staging_frames
+        .map_or(usize::from(token.name_frame.is_some()), |frames| {
+            frames.len()
+        });
+    // A fresh frame vector can grow while prior and staged frames are merged.
+    budget.charge_units(
+        previous_frames
+            .saturating_add(added_frames)
+            .saturating_mul(12),
+    )?;
+    Ok(())
+}
+
+fn staged_transformer_tokens(tokens: &ProjectionTokens<'_>) -> bool {
+    tokens.originals.is_some()
+        && tokens.occurrence.is_some()
+        && tokens.admission_identifiers.is_some()
+        && tokens.frame.is_some()
+        && tokens.name_frame.is_some()
+        && tokens.staging_frames.is_some()
+        && !tokens.construction_extents
+        && tokens.preserve_name_diagnostic
+        && tokens.expression_budget.is_none()
+        && tokens.quote_sites.is_none()
+}
+
 fn matcher_capture_count(parts: &[SurfaceSyntaxMatcherPart]) -> Result<usize, ProjectionError> {
     let mut count = 0usize;
     for part in parts {
@@ -4229,6 +4514,7 @@ fn charge_structured_items<'a>(
     elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
     depth: usize,
+    transformer_contexts: Option<&crate::syntax::SyntaxContexts>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
     fn charge_argument_span(
@@ -4467,7 +4753,7 @@ fn charge_structured_items<'a>(
                                     ty,
                                     tokens,
                                     SurfaceSyntaxCaptureKind::Type,
-                                    false,
+                                    transformer_contexts.is_some(),
                                     false,
                                     repeat_depth,
                                     false,
@@ -4487,23 +4773,36 @@ fn charge_structured_items<'a>(
                                             InternalReason::UnexpectedShape,
                                         ))?
                                 };
+                                let new_pattern = transformer_contexts.is_some()
+                                    && *kind == SurfaceSyntaxCaptureKind::Pattern;
+                                let new_expression = transformer_contexts.is_some()
+                                    && *kind == SurfaceSyntaxCaptureKind::Expression;
+                                let owner_prefix = if new_expression {
+                                    crate::syntax::type_depth(repeat_depth, 1)?
+                                } else {
+                                    repeat_depth
+                                };
                                 let bridge = charge_projection_preflight_with_expression(
                                     value,
                                     tokens,
                                     true,
-                                    false,
-                                    false,
-                                    None,
-                                    repeat_depth,
+                                    new_pattern,
+                                    new_expression,
+                                    if new_expression {
+                                        transformer_contexts
+                                    } else {
+                                        None
+                                    },
+                                    owner_prefix,
                                     false,
                                     budget,
                                 )? | charge_capture_contents_with_expression(
                                     value,
                                     tokens,
                                     *kind,
-                                    false,
-                                    false,
-                                    repeat_depth,
+                                    new_pattern,
+                                    new_expression,
+                                    owner_prefix,
                                     false,
                                     false,
                                     budget,
@@ -4787,22 +5086,44 @@ fn charge_declaration_invocation(
         selection.declaration.implementation,
         SurfaceSyntaxImplementation::Template
     );
-    let declaration_transformer = executing
-        && (selection.declaration.matcher.is_empty()
-            || (has_declaration && !has_other_capture)
-            || (!has_declaration && (has_type_or_identifier || has_expression)))
-        && source_projection_tokens(tokens)
+    let staged_identifier_transformer = executing
+        && staged_transformer_tokens(tokens)
+        && !has_structured
+        && !has_declaration
+        && !has_other_capture
         && matches!(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    let declaration_transformer = staged_identifier_transformer
+        || executing
+            && (selection.declaration.matcher.is_empty()
+                || (has_declaration && !has_other_capture)
+                || (!has_declaration && (has_type_or_identifier || has_expression)))
+            && source_projection_tokens(tokens)
+            && matches!(
+                selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+    if let Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) = token.original
+        && staged_identifier_transformer
+    {
+        charge_staged_transformer_name(token, name, origin, budget)?;
+    }
     let generator_capture = executing
         && template
         && selection.declaration.contains_generators
         && source_projection_tokens(tokens)
         && tokens.quote_sites.is_some();
     if has_structured {
-        if !template {
+        let source_transformer = executing
+            && source_projection_tokens(tokens)
+            && selection.declaration.category == SurfaceSyntaxCategory::Declaration
+            && matches!(
+                selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
+        if !template && !source_transformer {
             return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
         }
         crate::syntax::charge_selected(selection, budget)?;
@@ -4812,6 +5133,7 @@ fn charge_declaration_invocation(
             &node.children[1..],
             tokens,
             1,
+            source_transformer.then_some(contexts),
             budget,
         );
     }
@@ -4933,8 +5255,13 @@ fn charge_declaration_invocation(
                 InternalReason::TokenOutOfRange,
             ))?;
         match token.original {
-            Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
-                crate::syntax::charge_name(name, budget)?;
+            Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+                if staged_identifier_transformer {
+                    crate::syntax::charge_type_name_copy(name, 0, budget)?;
+                    crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+                } else {
+                    crate::syntax::charge_name(name, budget)?;
+                }
             }
             None => match &token.kind {
                 TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
@@ -6311,6 +6638,24 @@ fn check_narrow_protected_refusal_inner(
     template_contexts: Option<&crate::syntax::SyntaxContexts>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    check_narrow_protected_refusal_with_quote(
+        root,
+        originals,
+        transformer_type_arguments,
+        template_contexts,
+        None,
+        budget,
+    )
+}
+
+fn check_narrow_protected_refusal_with_quote(
+    root: &ConcreteNode,
+    originals: Option<&std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
+    transformer_type_arguments: bool,
+    template_contexts: Option<&crate::syntax::SyntaxContexts>,
+    mut raw_quote: Option<&mut bool>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     // The dummy value represents an argument without a usable callee token.
     // A one-based offset reserves it while keeping the legacy worklist's size.
     let dummy = std::num::NonZeroU32::new(1).expect("one is nonzero");
@@ -6323,6 +6668,11 @@ fn check_narrow_protected_refusal_inner(
     };
     let mut protected_type = false;
     while let Some((node, expression_argument, declaration_argument)) = pending.pop() {
+        if node.kind == NodeKind::SyntaxQuote
+            && let Some(raw_quote) = raw_quote.as_deref_mut()
+        {
+            *raw_quote = true;
+        }
         if transformer_type_arguments {
             budget.charge()?;
         }
@@ -6763,7 +7113,7 @@ fn project_import(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
-) -> Result<SurfaceImport, ProjectionError> {
+) -> Result<(SurfaceImport, bool), ProjectionError> {
     require_kind(node, NodeKind::ImportDeclaration)?;
     let path_node = only_child_of_kind(node, NodeKind::ModulePath)?;
     let mut path_names = direct_tokens(path_node, tokens)
@@ -6800,9 +7150,14 @@ fn project_import(
         SurfaceModulePath::Relative(path_names)
     };
 
+    let mut has_syntax_import = false;
     let items = child_nodes(node)
         .filter(|child| child.kind == NodeKind::ImportItem)
-        .map(|item| project_import_item(source, item, tokens))
+        .map(|item| {
+            let (item, syntax) = project_import_item(source, item, tokens)?;
+            has_syntax_import |= syntax;
+            Ok::<_, ProjectionError>(item)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
     let selection = if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::LeftParen) {
@@ -6820,19 +7175,22 @@ fn project_import(
             alias: surface_name(alias_token)?,
         }
     };
-    Ok(SurfaceImport {
-        public,
-        path,
-        selection,
-        span: node_span(source, node, tokens)?,
-    })
+    Ok((
+        SurfaceImport {
+            public,
+            path,
+            selection,
+            span: node_span(source, node, tokens)?,
+        },
+        has_syntax_import,
+    ))
 }
 
 fn project_import_item(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
-) -> Result<SurfaceImportItem, ProjectionError> {
+) -> Result<(SurfaceImportItem, bool), ProjectionError> {
     require_kind(node, NodeKind::ImportItem)?;
     if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Impl) {
         let interface = direct_tokens(node, tokens)
@@ -6840,10 +7198,13 @@ fn project_import_item(
             .ok_or(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape,
             ))?;
-        return Ok(SurfaceImportItem::Implementation {
-            interface: surface_name(interface)?,
-            span: node_span(source, node, tokens)?,
-        });
+        return Ok((
+            SurfaceImportItem::Implementation {
+                interface: surface_name(interface)?,
+                span: node_span(source, node, tokens)?,
+            },
+            false,
+        ));
     }
     let syntax = is_syntax_import_item(node, tokens);
     let mut names = direct_tokens(node, tokens).filter(|token| {
@@ -6860,11 +7221,14 @@ fn project_import_item(
         return malformed(InternalReason::UnexpectedShape);
     }
     let span = node_span(source, node, tokens)?;
-    Ok(if syntax {
-        SurfaceImportItem::Syntax { name, alias, span }
-    } else {
-        SurfaceImportItem::Name { name, alias, span }
-    })
+    Ok((
+        if syntax {
+            SurfaceImportItem::Syntax { name, alias, span }
+        } else {
+            SurfaceImportItem::Name { name, alias, span }
+        },
+        syntax,
+    ))
 }
 
 fn is_syntax_import_item<T: ProjectionTokenSource + ?Sized>(
@@ -7318,65 +7682,6 @@ fn capture_declaration_node(argument: &ConcreteNode) -> Result<&ConcreteNode, Pr
     Ok(declaration)
 }
 
-/// Reserve the independent packet copy before the module parser consumes it.
-fn charge_forwarded_declaration(
-    capture: &SurfaceDeclarationCapture,
-    prefix: usize,
-    budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<(), DeclarationExpansionFailure> {
-    use crate::syntax::MacroOutputNode;
-
-    budget.charge_units(capture.contents.len().saturating_mul(3))?;
-    let mut pending = capture
-        .contents
-        .iter()
-        .map(|node| (node, prefix))
-        .collect::<Vec<_>>();
-    while let Some((node, depth)) = pending.pop() {
-        budget.charge()?;
-        match node {
-            MacroOutputNode::Identifier(name, origin) => {
-                crate::syntax::charge_type_name_copy(name, depth, budget)?;
-                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
-            }
-            MacroOutputNode::Token(kind, _, origin) => {
-                crate::syntax::charge_type_token_copy(kind, budget)?;
-                budget.charge()?;
-                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
-            }
-            MacroOutputNode::Group(_, children, origin) => {
-                let next = crate::syntax::type_depth(depth, 1)?;
-                crate::syntax::charge_type_origin_copy(origin, next, budget)?;
-                budget.charge_units(children.len().saturating_mul(2))?;
-                let live = pending.len();
-                let requested = live.saturating_add(children.len());
-                if requested > pending.capacity() {
-                    budget.charge_units(requested.saturating_add(live))?;
-                    pending.reserve_exact(children.len());
-                }
-                pending.extend(children.iter().map(|node| (node, next)));
-            }
-            MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedType(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _) => {
-                if crate::syntax::charge_captured_ep_original_selected(node, depth, true, budget)? {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-            }
-            MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedDeclaration(_, _)
-            | MacroOutputNode::Splice(_)
-            | MacroOutputNode::TemplateRepeat(_)
-            | MacroOutputNode::TemplateEscape(_) => {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Reserve the source-only packet and check its retained delimiter depth.
 fn charge_declaration_contents(
     source: &SourceFile,
@@ -7490,14 +7795,24 @@ fn capture_source_declaration_contents(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
-    capture_source_declaration_contents_inner(source, node, tokens, None)
+    capture_source_declaration_contents_selected(source, node, tokens, None, true)
 }
 
 fn capture_source_declaration_contents_inner(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
+    budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+    capture_source_declaration_contents_selected(source, node, tokens, budget, false)
+}
+
+fn capture_source_declaration_contents_selected(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
     mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    preserve_quote: bool,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
@@ -7527,25 +7842,33 @@ fn capture_source_declaration_contents_inner(
     }
 
     let mut indices = Vec::new();
+    let quoted =
+        preserve_quote && matches!(node.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
     let mut pending = if let Some(budget) = budget.as_deref_mut() {
         budget
             .charge_units(node.children.len())
             .map_err(ProjectionError::ResourceLimit)?;
         let mut pending = Vec::with_capacity(node.children.len());
-        pending.extend(node.children.iter().rev());
+        pending.extend(node.children.iter().rev().map(|child| (child, quoted)));
         pending
     } else {
-        node.children.iter().rev().collect::<Vec<_>>()
+        node.children
+            .iter()
+            .rev()
+            .map(|child| (child, quoted))
+            .collect::<Vec<_>>()
     };
-    while let Some(element) = pending.pop() {
+    while let Some((element, quoted)) = pending.pop() {
         match element {
             ConcreteElement::Node(child) => {
                 reserve_growth!(pending, child.children.len());
-                pending.extend(child.children.iter().rev());
+                let quoted = preserve_quote
+                    && matches!(child.kind, NodeKind::QuoteHole | NodeKind::SyntaxEscape);
+                pending.extend(child.children.iter().rev().map(|element| (element, quoted)));
             }
             ConcreteElement::Token(index) => {
                 reserve_growth!(indices, 1);
-                indices.push(*index);
+                indices.push((*index, quoted));
             }
             ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
                 return Err(ProjectionError::RecoveryNodesPresent);
@@ -7555,7 +7878,7 @@ fn capture_source_declaration_contents_inner(
     let mut output = Vec::new();
     let mut frames: Vec<GroupFrame> = Vec::new();
     let mut position = 0;
-    while let Some(&index) = indices.get(position) {
+    while let Some(&(index, quoted)) = indices.get(position) {
         let token = tokens.get(index).ok_or(ProjectionError::MalformedTree(
             InternalReason::TokenOutOfRange,
         ))?;
@@ -7604,10 +7927,10 @@ fn capture_source_declaration_contents_inner(
                     join_spans(source, frame.opening, token.span)?.into(),
                 )
             }
-            TokenKind::Dollar => {
+            TokenKind::Dollar if !quoted => {
                 let next = indices
                     .get(position)
-                    .and_then(|index| tokens.projection_token(*index))
+                    .and_then(|(index, _)| tokens.projection_token(*index))
                     .ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
@@ -8004,18 +8327,18 @@ fn capture_contents_and_type(
     capture_contents_with_escapes(source, node, tokens, originals, None, None, false)
 }
 
+type CapturedTemplateGenerator = (
+    usize,
+    std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
+);
+
 fn capture_contents_with_escapes(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     escapes: Option<&[(usize, SurfaceName)]>,
-    generators: Option<
-        &[(
-            usize,
-            std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
-        )],
-    >,
+    generators: Option<&[CapturedTemplateGenerator]>,
     allow_repetition: bool,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
@@ -8144,6 +8467,83 @@ fn capture_contents_with_escapes(
         Ok(())
     }
 
+    // Repeat construction starts after its recursive body has returned. Keep
+    // its owned scratch off every delimiter and repetition descent frame.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn push_template_repeat(
+        source: &SourceFile,
+        indices: &[(usize, bool)],
+        position: &mut usize,
+        tokens: &ProjectionTokens<'_>,
+        generators: Option<&[CapturedTemplateGenerator]>,
+        token: &Token,
+        body: Vec<MacroOutputNode>,
+        output: &mut Vec<MacroOutputNode>,
+    ) -> Result<(), ProjectionError> {
+        let next = indices
+            .get(*position)
+            .and_then(|(next, _)| tokens.get(*next))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        let separator = if matches!(next.kind, TokenKind::Star | TokenKind::Plus) {
+            None
+        } else {
+            if !matcher_separator(&next.kind) {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            *position += 1;
+            let spelling = matcher_spelling(source, next)?;
+            charge_expression_allocation(
+                spelling.len().saturating_add(2),
+                tokens.expression_budget,
+            )?;
+            if let Some(budget) = tokens.expression_budget {
+                crate::syntax::charge_type_token_copy(&next.kind, &mut budget.borrow_mut())
+                    .map_err(ProjectionError::ResourceLimit)?;
+            }
+            Some((
+                next.kind.clone(),
+                std::sync::Arc::from(spelling),
+                next.span.into(),
+            ))
+        };
+        let operator = indices
+            .get(*position)
+            .and_then(|(next, _)| tokens.get(*next))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        if !matches!(operator.kind, TokenKind::Star | TokenKind::Plus) {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        *position += 1;
+        let mut bindings = None;
+        if let Some((index, _)) = indices.get(*position) {
+            for (start, clause) in generators.into_iter().flatten() {
+                charge_expression_allocation(1, tokens.expression_budget)?;
+                if start == index {
+                    charge_expression_allocation(1, tokens.expression_budget)?;
+                    bindings = Some(std::sync::Arc::clone(clause));
+                    *position += 1;
+                    break;
+                }
+            }
+        }
+        charge_expression_allocation(1, tokens.expression_budget)?;
+        output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
+            crate::syntax::TemplateRepeat {
+                body,
+                generators: bindings,
+                separator,
+                one_or_more: operator.kind == TokenKind::Plus,
+                origin: join_spans(source, token.span, operator.span)?.into(),
+            },
+        )));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sequence(
         source: &SourceFile,
@@ -8152,12 +8552,7 @@ fn capture_contents_with_escapes(
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         escapes: Option<&[(usize, SurfaceName)]>,
-        generators: Option<
-            &[(
-                usize,
-                std::sync::Arc<[crate::surface::SurfaceTemplateGenerator]>,
-            )],
-        >,
+        generators: Option<&[CapturedTemplateGenerator]>,
         closing: Option<TokenKind>,
         allow_repetition: bool,
     ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {
@@ -8216,66 +8611,16 @@ fn capture_contents_with_escapes(
                     allow_repetition,
                 )?;
                 contains_protected_type |= child_contains_type;
-                let next = indices
-                    .get(*position)
-                    .and_then(|(next, _)| tokens.get(*next))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let separator = if matches!(next.kind, TokenKind::Star | TokenKind::Plus) {
-                    None
-                } else {
-                    if !matcher_separator(&next.kind) {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    *position += 1;
-                    let spelling = matcher_spelling(source, next)?;
-                    charge_expression_allocation(
-                        spelling.len().saturating_add(2),
-                        tokens.expression_budget,
-                    )?;
-                    if let Some(budget) = tokens.expression_budget {
-                        crate::syntax::charge_type_token_copy(&next.kind, &mut budget.borrow_mut())
-                            .map_err(ProjectionError::ResourceLimit)?;
-                    }
-                    Some((
-                        next.kind.clone(),
-                        std::sync::Arc::from(spelling),
-                        next.span.into(),
-                    ))
-                };
-                let operator = indices
-                    .get(*position)
-                    .and_then(|(next, _)| tokens.get(*next))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                if !matches!(operator.kind, TokenKind::Star | TokenKind::Plus) {
-                    return malformed(InternalReason::UnexpectedShape);
-                }
-                *position += 1;
-                let mut bindings = None;
-                if let Some((index, _)) = indices.get(*position) {
-                    for (start, clause) in generators.into_iter().flatten() {
-                        charge_expression_allocation(1, tokens.expression_budget)?;
-                        if start == index {
-                            charge_expression_allocation(1, tokens.expression_budget)?;
-                            bindings = Some(std::sync::Arc::clone(clause));
-                            *position += 1;
-                            break;
-                        }
-                    }
-                }
-                charge_expression_allocation(1, tokens.expression_budget)?;
-                output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
-                    crate::syntax::TemplateRepeat {
-                        body,
-                        generators: bindings,
-                        separator,
-                        one_or_more: operator.kind == TokenKind::Plus,
-                        origin: join_spans(source, token.span, operator.span)?.into(),
-                    },
-                )));
+                push_template_repeat(
+                    source,
+                    indices,
+                    position,
+                    tokens,
+                    generators,
+                    token,
+                    body,
+                    &mut output,
+                )?;
             } else if matches!(token.kind, TokenKind::LeftParen | TokenKind::LeftBrace) {
                 let (delimiter, end) = if matches!(token.kind, TokenKind::LeftParen) {
                     (MacroDelimiter::Parentheses, TokenKind::RightParen)
@@ -8405,6 +8750,33 @@ fn capture_contents_with_escapes(
         None,
         allow_repetition,
     )
+}
+
+pub(super) fn valid_macro_declaration_fragment(
+    source: &SourceFile,
+    parsed: &super::ParsedMacroTree,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, ProjectionError> {
+    // The existing validators walk the event-built tree and token coverage.
+    for _ in 0..4 {
+        budget
+            .charge_units(parsed.tree.events.len())
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    budget
+        .charge_units(parsed.tree.tokens.len())
+        .map_err(ProjectionError::ResourceLimit)?;
+    let root = validated_macro_root(source, &parsed.tree)?;
+    validate_node_shape_with_admission(
+        root,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let mut declarations = child_nodes(root);
+    let valid = declarations.next().is_some_and(|node| {
+        node.kind == NodeKind::DeclarationFragment || is_capturable_declaration(node.kind)
+    });
+    Ok(valid && declarations.next().is_none())
 }
 
 fn validated_macro_root<'tree>(
@@ -8601,6 +8973,8 @@ fn project_structured_items<'a>(
     parts: &'a [SurfaceSyntaxMatcherPart],
     elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
+    source_transformer: bool,
+    mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<(Vec<SurfaceSyntaxCapture>, Option<Span>), ProjectionError> {
     enum Frame<'a> {
         Items {
@@ -8738,12 +9112,46 @@ fn project_structured_items<'a>(
                                     .ok_or(ProjectionError::MalformedTree(
                                         InternalReason::UnexpectedShape,
                                     ))?;
-                                let (contents, contains_type) = capture_contents_and_type(
-                                    source, expression, tokens, originals,
-                                )?;
-                                let expression = project_expression_with_fragments(
-                                    source, expression, tokens, originals,
-                                )?;
+                                let (expression, contents, contains_type) =
+                                    if source_transformer && budget.is_some() {
+                                        let expression_budget = std::cell::RefCell::new(
+                                            budget
+                                                .as_deref_mut()
+                                                .expect("source transformer has a budget"),
+                                        );
+                                        let selected_tokens = ProjectionTokens {
+                                            expression_budget: Some(&expression_budget),
+                                            quote_sites: None,
+                                            ..*tokens
+                                        };
+                                        let (contents, contains_type) = capture_contents_and_type(
+                                            source,
+                                            expression,
+                                            &selected_tokens,
+                                            originals,
+                                        )?;
+                                        let expression = project_expression_with_fragments(
+                                            source,
+                                            expression,
+                                            &selected_tokens,
+                                            originals,
+                                        )?;
+                                        expression_budget
+                                            .borrow_mut()
+                                            .charge_units(
+                                                contents.len().saturating_mul(2).saturating_add(1),
+                                            )
+                                            .map_err(ProjectionError::ResourceLimit)?;
+                                        (expression, contents, contains_type)
+                                    } else {
+                                        let (contents, contains_type) = capture_contents_and_type(
+                                            source, expression, tokens, originals,
+                                        )?;
+                                        let expression = project_expression_with_fragments(
+                                            source, expression, tokens, originals,
+                                        )?;
+                                        (expression, contents, contains_type)
+                                    };
                                 SurfaceSyntaxCapture::Expression(project_syntax_expression_capture(
                                     expression,
                                     contents,
@@ -8753,7 +9161,16 @@ fn project_structured_items<'a>(
                             }
                             SurfaceSyntaxCaptureKind::Type => {
                                 let node = only_child_of_kind(argument, NodeKind::Type)?;
-                                let contents = capture_contents(source, node, tokens, originals)?;
+                                let contents = if source_transformer && budget.is_some() {
+                                    capture_source_declaration_contents_inner(
+                                        source,
+                                        node,
+                                        tokens,
+                                        budget.as_deref_mut(),
+                                    )?
+                                } else {
+                                    capture_contents(source, node, tokens, originals)?
+                                };
                                 let ty = project_type(source, node, tokens)?;
                                 let contents = match contents.as_slice() {
                                     [crate::syntax::MacroOutputNode::ForwardedType(capture, _)] => {
@@ -8765,7 +9182,16 @@ fn project_structured_items<'a>(
                             }
                             SurfaceSyntaxCaptureKind::Pattern => {
                                 let node = only_child_of_kind(argument, NodeKind::Pattern)?;
-                                let contents = capture_contents(source, node, tokens, originals)?;
+                                let contents = if source_transformer && budget.is_some() {
+                                    capture_source_declaration_contents_inner(
+                                        source,
+                                        node,
+                                        tokens,
+                                        budget.as_deref_mut(),
+                                    )?
+                                } else {
+                                    capture_contents(source, node, tokens, originals)?
+                                };
                                 let pattern = project_pattern(source, node, tokens)?;
                                 let contents = match contents.as_slice() {
                                     [
@@ -8962,11 +9388,20 @@ fn project_selected_declaration_invocation_node_inner(
             part,
             SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
         ) {
+            if source_transformer && budget.is_none() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
             let (tail, last_span) = project_structured_items(
                 source,
                 &selection.declaration.matcher[position..],
                 children.as_slice(),
                 tokens,
+                source_transformer,
+                if source_transformer {
+                    budget.as_deref_mut()
+                } else {
+                    None
+                },
             )?;
             structured_edge = Some(last_span.unwrap_or(prefix_edge));
             captures.extend(tail);
@@ -13294,6 +13729,7 @@ mod tests {
                 &invocation.children[1..],
                 &projected_tokens,
                 1,
+                None,
                 &mut budget,
             )
             .unwrap();
@@ -13303,7 +13739,9 @@ mod tests {
                     &caller,
                     &selected.declaration.matcher,
                     &invocation.children[1..],
-                    &projected_tokens
+                    &projected_tokens,
+                    false,
+                    None,
                 )
                 .unwrap()
                 .0
@@ -13312,7 +13750,7 @@ mod tests {
             let mut short = SyntaxBudget::with_limit(total - 1);
             short.charge_units(17).unwrap();
             assert!(
-                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
+                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, None, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
             );
             assert!(short.consumed() >= 17 && short.consumed() < total);
             let mut exact = SyntaxBudget::with_limit(total);
@@ -13323,6 +13761,7 @@ mod tests {
                 &invocation.children[1..],
                 &projected_tokens,
                 1,
+                None,
                 &mut exact,
             )
             .unwrap();
@@ -13980,6 +14419,518 @@ mod tests {
     }
 
     #[test]
+    fn staged_resource_frame_work_is_paid_and_released_at_real_prepare_and_admit() {
+        use crate::{syntax::SyntaxContexts, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "resource-forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let imports = [vec![]];
+        let source = SourceFile::new("resource-caller.ash", "emit answer\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let contexts = SyntaxContexts::new(&selected, &imports, &[]);
+        let prepare = |limit: usize, prefix: usize| {
+            let invocation =
+                project_declaration_invocation_node(&source, node, &tokens, &contexts, true)
+                    .unwrap();
+            let mut owners = Vec::new();
+            let mut failure_frame = None;
+            let mut transformer = None;
+            let mut work = SyntaxBudget::with_limit(limit);
+            work.charge_units(prefix).unwrap();
+            let result = prepare_staged_output(
+                invocation,
+                false,
+                false,
+                &source,
+                &selected,
+                &imports,
+                &mut owners,
+                &[],
+                &mut failure_frame,
+                &mut transformer,
+                &mut work,
+            );
+            (result, failure_frame, work.consumed(), owners.len())
+        };
+        let (result, absent, cost, _) = prepare(100_000, 0);
+        assert!(absent.is_none());
+        let pending = result.unwrap();
+        let prepare_weak = Arc::downgrade(&pending.frame);
+        drop(pending);
+        assert!(prepare_weak.upgrade().is_none());
+        let (result, absent, _, owners) = prepare(1, 0);
+        assert!(result.is_err());
+        assert!(absent.is_none());
+        assert_eq!(owners, 0);
+        for prefix in [0, 7] {
+            let (result, failed, used, _) = prepare(prefix + cost - 1, prefix);
+            assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == prefix + cost - 1));
+            assert!(used >= prefix && used < prefix + cost);
+            let failed = failed.expect("the actual prepared frame moves on failure");
+            assert_eq!(failed.definition, selected[0].declaration.span);
+            assert_eq!(failed.invocation.source(), source.id());
+            let weak = Arc::downgrade(&failed);
+            drop(failed);
+            assert!(weak.upgrade().is_none());
+            for _ in 0..2 {
+                let (result, absent, used, _) = prepare(prefix + cost, prefix);
+                assert!(absent.is_none());
+                assert_eq!(used, prefix + cost);
+                drop(result.unwrap());
+            }
+        }
+
+        let make_pending = || prepare(100_000, 0).0.unwrap();
+        let pending = make_pending();
+        let mut measured = SyntaxBudget::with_limit(100_000);
+        let mut failure_frame = None;
+        let admitted =
+            admit_staged_output(pending, &source, &[], &mut failure_frame, &mut measured).unwrap();
+        assert!(failure_frame.is_none());
+        let admit_cost = measured.consumed();
+        drop(admitted);
+        for limit in [0, admit_cost - 1] {
+            let pending = make_pending();
+            let weak = Arc::downgrade(&pending.frame);
+            let mut failure_frame = None;
+            let result = admit_staged_output(
+                pending,
+                &source,
+                &[],
+                &mut failure_frame,
+                &mut SyntaxBudget::with_limit(limit),
+            );
+            assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: actual }), ..
+            }) if actual == limit));
+            let failed = failure_frame.expect("admission moves its actual pending frame");
+            assert!(weak.ptr_eq(&Arc::downgrade(&failed)));
+            drop(failed);
+            assert!(weak.upgrade().is_none());
+        }
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(7 + admit_cost);
+            exact.charge_units(7).unwrap();
+            let mut failure_frame = None;
+            let admitted =
+                admit_staged_output(make_pending(), &source, &[], &mut failure_frame, &mut exact)
+                    .unwrap();
+            assert!(failure_frame.is_none());
+            assert_eq!(exact.consumed(), 7 + admit_cost);
+            drop(admitted);
+        }
+    }
+
+    #[test]
+    fn staged_failure_slot_prepays_growth_and_preserves_the_original_resource() {
+        use crate::{syntax::ExpansionFrame, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        let source = SourceFile::new("slot.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut frames = Vec::with_capacity(1);
+        frames.push(Arc::clone(&frame));
+        while frames.len() < frames.capacity() {
+            frames.push(Arc::clone(&frame));
+        }
+        let live = frames.len();
+        let cost = 2 * live + 1;
+        let before = Arc::strong_count(&frame);
+        let mut short = SyntaxBudget::with_limit(7 + cost - 1);
+        short.charge_units(7).unwrap();
+        assert!(
+            matches!(reserve_staged_failure_frame(&mut frames, &mut short),
+            Err(ResourceFailure::SyntaxWork { limit }) if limit == 7 + cost - 1)
+        );
+        assert_eq!(frames.len(), live);
+        assert_eq!(frames.capacity(), live);
+        assert_eq!(Arc::strong_count(&frame), before);
+        let mut exact = SyntaxBudget::with_limit(7 + cost);
+        exact.charge_units(7).unwrap();
+        reserve_staged_failure_frame(&mut frames, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), 7 + cost);
+        assert!(frames.capacity() > frames.len());
+        assert_eq!(Arc::strong_count(&frame), before);
+
+        let malformed = SourceFile::new("malformed.ash", "main :\n").unwrap();
+        let parsed = parse(lex(&malformed).unwrap());
+        let diagnostics = parsed.parse_diagnostics().to_vec();
+        assert!(!diagnostics.is_empty());
+        let failure = staged_template_failure(
+            super::super::MacroParseFailure::Syntax {
+                diagnostics: diagnostics.clone(),
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: STRUCTURAL_DEPTH_LIMIT,
+                }),
+            },
+            &frames,
+            &frame,
+            &mut SyntaxBudget::with_limit(0),
+        )
+        .unwrap();
+        assert!(matches!(failure, DeclarationExpansionFailure::Syntax {
+            diagnostics: actual,
+            resource: Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT }),
+        } if actual == diagnostics));
+    }
+
+    #[test]
+    fn staged_resource_before_new_frame_keeps_only_the_entered_chain() {
+        use crate::syntax_resource::SyntaxBudget;
+        use std::cell::RefCell;
+
+        std::thread_local! {
+            static CUTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+            static PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe(_: &SourceFile, _: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+            CUTS.with(|cuts| cuts.borrow_mut().push(budget.consumed()));
+        }
+        fn publication(source: &SourceFile, _: &SurfaceModule) {
+            if source.display_path() == "resource-caller.ash" {
+                PUBLISHED.set(true);
+            }
+        }
+
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident => { inner $name }\n",
+        )
+        .unwrap();
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let outer = h1_selection(&outer_source, 0, None);
+        let inner = h1_selection(&inner_source, 1, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner], vec![]];
+        let source = SourceFile::new("resource-caller.ash", "outer answer\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let mut owners = Vec::new();
+        let mut location = None;
+        CUTS.with(|cuts| cuts.borrow_mut().clear());
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut SyntaxBudget::with_limit(100_000),
+            None,
+            None,
+            &mut location,
+        );
+        G1_CAPTURE_OBSERVER.set(None);
+        assert!(result.is_ok());
+        assert!(location.is_none());
+        let cuts = CUTS.with(|cuts| cuts.borrow().clone());
+        assert_eq!(cuts.len(), 2);
+        let limit = cuts[1] + 1;
+
+        let mut owners = Vec::new();
+        let mut location = None;
+        PUBLISHED.set(false);
+        STAGED_MODULE_OBSERVER.set(Some(publication));
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut SyntaxBudget::with_limit(limit),
+            None,
+            None,
+            &mut location,
+        );
+        STAGED_MODULE_OBSERVER.set(None);
+        assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+            resource: Some(ResourceFailure::SyntaxWork { limit: actual }), ..
+        }) if actual == limit));
+        assert!(owners.is_empty());
+        assert!(!PUBLISHED.get());
+        let location = location.expect("the entered outer frame survives the refusal");
+        assert_eq!(location.frames.len(), 1);
+        assert_eq!(location.frames[0].definition, outer.declaration.span);
+        let weak = std::sync::Arc::downgrade(&location.frames[0]);
+        drop(location);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn staged_enter_refusals_move_only_the_real_active_frame() {
+        use crate::{syntax::ExpansionFrame, syntax_resource::SyntaxBudget};
+        use std::{cell::RefCell, sync::Arc};
+
+        std::thread_local! {
+            static ENTERS: RefCell<Vec<(usize, Span, bool)>> = const { RefCell::new(Vec::new()) };
+            static PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe_enter(frame: &ExpansionFrame, budget: &SyntaxBudget, deferred: bool) {
+            ENTERS.with(|events| {
+                events
+                    .borrow_mut()
+                    .push((budget.consumed(), frame.definition, deferred))
+            });
+        }
+        fn observe_publication(source: &SourceFile, _: &SurfaceModule) {
+            if source.display_path() == "resource-enter.ash" {
+                PUBLISHED.set(true);
+            }
+        }
+        fn check(
+            source: &SourceFile,
+            selected: &[crate::syntax::SelectedSyntax],
+            imports: &[Vec<crate::syntax::SelectedSyntax>],
+            expected_definition: Span,
+            deferred: bool,
+        ) {
+            let tree = h1_tree(source, selected);
+            let mut owners = Vec::new();
+            let mut location = None;
+            let mut measured = SyntaxBudget::with_limit(100_000);
+            ENTERS.with(|events| events.borrow_mut().clear());
+            STAGED_ENTER_OBSERVER.set(Some(observe_enter));
+            project_declaration_expansions_with_resource(
+                source,
+                &tree,
+                selected,
+                imports,
+                &mut owners,
+                &mut measured,
+                None,
+                None,
+                &mut location,
+            )
+            .unwrap();
+            STAGED_ENTER_OBSERVER.set(None);
+            assert!(location.is_none());
+            let events = ENTERS.with(|events| events.borrow().clone());
+            let (cut, _, _) = events
+                .into_iter()
+                .find(|(_, definition, is_deferred)| {
+                    *definition == expected_definition && *is_deferred == deferred
+                })
+                .expect("the actual selected frame reaches enter");
+            let mut owners = Vec::new();
+            let mut location = None;
+            let mut short = SyntaxBudget::with_limit(cut);
+            PUBLISHED.set(false);
+            STAGED_MODULE_OBSERVER.set(Some(observe_publication));
+            let failure = project_declaration_expansions_with_resource(
+                source,
+                &tree,
+                selected,
+                imports,
+                &mut owners,
+                &mut short,
+                None,
+                None,
+                &mut location,
+            );
+            STAGED_MODULE_OBSERVER.set(None);
+            assert!(matches!(failure, Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == cut));
+            assert!(owners.is_empty());
+            assert!(!PUBLISHED.get());
+            let location = location.expect("the refused actual frame moves to the diagnostic");
+            assert_eq!(location.frames.len(), 1);
+            assert_eq!(location.frames[0].definition, expected_definition);
+            assert_eq!(location.frames[0].invocation.source(), source.id());
+            let weak = Arc::downgrade(&location.frames[0]);
+            drop(location);
+            assert!(weak.upgrade().is_none());
+        }
+
+        let ordinary_forms = SourceFile::new(
+            "ordinary.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let ordinary = [h1_selection(&ordinary_forms, 0, None)];
+        let ordinary_source = SourceFile::new("resource-enter.ash", "emit answer\n").unwrap();
+        check(
+            &ordinary_source,
+            &ordinary,
+            &[vec![]],
+            ordinary[0].declaration.span,
+            false,
+        );
+
+        let alpha_forms = SourceFile::new(
+            "alpha.ash",
+            "pub syntax derive: (alpha) => {\nalpha_result : Unit -> Int\nalpha_result () = 1\n}\n",
+        )
+        .unwrap();
+        let beta_forms = SourceFile::new(
+            "beta.ash",
+            "pub syntax derive: (beta) => {\nbeta_result : Unit -> Int\nbeta_result () = 2\n}\n",
+        )
+        .unwrap();
+        let derives = [
+            h1_selection(&alpha_forms, 0, None),
+            h1_selection(&beta_forms, 1, None),
+        ];
+        let derive_source = SourceFile::new(
+            "resource-enter.ash",
+            "type Color = Red\n    deriving (alpha, beta)\n",
+        )
+        .unwrap();
+        check(
+            &derive_source,
+            &derives,
+            &[vec![], vec![]],
+            derives[1].declaration.span,
+            true,
+        );
+    }
+
+    #[test]
+    fn staged_nonresource_failure_never_attaches_resource_context() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new(
+            "make.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("caller.ash", "make Upper\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let mut owners = Vec::new();
+        let mut location = None;
+        let result = project_declaration_expansions_with_resource(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut owners,
+            &mut SyntaxBudget::default(),
+            None,
+            None,
+            &mut location,
+        );
+        assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+            diagnostics, resource: None,
+        }) if diagnostics.iter().any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken)));
+        assert!(owners.is_empty());
+        assert!(location.is_none());
+
+        // Cut the real output parser after it has recorded the unexpected
+        // Upper token, then compare its original failure with admission's.
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let imports = [vec![]];
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &imports, &[]);
+        let invocation =
+            project_declaration_invocation_node(&source, node, &tokens, &contexts, true).unwrap();
+        let mut preparation_owners = Vec::new();
+        let mut preparation_frame = None;
+        let pending = prepare_staged_output(
+            invocation,
+            false,
+            false,
+            &source,
+            &selected,
+            &imports,
+            &mut preparation_owners,
+            &[],
+            &mut preparation_frame,
+            &mut None,
+            &mut SyntaxBudget::default(),
+        )
+        .unwrap();
+        assert!(preparation_frame.is_none());
+        let mut measured = SyntaxBudget::with_limit(100_000);
+        let parsed = super::super::parse_macro_tree_with_expression_scratch(
+            &source,
+            pending.anchor,
+            pending.output.clone(),
+            &pending.contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            pending.pattern_accounting,
+            pending.actual_expression,
+            &mut measured,
+        );
+        assert!(
+            matches!(parsed, Err(super::super::MacroParseFailure::Syntax {
+            diagnostics, resource: None,
+        }) if diagnostics.iter().any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken))
+        );
+        let parser_cost = measured.consumed();
+        let limit = 7 + 2 + parser_cost - 1;
+        let mut direct = SyntaxBudget::with_limit(limit);
+        direct.charge_units(7 + 2).unwrap();
+        let raw = super::super::parse_macro_tree_with_expression_scratch(
+            &source,
+            pending.anchor,
+            pending.output.clone(),
+            &pending.contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            pending.pattern_accounting,
+            pending.actual_expression,
+            &mut direct,
+        );
+        let Err(super::super::MacroParseFailure::Syntax {
+            diagnostics: original,
+            resource:
+                Some(ResourceFailure::SyntaxWork {
+                    limit: original_limit,
+                }),
+        }) = raw
+        else {
+            panic!("expected the real parser's resource refusal")
+        };
+        assert_eq!(original_limit, limit);
+        assert!(
+            original
+                .iter()
+                .any(|diagnostic| diagnostic.reason == ParseReason::UnexpectedToken)
+        );
+
+        let weak = std::sync::Arc::downgrade(&pending.frame);
+        let mut admission = SyntaxBudget::with_limit(limit);
+        admission.charge_units(7).unwrap();
+        let mut failed_frame = None;
+        let admitted =
+            admit_staged_output(pending, &source, &[], &mut failed_frame, &mut admission);
+        let Err(DeclarationExpansionFailure::Syntax {
+            diagnostics: actual,
+            resource:
+                Some(ResourceFailure::SyntaxWork {
+                    limit: actual_limit,
+                }),
+        }) = admitted
+        else {
+            panic!("expected the same refusal at admission")
+        };
+        assert_eq!(actual_limit, original_limit);
+        assert_eq!(actual, original);
+        assert_eq!(admission.consumed(), direct.consumed());
+        let failed = failed_frame.expect("the actual frame moves with the original payload");
+        assert!(weak.ptr_eq(&std::sync::Arc::downgrade(&failed)));
+        drop(failed);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     fn i19_real_collector_uses_one_retryable_ledger_and_publishes_atomically() {
         use crate::{syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
 
@@ -14285,10 +15236,16 @@ mod tests {
     fn r1_unconsumed_forms_fail_shape_before_complete_or_staged_projection() {
         let forms = SourceFile::new(
             "forms.ash",
-            "pub syntax declaration: (stamp) $name:ident => {\n$name : Int\n$name = 42\n}\n",
+            "pub syntax declaration: (stamp) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
         )
         .unwrap();
-        let selected = [h1_selection(&forms, 0, None)];
+        let marker_forms =
+            SourceFile::new("marker.ash", "pub syntax derive: (marker) => {}\n").unwrap();
+        let selected = [
+            h1_selection(&forms, 0, None),
+            h1_selection(&marker_forms, 1, None),
+        ];
+        let imports = [vec![], vec![]];
         for text in [
             "pub syntax derive: (marker) => {}\n",
             "type Item = Item\nderiving (marker)\n",
@@ -14303,33 +15260,101 @@ mod tests {
                         .any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation),
                     has_invocation
                 );
-                assert_eq!(
-                    project_module(&source, &tree),
-                    Err(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape
-                    )),
-                    "{text:?}"
-                );
+                let is_definition = text.starts_with("pub syntax");
+                let direct = project_module(&source, &tree);
+                if is_definition && !has_invocation {
+                    let module = direct.expect("an ordinary source derive definition projects");
+                    assert_eq!(module.syntax_declarations.len(), 1);
+                    assert_eq!(
+                        module.syntax_declarations[0].category,
+                        SurfaceSyntaxCategory::Derive
+                    );
+                } else {
+                    assert_eq!(
+                        direct,
+                        Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape
+                        )),
+                        "{text:?}"
+                    );
+                }
+                let run =
+                    |owners: &mut Vec<crate::syntax::SyntaxOwner>,
+                     budget: &mut crate::syntax_resource::SyntaxBudget| {
+                        project_declaration_expansions(
+                            &source, &tree, &selected, &imports, owners, budget, None,
+                        )
+                    };
                 let mut owners = Vec::new();
                 let mut budget = crate::syntax_resource::SyntaxBudget::default();
-                assert!(matches!(
-                    project_declaration_expansions(
-                        &source,
-                        &tree,
-                        &selected,
-                        &[],
-                        &mut owners,
-                        &mut budget,
-                        None,
-                    ),
-                    Err(DeclarationExpansionFailure::Projection(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                    ))
-                ));
-                assert!(owners.is_empty());
-                assert_eq!(budget.consumed(), 0);
+                budget.charge_units(17).unwrap();
+                let module = run(&mut owners, &mut budget)
+                    .expect("staging consumes the selected invocation and derive");
+                assert_eq!(module.syntax_declarations.len(), usize::from(is_definition));
+                assert_eq!(module.type_declarations.len(), usize::from(!is_definition));
+                if !is_definition {
+                    assert_eq!(module.type_declarations[0].name.text, "Item");
+                }
+                assert_eq!(module.definitions.len(), usize::from(has_invocation));
+                if has_invocation {
+                    assert_eq!(
+                        output_definition_name(&module.definitions[0]).text,
+                        "answer"
+                    );
+                }
+                let expected_owners = usize::from(has_invocation) + usize::from(!is_definition);
+                assert_eq!(owners.len(), expected_owners);
+                let used = budget.consumed();
+                assert!(used > 17);
+                let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+                short.charge_units(17).unwrap();
+                let mut failed_owners = Vec::new();
+                let failure = run(&mut failed_owners, &mut short).unwrap_err();
+                assert_eq!(
+                    failure.resource(),
+                    Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+                );
+                assert!(failed_owners.is_empty());
+                for _ in 0..2 {
+                    let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+                    exact.charge_units(17).unwrap();
+                    let mut retried_owners = Vec::new();
+                    assert_eq!(run(&mut retried_owners, &mut exact).unwrap(), module);
+                    assert_eq!(retried_owners.len(), expected_owners);
+                    assert_eq!(exact.consumed(), used);
+                }
             }
         }
+        let missing = SourceFile::new(
+            "missing.ash",
+            "stamp answer\ntype Item = Item\nderiving (missing)\n",
+        )
+        .unwrap();
+        let tree = h1_tree(&missing, &selected);
+        let mut owners = Vec::new();
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        let failure = project_declaration_expansions(
+            &missing,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut budget,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(failure, DeclarationExpansionFailure::Syntax { diagnostics, resource: None }
+            if diagnostics.len() == 1
+                && diagnostics[0].reason == ParseReason::UnexpectedToken
+                && diagnostics[0].expected.as_deref() == Some("derive syntax")
+                && diagnostics[0].found.as_deref() == Some("missing"))
+        );
+        assert!(budget.consumed() > 0);
+        assert!(
+            owners.is_empty(),
+            "the earlier stamp owner must not be published"
+        );
     }
 
     #[test]
@@ -14384,7 +15409,7 @@ mod tests {
         let mut measured = crate::syntax_resource::SyntaxBudget::default();
         let baseline = parse_at(&mut measured).unwrap();
         // This component path starts with the real template instantiation and
-        // uses one already-spent ledger for instantiation, parsing and refusal.
+        // uses one already-spent ledger for instantiation, parsing and validation.
         let stage = |budget: &mut crate::syntax_resource::SyntaxBudget| {
             let output = crate::syntax::instantiate_declaration_template(
                 &invocation.selection,
@@ -14427,22 +15452,17 @@ mod tests {
             assert_eq!(retry.original_nodes, staged.original_nodes);
             assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
         }
-        let refusal = validate_declaration_template(
+        let validation = validate_declaration_template(
             &caller,
             invocation.span,
             &staged,
             &contexts,
             &mut measured_stage,
         );
-        assert!(matches!(
-            refusal,
-            Err(DeclarationExpansionFailure::Projection(
-                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-            ))
-        ));
-        let refusal_used = measured_stage.consumed();
-        assert!(refusal_used > staged_used);
-        for limit in [refusal_used - 1, refusal_used, refusal_used] {
+        assert!(validation.is_ok());
+        let validation_used = measured_stage.consumed();
+        assert!(validation_used > staged_used);
+        for limit in [validation_used - 1, validation_used, validation_used] {
             let mut budget = crate::syntax_resource::SyntaxBudget::with_limit(limit);
             budget.charge_units(17).unwrap();
             let retry = stage(&mut budget).unwrap();
@@ -14453,18 +15473,13 @@ mod tests {
                 &contexts,
                 &mut budget,
             );
-            if limit < refusal_used {
+            if limit < validation_used {
                 assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
                     resource: Some(ResourceFailure::SyntaxWork { limit: found }), ..
                 }) if found == limit));
             } else {
-                assert!(matches!(
-                    result,
-                    Err(DeclarationExpansionFailure::Projection(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                    ))
-                ));
-                assert_eq!(budget.consumed(), refusal_used);
+                assert!(result.is_ok());
+                assert_eq!(budget.consumed(), validation_used);
             }
             assert_eq!(retry.original_nodes, staged.original_nodes);
             assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
@@ -14538,18 +15553,16 @@ mod tests {
             imports[0][0].declaration.span
         );
         let mut validation_budget = crate::syntax_resource::SyntaxBudget::default();
-        assert!(matches!(
+        assert!(
             validate_declaration_template(
                 &caller,
                 invocation.span,
                 &parsed,
                 &contexts,
                 &mut validation_budget,
-            ),
-            Err(DeclarationExpansionFailure::Projection(
-                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-            ))
-        ));
+            )
+            .is_ok()
+        );
         assert_eq!(
             project_macro_declarations(
                 &caller,
@@ -14581,6 +15594,7 @@ mod tests {
             frame: Some(Arc::clone(&frame)),
             expression_pattern: false,
             pattern_accounting: false,
+            forwarded_expression: false,
             owns_staging_frame: true,
             deferred: std::collections::VecDeque::new(),
         };
@@ -14705,26 +15719,30 @@ mod tests {
     #[test]
     fn r1_generated_forms_reach_cst_but_both_wrappers_refuse_unconsumed_forms() {
         use crate::syntax::SyntaxContexts;
-        for (body, expected_kind, accepted) in [
-            ("type Item = Item", NodeKind::TypeDeclaration, true),
+        for (body, expected_kind, admitted, projected) in [
+            ("type Item = Item", NodeKind::TypeDeclaration, true, true),
             (
                 "newtype Item = Item(Int)",
                 NodeKind::NewtypeDeclaration,
+                true,
                 true,
             ),
             (
                 "type Item = Item\nderiving (marker)",
                 NodeKind::TypeDeclaration,
+                true,
                 false,
             ),
             (
                 "newtype Item = Item(Int)\nderiving (marker)",
                 NodeKind::NewtypeDeclaration,
+                true,
                 false,
             ),
             (
                 "pub syntax derive: (marker) => {}",
                 NodeKind::SyntaxDeclaration,
+                false,
                 false,
             ),
         ] {
@@ -14771,14 +15789,17 @@ mod tests {
             let projection = super::super::parse_macro_declarations(
                 &caller, span, None, output, &contexts, None,
             );
-            if accepted {
+            if admitted {
                 assert!(admission.is_ok(), "{body}: {admission:?}");
-                assert!(projection.is_ok(), "{body}: {projection:?}");
             } else {
                 assert!(
                     matches!(&admission, Err(super::super::MacroParseFailure::Invalid)),
                     "{body}: {admission:?}"
                 );
+            }
+            if projected {
+                assert!(projection.is_ok(), "{body}: {projection:?}");
+            } else {
                 assert!(
                     matches!(&projection, Err(super::super::MacroParseFailure::Invalid)),
                     "{body}: {projection:?}"
@@ -14870,23 +15891,40 @@ mod tests {
                     &mut budget,
                     None,
                 );
-                if has_clause {
-                    assert!(matches!(
-                        result,
-                        Err(DeclarationExpansionFailure::Projection(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                        ))
-                    ));
-                    assert_eq!(budget.consumed(), before);
-                    assert!(owners.is_empty());
-                } else {
-                    let module = result.expect("an ordinary captured declaration is accepted");
-                    assert_eq!(module.definitions.len(), 1);
-                    assert_eq!(owners.len(), 1);
-                    assert!(budget.consumed() > before);
-                }
+                let module = result.expect("the sink discards its captured declaration");
+                assert_eq!(module.definitions.len(), 1);
+                assert_eq!(output_definition_name(&module.definitions[0]).text, "main");
+                assert_eq!(owners.len(), 1);
+                assert!(budget.consumed() > before);
             }
         }
+        let surviving = SourceFile::new(
+            "surviving.ash",
+            "type Subject = Subject\nderiving (first)\n",
+        )
+        .unwrap();
+        let (tree, mut budget) = d5_source_tree(&surviving, &selected);
+        let before = budget.consumed();
+        let mut owners = Vec::new();
+        let failure = project_declaration_expansions(
+            &surviving,
+            &tree,
+            &selected,
+            &[],
+            &mut owners,
+            &mut budget,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(failure, DeclarationExpansionFailure::Syntax { diagnostics, resource: None }
+            if diagnostics.len() == 1
+                && diagnostics[0].reason == ParseReason::UnexpectedToken
+                && diagnostics[0].expected.as_deref() == Some("derive syntax")
+                && diagnostics[0].found.as_deref() == Some("first"))
+        );
+        assert!(budget.consumed() > before);
+        assert!(owners.is_empty());
     }
 
     fn d5_source_tree(
@@ -15460,6 +16498,256 @@ mod tests {
             super::super::MacroOutputPosition::Declarations,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn staged_identifier_transformer_pays_original_names_and_keeps_causes() {
+        use crate::{
+            syntax::{
+                DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode, SyntaxContexts,
+            },
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "staged-forms.ash",
+            "pub syntax declaration: (sink) $name:ident => using transformer\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("staged-caller.ash", "sink value\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let span = node_span(
+            &source,
+            child_nodes(tree.root().unwrap()).next().unwrap(),
+            &ProjectionTokens::source(tree.tokens()),
+        )
+        .unwrap();
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: selected[0].declaration.span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: selected[0].declaration.span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        for same_primary in [true, false] {
+            let mut parsed = d5_structured_tree(&source, &tree, &contexts);
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let Some(ConcreteElement::Token(name_index)) = node.children.first() else {
+                panic!("the staged invocation has a name")
+            };
+            let name_index = *name_index;
+            let argument = child_nodes(node)
+                .find(|child| child.kind == NodeKind::SyntaxArgument)
+                .unwrap();
+            let argument_index = argument
+                .children
+                .iter()
+                .find_map(|child| match child {
+                    ConcreteElement::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .unwrap();
+            let previous = if same_primary {
+                origin.clone()
+            } else {
+                span.into()
+            };
+            let mut location = DiagnosticLocation::new(previous.clone());
+            location.related.push(span.into());
+            location.frames.push(Arc::clone(&first));
+            let Some(MacroOutputNode::Identifier(name, issued_origin)) =
+                parsed.original_nodes.get_mut(&name_index)
+            else {
+                panic!("the staged name is an Identifier")
+            };
+            name.diagnostic = Some(Box::new(location.clone()));
+            *issued_origin = origin.clone();
+            let Some(MacroOutputNode::Identifier(argument, argument_origin)) =
+                parsed.original_nodes.get_mut(&argument_index)
+            else {
+                panic!("the staged argument is an Identifier")
+            };
+            argument.diagnostic = Some(Box::new(location.clone()));
+            *argument_origin = origin.clone();
+            let frames = [Arc::clone(&first), Arc::clone(&current)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: Some((selected[0].declaration.span, 1)),
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+                expression_budget: None,
+                quote_sites: None,
+            };
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let before = Arc::strong_count(&first);
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            assert!(
+                !charge_declaration_invocation(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    &mut measured,
+                )
+                .unwrap()
+            );
+            let total = measured.consumed();
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            assert_eq!(Arc::strong_count(&first), before);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), total);
+                let projected = project_declaration_invocation_node_inner(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    Some(&mut exact),
+                )
+                .unwrap();
+                assert_eq!(projected.name.text, "sink");
+                assert_eq!(projected.name.introduction, 0);
+                let actual = projected.name.diagnostic.as_deref().unwrap();
+                assert_eq!(actual.primary, origin);
+                assert_eq!(actual.related.len(), if same_primary { 1 } else { 2 });
+                if !same_primary {
+                    assert_eq!(actual.related[0], previous);
+                }
+                assert_eq!(actual.related.last(), Some(&MacroOrigin::Source(span)));
+                assert_eq!(actual.frames.len(), 2);
+                assert!(Arc::ptr_eq(&actual.frames[0], &first));
+                assert!(Arc::ptr_eq(&actual.frames[1], &current));
+                let [SurfaceSyntaxCapture::Identifier(capture)] = projected.captures.as_slice()
+                else {
+                    panic!("the real Identifier argument remains a capture")
+                };
+                assert_eq!(capture.name.text, "value");
+                assert_eq!(capture.name.diagnostic.as_deref(), Some(&location));
+                assert_eq!(capture.origin, origin);
+                drop(projected);
+                assert_eq!(Arc::strong_count(&first), before);
+            }
+        }
+    }
+
+    #[test]
+    fn staged_transformer_admission_stays_flat_and_capture_limited() {
+        use crate::{
+            syntax::ExpansionFrame, syntax::SyntaxContexts, syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        for (matcher, invocation, accepted) in [
+            ("", "sink\n", true),
+            ("word", "sink word\n", true),
+            ("$name:ident", "sink value\n", true),
+            ("$value:type", "sink Int\n", false),
+            ("$value:expr", "sink 42\n", false),
+        ] {
+            let forms = SourceFile::new(
+                "guard-forms.ash",
+                format!("pub syntax declaration: (sink) {matcher} => using transformer\n"),
+            )
+            .unwrap();
+            let selected = [h1_selection(&forms, 0, None)];
+            let source = SourceFile::new("guard-caller.ash", invocation).unwrap();
+            let tree = h1_tree(&source, &selected);
+            let contexts = SyntaxContexts::new(&selected, &[], &[]);
+            let span = node_span(
+                &source,
+                child_nodes(tree.root().unwrap()).next().unwrap(),
+                &ProjectionTokens::source(tree.tokens()),
+            )
+            .unwrap();
+            let parsed = d5_structured_tree(&source, &tree, &contexts);
+            let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            let frame = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: selected[0].declaration.span,
+            });
+            let frames = [Arc::clone(&frame)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+                expression_budget: None,
+                quote_sites: None,
+            };
+            let mut budget = SyntaxBudget::default();
+            let result =
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut budget);
+            if accepted {
+                result.unwrap_or_else(|error| panic!("{matcher}: {error:?}"));
+                let projected = project_declaration_invocation_node_inner(
+                    &source,
+                    node,
+                    &tokens,
+                    &contexts,
+                    true,
+                    Some(&mut budget),
+                )
+                .unwrap();
+                assert_eq!(projected.selection.name, "sink");
+                let incomplete = ProjectionTokens {
+                    name_frame: None,
+                    ..tokens
+                };
+                assert!(matches!(
+                    charge_declaration_invocation(
+                        &source,
+                        node,
+                        &incomplete,
+                        &contexts,
+                        true,
+                        &mut SyntaxBudget::default(),
+                    ),
+                    Err(DeclarationExpansionFailure::Projection(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                    ))
+                ));
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ),
+                    "{matcher}"
+                );
+            }
+        }
     }
 
     #[test]

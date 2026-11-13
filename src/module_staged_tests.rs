@@ -104,6 +104,356 @@ fn generator_definition_admits_canonical_builtin_before_source_census() {
 }
 
 #[test]
+fn generator_owning_module_keeps_its_private_syntax_dependency() {
+    let tree = Tree::new();
+    let entry = tree.write(
+        "entry.ash",
+        "import forms (syntax make)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let forms = tree.write(
+        "forms.ash",
+        "pub syntax declaration: (make) => {} with { $g from 0 step next }\n",
+    );
+    let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    while graph.pending.front().unwrap().canonical_path != forms {
+        graph.next_module().unwrap();
+    }
+    let staged = graph.pending.front().unwrap();
+    assert!(staged.surface.needs_generator_dependency);
+    assert!(!staged.surface.syntax_import_quote_dependency);
+    let edge = *staged
+        .dependencies
+        .iter()
+        .find(|edge| edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax())
+        .unwrap();
+    let loaded = graph.next_module().unwrap().unwrap();
+    assert!(loaded.dependencies().contains(&edge));
+}
+
+#[test]
+fn targeted_syntax_imports_provision_only_one_real_quote_dependency() {
+    let tree = Tree::new();
+    tree.write("forms.ash", "pub syntax declaration: (make) => {}\n");
+    for (name, header, eligible, expected_private) in [
+        ("ordinary.ash", "import forms as Forms\n", false, None),
+        (
+            "implicit.ash",
+            "import forms (syntax make)\n",
+            true,
+            Some(true),
+        ),
+        (
+            "explicit.ash",
+            "import @builtin.compiler.syntax as Syntax\nimport forms (syntax make)\n",
+            true,
+            Some(false),
+        ),
+    ] {
+        let entry = tree.write(name, &format!("{header}main : Unit -> Int\nmain () = 42\n"));
+        let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        let staged = graph
+            .pending
+            .iter()
+            .find(|module| module.canonical_path == entry)
+            .unwrap();
+        assert!(
+            !crate::lexer::lex(&staged.source)
+                .unwrap()
+                .needs_quote_dependency(),
+            "{name} has no lexical quote"
+        );
+        assert_eq!(staged.surface.needs_quote_dependency, eligible, "{name}");
+        let edges = staged
+            .dependencies
+            .iter()
+            .filter(|edge| edge.target().is_builtin_compiler_syntax())
+            .collect::<Vec<_>>();
+        assert_eq!(edges.len(), usize::from(eligible), "{name}");
+        if let Some(expected_private) = expected_private {
+            assert_eq!(edges[0].is_compiler_private(), expected_private, "{name}");
+        }
+    }
+}
+
+#[test]
+fn targeted_syntax_quote_activation_pays_and_preserves_diagnostics() {
+    for trailing in ["", "\r"] {
+        let text =
+            format!("import forms (syntax make)\nmain : Unit -> Int\nmain () = 42\n{trailing}");
+        let run = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let result = parse_graph_module(
+                Path::new("selection.ash"),
+                text.clone(),
+                None,
+                &mut budget,
+                BodyMode::Header,
+            );
+            (result, budget.consumed())
+        };
+        let (measured, total) = run(SYNTAX_WORK_LIMIT);
+        assert!(measured.unwrap().1.needs_quote_dependency);
+        let (short, consumed) = run(total - 1);
+        let Err(LoadGraphError::Syntax(failure)) = short else {
+            panic!("the activation must refuse at the one-unit-short boundary");
+        };
+        assert_eq!(
+            failure.resource,
+            Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+        );
+        assert_eq!(consumed, total - 1);
+        assert_eq!(failure.lexical.len(), usize::from(!trailing.is_empty()));
+        if !trailing.is_empty() {
+            assert_eq!(failure.lexical[0].reason, LexReason::BareCarriageReturn);
+        }
+        assert!(failure.parser.is_empty());
+        for _ in 0..2 {
+            let (exact, consumed) = run(total);
+            assert!(exact.unwrap().1.needs_quote_dependency);
+            assert_eq!(consumed, total);
+        }
+    }
+}
+
+#[test]
+fn adapter_omits_only_the_exact_private_syntax_edge_without_quotes() {
+    use std::{cell::RefCell, sync::Arc};
+
+    let tree = Tree::new();
+    tree.write("forms.ash", "pub syntax declaration: (make) => {}\n");
+    for (name, explicit, identity, introduction, omit) in [
+        ("implicit", false, 0, None, true),
+        ("explicit", true, 0, None, false),
+        ("absent", false, 1, None, false),
+        ("mismatch", false, 2, None, false),
+        ("introduction", false, 0, Some(1), false),
+    ] {
+        let header = if explicit {
+            "import @builtin.compiler.syntax as Syntax\nimport forms (syntax make)\n"
+        } else {
+            "import forms (syntax make)\n"
+        };
+        let entry = tree.write(
+            &format!("{name}.ash"),
+            &format!("{header}main : Unit -> Int\nmain () = 42\n"),
+        );
+        let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        let staged = graph
+            .pending
+            .iter()
+            .find(|module| module.canonical_path == entry)
+            .unwrap();
+        let parsed = crate::parser::parse(crate::lexer::lex(&staged.source).unwrap());
+        let definition = crate::parser::project_module(&staged.source, &parsed)
+            .unwrap()
+            .definitions
+            .pop()
+            .unwrap();
+        let original = staged.dependencies.clone();
+        let builtin = original
+            .iter()
+            .find(|edge| edge.target().is_builtin_compiler_syntax())
+            .unwrap()
+            .target();
+        let supplied = match identity {
+            0 => Some(builtin),
+            1 => None,
+            2 => Some(staged.id),
+            _ => unreachable!(),
+        };
+        let mut expected = original.clone();
+        if omit {
+            let index = expected
+                .iter()
+                .position(|edge| edge.is_compiler_private() && edge.target() == builtin)
+                .unwrap();
+            expected.remove(index);
+        }
+        let build = |budget: &mut SyntaxBudget, slot: &RefCell<Option<Arc<SourceFile>>>| {
+            let caller = RefCell::new(None);
+            let loan = StagedModuleLoan {
+                id: staged.id,
+                source_id: staged.source.id(),
+                canonical_path: &staged.canonical_path,
+                imports: &staged.surface.imports,
+                dependencies: &staged.dependencies,
+                span: staged.surface.span,
+                source_snapshot: slot,
+                caller_quote_owner: &caller,
+                quote_projection: None,
+            };
+            loan.adapter_view(
+                &staged.source,
+                definition.clone(),
+                Vec::new(),
+                introduction,
+                supplied,
+                budget,
+            )
+        };
+        let slot = RefCell::new(None);
+        let mut measured = SyntaxBudget::default();
+        let view = build(&mut measured, &slot).unwrap();
+        let used = measured.consumed();
+        assert_eq!(view.dependencies(), expected, "{name}");
+        assert_eq!(view.surface().imports, staged.surface.imports, "{name}");
+        assert_eq!(staged.dependencies, original, "{name}");
+        assert!(Arc::ptr_eq(
+            view.retained_source(),
+            slot.borrow().as_ref().unwrap()
+        ));
+        let weak = Arc::downgrade(view.retained_source());
+        drop(view);
+        drop(slot);
+        assert!(weak.upgrade().is_none(), "{name}");
+
+        let short_slot = RefCell::new(None);
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(build(&mut short, &short_slot).is_err(), "{name}");
+        assert!(short_slot.borrow().is_none(), "{name}");
+        for _ in 0..2 {
+            let exact_slot = RefCell::new(None);
+            let mut exact = SyntaxBudget::with_limit(used);
+            let view = build(&mut exact, &exact_slot).unwrap();
+            assert_eq!(exact.consumed(), used, "{name}");
+            assert_eq!(view.dependencies(), expected, "{name}");
+            assert!(Arc::ptr_eq(
+                view.retained_source(),
+                exact_slot.borrow().as_ref().unwrap()
+            ));
+        }
+    }
+}
+
+#[test]
+fn final_potential_quote_edge_is_prepaid_before_owner_commit() {
+    #[derive(Clone, Copy)]
+    enum Witness {
+        Matched,
+        Missing,
+        OtherEdge,
+    }
+
+    let tree = Tree::new();
+    let forms = tree.write(
+        "forms.ash",
+        "import @builtin.compiler.syntax as Syntax\npub syntax declaration: (make) => {}\n",
+    );
+    let other = tree.write(
+        "other.ash",
+        "import forms (syntax make)\nmain : Unit -> Int\nmain () = 0\n",
+    );
+    let entry = tree.write(
+        "entry.ash",
+        "import forms (syntax make)\nimport other as Other\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let run = |limit, witness| {
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        while graph.pending.front().unwrap().canonical_path != entry {
+            graph.next_module().unwrap();
+        }
+        let original_edge = graph.next_quote_dependency().unwrap();
+        assert!(original_edge.is_compiler_private());
+        let owner = graph
+            .loaded
+            .iter()
+            .find(|module| module.canonical_path() == forms)
+            .unwrap();
+        assert!(owner.dependencies().iter().any(|edge| {
+            !edge.is_compiler_private() && edge.target() == original_edge.target()
+        }));
+        let other_edge = *graph
+            .loaded
+            .iter()
+            .find(|module| module.canonical_path() == other)
+            .unwrap()
+            .dependencies()
+            .iter()
+            .find(|edge| edge.is_compiler_private() && edge.target() == original_edge.target())
+            .unwrap();
+        assert_ne!(other_edge, original_edge);
+        let supplied = match witness {
+            Witness::Matched => Some(original_edge),
+            Witness::Missing => None,
+            Witness::OtherEdge => Some(other_edge),
+        };
+        let staged = graph.pending.pop_front().unwrap();
+        let original = staged.dependencies.clone();
+        let span = staged.surface.span;
+        let mut owners = vec![crate::syntax::SyntaxOwner {
+            owner: None,
+            caller_quote_owner: None,
+            declaration: span,
+            import_span: span,
+        }];
+        let mut budget = SyntaxBudget::with_limit(limit);
+        let mut ordinal = 11;
+        let mut location = None;
+        let result = staged.into_loaded(
+            &mut budget,
+            &[],
+            &[],
+            &mut owners,
+            None,
+            (None, &mut ordinal, supplied),
+            &mut location,
+        );
+        (
+            result,
+            budget.consumed(),
+            owners,
+            ordinal,
+            original_edge,
+            original,
+        )
+    };
+    let (measured, used, owners, ordinal, edge, original) =
+        run(SYNTAX_WORK_LIMIT, Witness::Matched);
+    let loaded = measured.unwrap();
+    assert_eq!(ordinal, 11);
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0].owner, None);
+    let mut expected = original;
+    expected.remove(
+        expected
+            .iter()
+            .position(|candidate| *candidate == edge)
+            .unwrap(),
+    );
+    assert_eq!(loaded.dependencies(), expected);
+
+    let (short, _, owners, ordinal, _, _) = run(used - 1, Witness::Matched);
+    let Err(LoadGraphError::Syntax(failure)) = short else {
+        panic!("the final handoff must refuse before publishing a module")
+    };
+    assert_eq!(
+        failure.resource,
+        Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+    );
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0].owner, None);
+    assert!(owners[0].caller_quote_owner.is_none());
+    assert_eq!(owners[0].declaration.source(), failure.source.id());
+    assert_eq!(owners[0].declaration, owners[0].import_span);
+    assert_eq!(ordinal, 11);
+    for _ in 0..2 {
+        let (exact, consumed, _, ordinal, _, _) = run(used, Witness::Matched);
+        assert!(exact.is_ok());
+        assert_eq!(consumed, used);
+        assert_eq!(ordinal, 11);
+    }
+    for witness in [Witness::Missing, Witness::OtherEdge] {
+        let (loaded, _, owners, ordinal, _, original) = run(SYNTAX_WORK_LIMIT, witness);
+        assert_eq!(loaded.unwrap().dependencies(), original);
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, None);
+        assert!(owners[0].caller_quote_owner.is_none());
+        assert_eq!(ordinal, 11);
+    }
+}
+
+#[test]
 fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     use std::{cell::RefCell, sync::Arc};
 
@@ -153,7 +503,6 @@ fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
     ));
     let weak = Arc::downgrade(view.retained_source());
     drop(view);
-    drop(loan);
     drop(slot);
     assert!(weak.upgrade().is_none());
 
@@ -351,7 +700,6 @@ fn caller_quote_record_snapshot_is_prepaid_shared_and_retryable() {
                 assert_eq!(Arc::strong_count(retained_generators), baseline + 1);
                 let weak = Arc::downgrade(&owner);
                 drop(owner);
-                drop(loan);
                 drop(owner_slot);
                 drop(source_slot);
                 assert!(weak.upgrade().is_none());
@@ -2105,15 +2453,17 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
                     panic!("expected a graph refusal: {failure:?}");
                 };
                 if path.contains("expression-host/") {
-                    assert!(matches!(
-                        diagnostic.failure(),
-                        LoadGraphError::Projection {
-                            error: crate::parser::ProjectionError::ResourceLimit(
-                                ResourceFailure::SyntaxWork { limit }
-                            ),
-                            ..
-                        } if *limit == total - 1
-                    ));
+                    let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                        panic!("expected a syntax resource refusal: {diagnostic:?}");
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+                    );
+                    assert!(failure.lexical.is_empty());
+                    assert!(failure.parser.is_empty());
+                    assert!(failure.import_span.is_none());
+                    assert_eq!(short.syntax_budget.test_remaining(), 5);
                 } else {
                     let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
                         panic!("expected a syntax resource refusal: {diagnostic:?}");

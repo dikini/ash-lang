@@ -1,6 +1,13 @@
 //! Compiler syntax services for one checked Ash transformer invocation.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+use triomphe::Arc as FallibleArc;
 
 use super::{
     HeapCell, RuntimeFailure, Value, allocate_heap, borrowed_bytes, read_integer, resolve_location,
@@ -95,46 +102,107 @@ fn check_declaration_contents_at(
     prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), RuntimeFailure> {
-    // The capture retains one Arc layer before any delimiter groups.
-    let prefix = crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?;
+    crate::syntax::charge_declaration_retention(contents, prefix, budget)
+        .map_err(type_retention_failure)
+}
+
+/// Inspect repeated capture owners on the same budget without cloning them.
+fn check_repeated_capture(
+    repeated: &crate::surface::SurfaceRepeatedCapture,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, RuntimeFailure> {
+    let depth = crate::syntax::type_depth(0, 1).map_err(syntax_failure)?;
     budget
-        .charge_units(contents.len())
+        .charge_units(repeated.values.len())
         .map_err(syntax_failure)?;
-    let mut pending = contents
+    let mut pending = repeated
+        .values
         .iter()
-        .map(|node| (node, prefix))
+        .map(|value| (value, depth))
         .collect::<Vec<_>>();
-    while let Some((node, depth)) = pending.pop() {
+    let mut has_declaration = false;
+    while let Some((value, depth)) = pending.pop() {
         budget.charge().map_err(syntax_failure)?;
-        match node {
-            MacroOutputNode::Identifier(name, origin) => {
-                crate::syntax::charge_type_name_inspection(name, depth, budget)
-                    .map_err(syntax_failure)?;
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
-            }
-            MacroOutputNode::Token(_, _, origin) => {
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
-            }
-            MacroOutputNode::Group(_, children, origin) => {
-                let depth = crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?;
-                crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
+        match value {
+            SurfaceSyntaxCapture::Repeated(nested) => {
+                let next = crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?;
                 budget
-                    .charge_units(children.len())
+                    .charge_units(nested.values.len())
                     .map_err(syntax_failure)?;
                 let live = pending.len();
-                let requested = live.saturating_add(children.len());
+                let requested = live.saturating_add(nested.values.len());
                 if requested > pending.capacity() {
                     budget
                         .charge_units(requested.saturating_add(live))
                         .map_err(syntax_failure)?;
-                    pending.reserve_exact(children.len());
+                    pending.reserve_exact(nested.values.len());
                 }
-                pending.extend(children.iter().map(|child| (child, depth)));
+                pending.extend(nested.values.iter().map(|value| (value, next)));
             }
-            _ => return Err(RuntimeFailure::InvalidControlState),
+            SurfaceSyntaxCapture::Declaration(capture) => {
+                has_declaration = true;
+                check_declaration_contents_at(&capture.contents, depth, budget)?;
+            }
+            SurfaceSyntaxCapture::Identifier(capture) => {
+                crate::syntax::charge_type_name_inspection(&capture.name, depth, budget)
+                    .map_err(syntax_failure)?;
+                crate::syntax::charge_type_origin(&capture.origin, depth, budget)
+                    .map_err(syntax_failure)?;
+            }
+            SurfaceSyntaxCapture::Type(capture) => {
+                crate::syntax::charge_new_type_retention(capture, depth, budget)
+                    .map_err(type_retention_failure)?;
+            }
+            SurfaceSyntaxCapture::Pattern(capture) => {
+                require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
+                    capture, depth, budget,
+                ))?;
+            }
+            SurfaceSyntaxCapture::Expression(capture) => {
+                require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                    capture, depth, budget,
+                ))?;
+            }
         }
     }
-    Ok(())
+    Ok(has_declaration)
+}
+
+#[derive(Debug)]
+struct AdvanceObservation {
+    live: AtomicBool,
+    locations: OnceLock<crate::syntax::AdvanceLocations>,
+}
+
+/// The only owner that can retire a completion observation.
+#[derive(Debug)]
+pub(super) struct AdvanceGuard {
+    observation: FallibleArc<AdvanceObservation>,
+}
+
+impl Drop for AdvanceGuard {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_GUARD_DROPS
+            .set(super::machine_test_hooks::ADVANCE_GUARD_DROPS.get() + 1);
+        self.observation.live.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+struct AdvanceRuntime {
+    sites: Vec<crate::elaborate::CheckedAdvanceSite>,
+    current: Option<(NodeId, FallibleArc<AdvanceObservation>)>,
+    failure: Option<crate::syntax::AdvanceLocations>,
+}
+
+#[derive(Debug)]
+pub(super) struct AdvanceReference(FallibleArc<AdvanceObservation>);
+
+#[derive(Clone, Copy)]
+pub(super) enum AdvanceEntry {
+    Completion(crate::elaborate::CheckedAdvanceSite),
+    Application(crate::elaborate::CheckedAdvanceSite),
 }
 
 #[derive(Debug)]
@@ -144,6 +212,7 @@ pub(super) struct SyntaxHost<'inv> {
     pub(super) ops: EffectId,
     pub(super) started: bool,
     pub(super) steps_left: usize,
+    advance: Option<AdvanceRuntime>,
     invocation: Arc<()>,
     frame: Arc<ExpansionFrame>,
     source: SourceFile,
@@ -172,6 +241,17 @@ pub(super) struct SyntaxHost<'inv> {
 }
 
 impl<'inv> SyntaxHost<'inv> {
+    #[cfg(test)]
+    fn experiment_cut(&mut self, phase: super::machine_test_hooks::AdvanceCutPoint) {
+        use super::machine_test_hooks as hooks;
+        if let Some((selected, requested)) = hooks::ADVANCE_CUT.get()
+            && selected == phase
+        {
+            hooks::ADVANCE_CUT.set(None);
+            hooks::ADVANCE_CUT_BEFORE.set(Some(self.steps_left));
+            self.steps_left = self.steps_left.min(requested);
+        }
+    }
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -250,7 +330,9 @@ impl<'inv> SyntaxHost<'inv> {
                             capture, 0, budget,
                         ))?;
                     }
-                    _ => return Err(RuntimeFailure::InvalidControlState),
+                    SurfaceSyntaxCapture::Repeated(capture) => {
+                        has_declaration |= check_repeated_capture(capture, budget)?;
+                    }
                 }
             }
         }
@@ -361,7 +443,9 @@ impl<'inv> SyntaxHost<'inv> {
                                 budget,
                             ))?;
                         }
-                        _ => return Err(RuntimeFailure::InvalidControlState),
+                        SurfaceSyntaxCapture::Repeated(_) => {
+                            budget.charge().map_err(syntax_failure)?; // retained Arc
+                        }
                     }
                 }
                 copied.push(capture.clone());
@@ -375,6 +459,7 @@ impl<'inv> SyntaxHost<'inv> {
             ops: entry.ops,
             started: false,
             steps_left: 1_000_000,
+            advance: None,
             invocation: Arc::new(()),
             frame,
             source: source.clone(),
@@ -397,6 +482,328 @@ impl<'inv> SyntaxHost<'inv> {
             tokens: Vec::new(),
             constructors,
             operations,
+        })
+    }
+
+    fn charge_advance(&mut self, units: usize) -> Result<(), RuntimeFailure> {
+        self.steps_left = self
+            .steps_left
+            .checked_sub(units)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        Ok(())
+    }
+
+    pub(super) fn install_advance(
+        &mut self,
+        capsule: &crate::driver::GeneratorDiagnosticCapsule<'_>,
+        entry: &ValidatedMacroEntry,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::Install);
+        self.charge_advance(1)?;
+        if !capsule.matches_entry(entry) || self.advance.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let sites = capsule.sites();
+        self.charge_advance(
+            sites
+                .len()
+                .checked_mul(4)
+                .ok_or(RuntimeFailure::ResourceCapacity)?,
+        )?;
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(sites.len())
+            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        owned.extend_from_slice(sites);
+        self.advance = Some(AdvanceRuntime {
+            sites: owned,
+            current: None,
+            failure: None,
+        });
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_INSTALLED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn advance_entry(
+        &mut self,
+        node: NodeId,
+    ) -> Result<Option<AdvanceEntry>, RuntimeFailure> {
+        #[cfg(test)]
+        if self
+            .advance
+            .as_ref()
+            .is_some_and(|state| state.sites.iter().any(|site| site.completion == node))
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::CompletionLookup);
+        }
+        #[cfg(test)]
+        if self
+            .advance
+            .as_ref()
+            .is_some_and(|state| state.sites.iter().any(|site| site.application == node))
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ApplicationLookup);
+        }
+        let Some(count) = self.advance.as_ref().map(|state| state.sites.len()) else {
+            return Ok(None);
+        };
+        for index in 0..count {
+            // Prepay all three copied IDs and both node comparisons.
+            self.charge_advance(5)?;
+            let site = self
+                .advance
+                .as_ref()
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .sites[index];
+            if site.completion == node {
+                #[cfg(test)]
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_LOOKED_UP,
+                );
+                return Ok(Some(AdvanceEntry::Completion(site)));
+            }
+            if site.application == node {
+                #[cfg(test)]
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                );
+                return Ok(Some(AdvanceEntry::Application(site)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn begin_advance(
+        &mut self,
+        site: crate::elaborate::CheckedAdvanceSite,
+    ) -> Result<AdvanceGuard, RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::GuardCreation);
+        self.charge_advance(2)?;
+        if self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .is_some_and(|(_, current)| current.live.load(Ordering::Acquire))
+        {
+            // This is the explicit single-slot experiment counterexample stop.
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        // Allocation, Arc retain, retirement and the bounded final failure copy
+        // are all prepaid here, before any later zero-step error edge.
+        self.charge_advance(10)?;
+        #[cfg(test)]
+        if super::machine_test_hooks::FAIL_ADVANCE_ARC.replace(false) {
+            return Err(RuntimeFailure::HeapCapacity);
+        }
+        let observation = FallibleArc::try_new(AdvanceObservation {
+            live: AtomicBool::new(true),
+            locations: OnceLock::new(),
+        })
+        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        let guard = AdvanceGuard {
+            observation: FallibleArc::clone(&observation),
+        };
+        self.advance
+            .as_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .current = Some((site.completion, observation));
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_GUARD_CREATED,
+        );
+        Ok(guard)
+    }
+
+    pub(super) fn application_advance(
+        &mut self,
+        site: crate::elaborate::CheckedAdvanceSite,
+    ) -> Result<AdvanceReference, RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ReferenceCreation);
+        // Account for completion association, liveness and the passive retain.
+        self.charge_advance(3)?;
+        let (completion, current) = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if *completion != site.completion || !current.live.load(Ordering::Acquire) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        {
+            let reference = AdvanceReference(FallibleArc::clone(current));
+            super::machine_test_hooks::ADVANCE_STAGES.set(
+                super::machine_test_hooks::ADVANCE_STAGES.get()
+                    | super::machine_test_hooks::ADVANCE_REFERENCE_CREATED,
+            );
+            Ok(reference)
+        }
+        #[cfg(not(test))]
+        {
+            Ok(AdvanceReference(FallibleArc::clone(current)))
+        }
+    }
+
+    pub(super) fn verify_advance(
+        &mut self,
+        reference: &AdvanceReference,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::ReferenceVerification);
+        self.charge_advance(2)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &reference.0) || !current.live.load(Ordering::Acquire) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_REFERENCE_VERIFIED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn verify_advance_guard(
+        &mut self,
+        guard: &AdvanceGuard,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::GuardReturn);
+        self.charge_advance(2)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &guard.observation)
+            || !current.live.load(Ordering::Acquire)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_GUARD_VERIFIED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn pay_advance_box(&mut self) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        {
+            self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::FramePayment);
+            let result = self.charge_advance(3);
+            if result.is_ok() {
+                super::machine_test_hooks::ADVANCE_STAGES.set(
+                    super::machine_test_hooks::ADVANCE_STAGES.get()
+                        | super::machine_test_hooks::ADVANCE_FRAME_PAID,
+                );
+            }
+            result
+        }
+        #[cfg(not(test))]
+        {
+            self.charge_advance(3)
+        }
+    }
+
+    pub(super) fn observe_advance(
+        &mut self,
+        reference: &AdvanceReference,
+        origin: &crate::source::Origin,
+    ) -> Result<(), RuntimeFailure> {
+        #[cfg(test)]
+        self.experiment_cut(super::machine_test_hooks::AdvanceCutPoint::OriginProjection);
+        self.charge_advance(3)?;
+        let current = self
+            .advance
+            .as_ref()
+            .and_then(|state| state.current.as_ref())
+            .map(|(_, observation)| observation)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !FallibleArc::ptr_eq(current, &reference.0)
+            || !current.live.load(Ordering::Acquire)
+            || current.locations.get().is_some()
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let mut current_origin = origin;
+        let locations = loop {
+            self.charge_advance(1)?;
+            match current_origin {
+                crate::source::Origin::Source(span) => {
+                    self.charge_advance(1)?;
+                    break crate::syntax::AdvanceLocations {
+                        primary: *span,
+                        definition: None,
+                    };
+                }
+                crate::source::Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    self.charge_advance(2)?;
+                    break crate::syntax::AdvanceLocations {
+                        primary: *invocation,
+                        definition: Some(*definition),
+                    };
+                }
+                crate::source::Origin::Generated { cause, .. } => current_origin = cause,
+                crate::source::Origin::Related { primary, .. } => current_origin = primary,
+            }
+        };
+        // No partial projection is published if the final publication is unpaid.
+        self.charge_advance(2)?;
+        reference
+            .0
+            .locations
+            .set(locations)
+            .map_err(|_| RuntimeFailure::InvalidControlState)?;
+        #[cfg(test)]
+        super::machine_test_hooks::ADVANCE_STAGES.set(
+            super::machine_test_hooks::ADVANCE_STAGES.get()
+                | super::machine_test_hooks::ADVANCE_ORIGIN_PUBLISHED,
+        );
+        Ok(())
+    }
+
+    pub(super) fn snapshot_advance_guard(&mut self, guard: &AdvanceGuard) {
+        // This copy and live-state check were reserved when this guard was admitted.
+        let value = if guard.observation.live.load(Ordering::Acquire) {
+            guard.observation.locations.get().copied()
+        } else {
+            None
+        };
+        if let Some(state) = &mut self.advance {
+            state.failure = value;
+        }
+    }
+
+    pub(super) fn advance_failure(&self) -> Option<crate::syntax::AdvanceLocations> {
+        let state = self.advance.as_ref()?;
+        state.failure.or_else(|| {
+            let (_, observation) = state.current.as_ref()?;
+            if observation.live.load(Ordering::Acquire) {
+                observation.locations.get().copied()
+            } else {
+                None
+            }
         })
     }
 
@@ -905,6 +1312,184 @@ impl<'inv> SyntaxHost<'inv> {
         )?))
     }
 
+    /// Issue one leaf of a repeated capture using the ordinary invocation arenas.
+    fn repeated_capture_leaf(
+        &mut self,
+        capture: &SurfaceSyntaxCapture,
+        depth: usize,
+        heap: &mut Vec<HeapCell>,
+    ) -> Result<Value, RuntimeFailure> {
+        match capture {
+            SurfaceSyntaxCapture::Declaration(capture) => {
+                let budget = self
+                    .syntax_work
+                    .as_deref_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                check_declaration_contents_at(&capture.contents, depth, budget)?;
+                budget.charge_units(3).map_err(syntax_failure)?;
+                reserve_type_push(&mut self.declarations, Some(budget), true)?;
+                let index = self.declarations.len();
+                self.declarations.push(capture.clone());
+                let handle = self.handle(CompilerSyntaxHandleKind::Declaration(index));
+                self.construct(heap, "DeclarationCapture", Some(handle))
+            }
+            SurfaceSyntaxCapture::Identifier(capture) => {
+                let budget = self
+                    .syntax_work
+                    .as_deref_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                crate::syntax::charge_type_name_copy(&capture.name, depth, budget)
+                    .map_err(syntax_failure)?;
+                crate::syntax::charge_type_origin_copy(&capture.origin, depth, budget)
+                    .map_err(syntax_failure)?;
+                budget.charge_units(5).map_err(syntax_failure)?;
+                let name = capture.name.clone();
+                let origin = self.issue_origin_inner(capture.origin.clone(), true)?;
+                reserve_type_push(&mut self.identifiers, self.syntax_work.as_deref_mut(), true)?;
+                let index = self.identifiers.len();
+                self.identifiers.push(name);
+                let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
+                let fields = vec![identifier, origin].into_boxed_slice();
+                let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
+                self.construct(heap, "IdentifierCapture", Some(fields))
+            }
+            SurfaceSyntaxCapture::Type(capture) => {
+                let budget = self
+                    .syntax_work
+                    .as_deref_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                crate::syntax::charge_new_type_retention(capture, depth, budget)
+                    .map_err(type_retention_failure)?;
+                crate::syntax::charge_new_type_copy(
+                    &capture.ty,
+                    crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?,
+                    false,
+                    budget,
+                )
+                .map_err(syntax_failure)?;
+                budget.charge_units(2).map_err(syntax_failure)?;
+                reserve_type_push(&mut self.types, Some(budget), true)?;
+                let index = self.types.len();
+                self.types.push(capture.clone());
+                let handle = self.handle(CompilerSyntaxHandleKind::Type(index));
+                self.construct(heap, "TypeCapture", Some(handle))
+            }
+            SurfaceSyntaxCapture::Pattern(capture) => {
+                let budget = self
+                    .syntax_work
+                    .as_deref_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
+                    capture, depth, budget,
+                ))?;
+                require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
+                    &capture.pattern,
+                    crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?,
+                    false,
+                    budget,
+                ))?;
+                budget.charge_units(2).map_err(syntax_failure)?;
+                reserve_type_push(&mut self.patterns, Some(budget), true)?;
+                let index = self.patterns.len();
+                self.patterns.push(capture.clone());
+                let handle = self.handle(CompilerSyntaxHandleKind::Pattern(index));
+                self.construct(heap, "PatternCapture", Some(handle))
+            }
+            SurfaceSyntaxCapture::Expression(capture) => {
+                let budget = self
+                    .syntax_work
+                    .as_deref_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                    capture, depth, budget,
+                ))?;
+                require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                    &capture.expression,
+                    crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?,
+                    false,
+                    budget,
+                ))?;
+                budget.charge_units(2).map_err(syntax_failure)?;
+                reserve_type_push(&mut self.expressions, Some(budget), true)?;
+                let index = self.expressions.len();
+                self.expressions.push(capture.clone());
+                let handle = self.handle(CompilerSyntaxHandleKind::Expression(index));
+                self.construct(heap, "ExpressionCapture", Some(handle))
+            }
+            SurfaceSyntaxCapture::Repeated(_) => Err(RuntimeFailure::InvalidControlState),
+        }
+    }
+
+    fn prepend_capture(
+        &mut self,
+        capture: Value,
+        rest: Value,
+        heap: &mut Vec<HeapCell>,
+    ) -> Result<Value, RuntimeFailure> {
+        self.charge(3)?; // tuple cell and its two fields
+        let fields = vec![capture, rest].into_boxed_slice();
+        let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
+        self.construct(heap, "MoreCaptures", Some(fields))
+    }
+
+    fn repeated_capture_result(
+        &mut self,
+        repeated: &crate::surface::SurfaceRepeatedCapture,
+        heap: &mut Vec<HeapCell>,
+    ) -> Result<Value, RuntimeFailure> {
+        struct Frame<'a> {
+            values: std::iter::Rev<std::slice::Iter<'a, SurfaceSyntaxCapture>>,
+            rest: Option<Value>,
+            depth: usize,
+        }
+
+        let depth = crate::syntax::type_depth(0, 1).map_err(syntax_failure)?;
+        let rest = self.construct(heap, "NoCaptures", None)?;
+        let mut frames = Vec::new();
+        self.charge(1)?;
+        reserve_type_push(&mut frames, self.syntax_work.as_deref_mut(), true)?;
+        frames.push(Frame {
+            values: repeated.values.iter().rev(),
+            rest: Some(rest),
+            depth,
+        });
+        loop {
+            self.charge(1)?;
+            let next = frames.last_mut().and_then(|frame| frame.values.next());
+            match next {
+                Some(SurfaceSyntaxCapture::Repeated(child)) => {
+                    let depth = crate::syntax::type_depth(frames.last().unwrap().depth, 1)
+                        .map_err(syntax_failure)?;
+                    let rest = self.construct(heap, "NoCaptures", None)?;
+                    self.charge(1)?;
+                    reserve_type_push(&mut frames, self.syntax_work.as_deref_mut(), true)?;
+                    frames.push(Frame {
+                        values: child.values.iter().rev(),
+                        rest: Some(rest),
+                        depth,
+                    });
+                }
+                Some(capture) => {
+                    let depth = frames.last().unwrap().depth;
+                    let capture = self.repeated_capture_leaf(capture, depth, heap)?;
+                    let rest = frames.last_mut().unwrap().rest.take().unwrap();
+                    frames.last_mut().unwrap().rest =
+                        Some(self.prepend_capture(capture, rest, heap)?);
+                }
+                None => {
+                    let frame = frames.pop().unwrap();
+                    let capture = self.construct(heap, "RepeatedCapture", frame.rest)?;
+                    if let Some(parent) = frames.last_mut() {
+                        let rest = parent.rest.take().unwrap();
+                        parent.rest = Some(self.prepend_capture(capture, rest, heap)?);
+                    } else {
+                        return self.construct(heap, "Captured", Some(capture));
+                    }
+                }
+            }
+        }
+    }
+
     fn single_token(&mut self, spelling: &str) -> Result<Option<TokenKind>, RuntimeFailure> {
         let Some(budget) = self.syntax_work.as_deref_mut() else {
             return single_token(spelling);
@@ -1027,9 +1612,17 @@ impl<'inv> SyntaxHost<'inv> {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 let index = read_integer(index, heap, work)?.to_usize();
+                #[cfg(test)]
+                let capture_slot = index;
                 let capture = index.and_then(|index| self.captures.get(index));
-                if matches!(capture, Some(SurfaceSyntaxCapture::Repeated(_))) {
-                    return Err(RuntimeFailure::InvalidControlState);
+                if let Some(SurfaceSyntaxCapture::Repeated(repeated)) = capture {
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    budget.charge().map_err(syntax_failure)?; // retained request Arc
+                    let repeated = Arc::clone(repeated);
+                    return self.repeated_capture_result(&repeated, heap);
                 }
                 if let Some(SurfaceSyntaxCapture::Declaration(declaration)) = capture {
                     let Some(budget) = self.syntax_work.as_deref_mut() else {
@@ -1156,6 +1749,17 @@ impl<'inv> SyntaxHost<'inv> {
                         )?;
                         self.identifiers.push(capture.name);
                         let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
+                        #[cfg(test)]
+                        let identifier = {
+                            let mut identifier = identifier;
+                            if let (Some(slot), Some(observe)) = (
+                                capture_slot,
+                                super::machine_test_hooks::IDENTIFIER_CAPTURE_OBSERVER.get(),
+                            ) {
+                                observe(slot, &mut identifier);
+                            }
+                            identifier
+                        };
                         let fields = vec![identifier, origin].into_boxed_slice();
                         let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
                         let capture = self.construct(heap, "IdentifierCapture", Some(fields))?;
@@ -1523,6 +2127,62 @@ impl<'inv> SyntaxHost<'inv> {
                     }
                 }
             }
+            "parse_declaration" => {
+                let (input, syntax) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) || self.syntax_work.is_none()
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let output = self.transfer_syntax_inner(syntax, heap, 0, true)?;
+                let result = crate::parser::parse_macro_declaration(
+                    &self.source,
+                    self.frame.invocation,
+                    output,
+                    self.contexts
+                        .as_deref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
+                    self.syntax_work
+                        .as_deref_mut()
+                        .expect("the declaration route owns a budget"),
+                );
+                match result {
+                    Ok(capture) => {
+                        self.charge(2)?; // arena slot and issued handle
+                        let live = self.declarations.len();
+                        if live == self.declarations.capacity() {
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
+                            self.declarations.reserve_exact(1);
+                        }
+                        let index = self.declarations.len();
+                        self.declarations.push(capture);
+                        let fragment = self.handle(CompilerSyntaxHandleKind::Declaration(index));
+                        self.construct(heap, "ParsedDeclaration", Some(fragment))
+                    }
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.charge(2)?; // failure slot and issued handle
+                        let live = self.parse_failures.len();
+                        if live == self.parse_failures.capacity() {
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
+                            self.parse_failures.reserve_exact(1);
+                        }
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                        self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
+                }
+            }
             "expression_syntax" => {
                 let CompilerSyntaxHandleKind::Expression(index) =
                     self.admitted_handle(&argument)?
@@ -1637,6 +2297,16 @@ impl<'inv> SyntaxHost<'inv> {
         heap: &[HeapCell],
         work: &mut TypeWorkBudget,
     ) -> Result<TransformerOutput, RuntimeFailure> {
+        #[cfg(test)]
+        if self.advance.is_some() {
+            super::machine_test_hooks::ADVANCE_STAGES.set(
+                super::machine_test_hooks::ADVANCE_STAGES.get()
+                    | super::machine_test_hooks::ADVANCE_TRANSFER_REACHED,
+            );
+            if super::machine_test_hooks::FAIL_ADVANCE_TRANSFER.replace(false) {
+                return Err(RuntimeFailure::HeapCapacity);
+            }
+        }
         let (tag, syntax) = constructor_fields(result, heap)?;
         if tag == self.constructor("Expanded")? {
             let type_accounting = self.type_accounting
@@ -2412,6 +3082,194 @@ fn pair<'a>(
 mod tests {
     use super::{token_from_spelling, token_kind_name};
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum I16CapturePhase {
+        Idle,
+        SameHost,
+        Donor,
+        Recipient,
+        Injected,
+        Finished,
+    }
+
+    std::thread_local! {
+        static I16_CAPTURE_PHASE: std::cell::Cell<I16CapturePhase> = const { std::cell::Cell::new(I16CapturePhase::Idle) };
+        static I16_CAPTURE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static I16_DONOR_IDENTIFIER: std::cell::RefCell<Option<crate::eval::Value>> = const { std::cell::RefCell::new(None) };
+    }
+
+    struct I16CaptureHook(Option<fn(usize, &mut crate::eval::Value)>);
+
+    impl Drop for I16CaptureHook {
+        fn drop(&mut self) {
+            super::super::machine_test_hooks::IDENTIFIER_CAPTURE_OBSERVER.set(self.0);
+            I16_DONOR_IDENTIFIER.with(|slot| drop(slot.borrow_mut().take()));
+            I16_CAPTURE_PHASE.set(I16CapturePhase::Idle);
+        }
+    }
+
+    fn i16_integrated_configuration() -> crate::driver::RunConfiguration {
+        crate::driver::RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/indexed/integrated.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        }
+    }
+
+    fn i16_counters() -> [usize; 5] {
+        use super::super::machine_test_hooks as hooks;
+        [
+            hooks::TRANSFER_ATTEMPTS.get(),
+            hooks::TRANSFER_FAILURES.get(),
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+        ]
+    }
+
+    fn i16_identifier(value: &crate::eval::Value) -> &crate::eval::CompilerSyntaxHandle {
+        let crate::eval::Value::CompilerSyntaxHandle(handle) = value else {
+            panic!("slot 1 must issue a real identifier handle")
+        };
+        assert!(matches!(
+            handle.kind,
+            crate::eval::value::CompilerSyntaxHandleKind::Identifier(_)
+        ));
+        handle
+    }
+
+    fn i16_capture_identifier(slot: usize, identifier: &mut crate::eval::Value) {
+        use crate::driver::{PipelineFailure, compile_path};
+        use std::sync::Arc;
+
+        assert_eq!(slot, 1, "the indexed target is the real second capture");
+        I16_CAPTURE_VISITS.set(I16_CAPTURE_VISITS.get() + 1);
+        match I16_CAPTURE_PHASE.get() {
+            I16CapturePhase::SameHost => {
+                let _ = i16_identifier(identifier);
+            }
+            I16CapturePhase::Donor => {
+                let donor_invocation = Arc::clone(&i16_identifier(identifier).invocation);
+                I16_DONOR_IDENTIFIER.with(|slot| {
+                    assert!(slot.borrow().is_none());
+                    *slot.borrow_mut() = Some(identifier.clone());
+                });
+                let before = i16_counters();
+                assert_eq!(before, [0, 0, 0, 0, 0], "donor host remains live");
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Recipient);
+                // No hook-state borrow is held across this independent compilation.
+                let recipient = compile_path(i16_integrated_configuration());
+                assert_eq!(I16_CAPTURE_PHASE.get(), I16CapturePhase::Injected);
+                let failure =
+                    recipient.expect_err("the foreign identifier must not publish a module");
+                assert_eq!(failure.reason_code(), "syntax.transformer-failed");
+                let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure()
+                else {
+                    panic!("the real recipient must retain its transformer failure: {failure:?}");
+                };
+                assert!(matches!(
+                    runtime.cause(),
+                    crate::eval::RuntimeFailure::InvalidControlState
+                ));
+                let invocation = failure
+                    .sources()
+                    .iter()
+                    .find(|source| source.id() == runtime.invocation.source())
+                    .expect("the recipient invocation source is retained");
+                let definition = failure
+                    .sources()
+                    .iter()
+                    .find(|source| source.id() == runtime.definition.source())
+                    .expect("the recipient definition source is retained");
+                assert!(invocation.display_path().ends_with("exported.ash"));
+                assert!(definition.display_path().ends_with("derives.ash"));
+                let after = i16_counters();
+                assert_eq!(after, [1, 1, 1, 1, 0]);
+                assert!(Arc::ptr_eq(
+                    &donor_invocation,
+                    &i16_identifier(identifier).invocation
+                ));
+                I16_DONOR_IDENTIFIER.with(|slot| drop(slot.borrow_mut().take()));
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Finished);
+                eprintln!(
+                    "I16 recipient: slot 1 foreign invocation refused during transfer; \
+                     invocation={}, definition={}, counters={after:?}; donor callback remains live",
+                    invocation.display_path(),
+                    definition.display_path()
+                );
+            }
+            I16CapturePhase::Recipient => {
+                let donor = I16_DONOR_IDENTIFIER.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .expect("the live donor supplied its issued handle")
+                        .clone()
+                });
+                assert!(!Arc::ptr_eq(
+                    &i16_identifier(identifier).invocation,
+                    &i16_identifier(&donor).invocation
+                ));
+                *identifier = donor;
+                I16_CAPTURE_PHASE.set(I16CapturePhase::Injected);
+            }
+            phase => panic!("unexpected I16 capture phase {phase:?}"),
+        }
+    }
+
+    #[test]
+    fn i16_integrated_same_host_identifier_transfers_and_executes() {
+        use super::super::machine_test_hooks as hooks;
+
+        hooks::reset();
+        let original = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the unmodified integrated graph compiles");
+        assert_eq!(i16_counters(), [1, 0, 1, 1, 0]);
+        assert_eq!(
+            crate::driver::execute(&original).unwrap().value_display(),
+            "42"
+        );
+
+        hooks::reset();
+        I16_CAPTURE_VISITS.set(0);
+        I16_CAPTURE_PHASE.set(I16CapturePhase::SameHost);
+        let restore = I16CaptureHook(
+            hooks::IDENTIFIER_CAPTURE_OBSERVER.replace(Some(i16_capture_identifier)),
+        );
+        let same = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the unchanged same-host identifier transfers");
+        assert_eq!(I16_CAPTURE_VISITS.get(), 1);
+        assert_eq!(i16_counters(), [1, 0, 1, 1, 0]);
+        assert_eq!(hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(), 1);
+        drop(restore);
+        assert_eq!(crate::driver::execute(&same).unwrap().value_display(), "42");
+        hooks::reset();
+    }
+
+    #[test]
+    fn i16_integrated_foreign_identifier_is_refused_before_publication() {
+        use super::super::machine_test_hooks as hooks;
+
+        hooks::reset();
+        I16_CAPTURE_VISITS.set(0);
+        I16_CAPTURE_PHASE.set(I16CapturePhase::Donor);
+        let restore = I16CaptureHook(
+            hooks::IDENTIFIER_CAPTURE_OBSERVER.replace(Some(i16_capture_identifier)),
+        );
+        let donor = crate::driver::compile_path(i16_integrated_configuration())
+            .expect("the live donor completes after the recipient refuses");
+        assert_eq!(I16_CAPTURE_PHASE.get(), I16CapturePhase::Finished);
+        assert_eq!(I16_CAPTURE_VISITS.get(), 2);
+        assert_eq!(i16_counters(), [2, 1, 2, 2, 0]);
+        assert_eq!(hooks::DECLARATION_CAPTURES.get(), 2);
+        assert_eq!(hooks::DECLARATION_UNWRAPS.get(), 2);
+        drop(restore);
+        assert_eq!(
+            crate::driver::execute(&donor).unwrap().value_display(),
+            "42"
+        );
+        hooks::reset();
+    }
+
     struct DeclarationHostFixture {
         entry: crate::core::validate::ValidatedMacroEntry,
         source: crate::source::SourceFile,
@@ -2618,6 +3476,7 @@ mod tests {
             ops: EffectId::new(ModuleId::new(0), 0),
             started: false,
             steps_left: 100,
+            advance: None,
             invocation: Arc::new(()),
             frame: Arc::new(ExpansionFrame {
                 invocation: span,
@@ -2725,6 +3584,80 @@ mod tests {
             .expect("a local Pattern handle is reusable");
             assert_eq!(Arc::strong_count(&contents), retained);
         }
+    }
+
+    #[test]
+    fn declaration_syntax_checks_handle_ownership_and_releases_contents() {
+        use super::{RuntimeFailure, Value};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind, surface::SurfaceDeclarationCapture,
+            syntax::MacroOutputNode, syntax_resource::SyntaxBudget, types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let weak = Arc::downgrade(&contents);
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&[], &mut budget).unwrap();
+        host.declarations.push(SurfaceDeclarationCapture {
+            contents: Arc::clone(&contents),
+        });
+        let local = host.handle(CompilerSyntaxHandleKind::Declaration(0));
+
+        let mut foreign_budget = SyntaxBudget::default();
+        let mut foreign = fixture.host(&[], &mut foreign_budget).unwrap();
+        foreign.declarations.push(SurfaceDeclarationCapture {
+            contents: Arc::clone(&contents),
+        });
+        let foreign_handle = foreign.handle(CompilerSyntaxHandleKind::Declaration(0));
+        let stale_handle = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&[], &mut stale_budget).unwrap();
+            stale.declarations.push(SurfaceDeclarationCapture {
+                contents: Arc::clone(&contents),
+            });
+            stale.handle(CompilerSyntaxHandleKind::Declaration(0))
+        };
+        let invalid = [
+            foreign_handle,
+            stale_handle,
+            host.handle(CompilerSyntaxHandleKind::Type(0)),
+            host.handle(CompilerSyntaxHandleKind::Declaration(1)),
+            Value::Unit,
+        ];
+        let mut heap = Vec::new();
+        let retained = Arc::strong_count(&contents);
+        for handle in invalid {
+            assert!(matches!(
+                host.request(
+                    fixture.unwrap,
+                    handle,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.declarations.len(), 1);
+            assert_eq!(Arc::strong_count(&contents), retained);
+            assert!(heap.is_empty());
+        }
+        for _ in 0..2 {
+            host.request(
+                fixture.unwrap,
+                local.clone(),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the local declaration handle remains reusable");
+            assert_eq!(Arc::strong_count(&contents), retained);
+        }
+        drop(heap);
+        drop(host);
+        drop(foreign);
+        assert_eq!(Arc::strong_count(&contents), 1);
+        drop(contents);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
@@ -5957,6 +6890,172 @@ mod tests {
     }
 
     #[test]
+    fn declaration_parse_result_and_failure_work_have_exact_retry_boundaries() {
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
+        use crate::{
+            lexer::{TokenKind, lex},
+            module::ModuleId,
+            source::{ByteRange, SourceFile},
+            syntax::{ExpansionFrame, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        fn host(budget: &mut SyntaxBudget) -> (SyntaxHost<'_>, OperationId) {
+            let mut host = scalar_host(budget);
+            let operation = OperationId::new(host.ops, 0);
+            host.operations
+                .insert(operation, "parse_declaration".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip([
+                "Syntax",
+                "NoNodes",
+                "MoreNodes",
+                "GroupNode",
+                "DeclarationNode",
+                "TypeNode",
+                "PatternNode",
+                "ExpressionNode",
+                "IdentifierNode",
+                "TokenNode",
+                "ParsedDeclaration",
+                "ParseRejected",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            let source = SourceFile::new(
+                "parse-declaration-component.ash",
+                "answer : Int -> Int\nanswer _ = 42",
+            )
+            .unwrap();
+            let span = source
+                .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                .unwrap();
+            host.source = source;
+            host.frame = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            host.caller.span = span;
+            (host, operation)
+        }
+
+        fn syntax(host: &mut SyntaxHost<'_>, heap: &mut Vec<HeapCell>, valid: bool) -> Value {
+            let nodes = if valid {
+                let lexed = lex(&host.source).unwrap();
+                assert!(lexed.diagnostics.is_empty());
+                lexed
+                    .tokens
+                    .into_iter()
+                    .filter(|token| token.kind != TokenKind::EndOfFile)
+                    .map(|token| {
+                        let range = token.span.range();
+                        let spelling =
+                            &host.source.text()[range.start() as usize..range.end() as usize];
+                        MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            host.syntax_value(&nodes, heap, 0).unwrap()
+        }
+
+        fn parse(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            syntax: Value,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields = vec![host.input(), syntax].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        // These synthetic constructors exercise the actual host, parser and
+        // continuing work ledger; imported public consumers are checked separately.
+        for valid in [true, false] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let (mut measured_host, operation) = host(&mut measured);
+            let mut heap = Vec::new();
+            let input = syntax(&mut measured_host, &mut heap, valid);
+            let result = parse(&mut measured_host, operation, input, &mut heap).unwrap();
+            let (tag, _) = constructor_fields(&result, &heap).unwrap();
+            assert_eq!(
+                tag,
+                measured_host
+                    .constructor(if valid {
+                        "ParsedDeclaration"
+                    } else {
+                        "ParseRejected"
+                    })
+                    .unwrap()
+            );
+            assert_eq!(measured_host.declarations.len(), usize::from(valid));
+            assert_eq!(measured_host.parse_failures.len(), usize::from(!valid));
+            if !valid {
+                assert!(measured_host.parse_failures[0].1.is_none());
+            }
+            let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+            drop(measured_host);
+
+            // The last unit constructs the public result. A one-unit-short
+            // request may retain a private arena entry, but returns no handle;
+            // dropping the host disposes that entry before the fresh retry.
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            let (mut short_host, operation) = host(&mut short);
+            let mut heap = Vec::new();
+            let input = syntax(&mut short_host, &mut heap, valid);
+            let heap_before = heap.len();
+            assert!(matches!(
+                parse(&mut short_host, operation, input, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            // The input pair is private to the call; no result constructor was added.
+            assert_eq!(heap.len(), heap_before + 1);
+            assert_eq!(short_host.declarations.len(), usize::from(valid));
+            assert_eq!(short_host.parse_failures.len(), usize::from(!valid));
+            let retained = short_host
+                .declarations
+                .first()
+                .map(|capture| Arc::downgrade(&capture.contents));
+            drop(heap);
+            drop(short_host);
+            if let Some(retained) = retained {
+                assert!(retained.upgrade().is_none());
+            }
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                let (mut exact_host, operation) = host(&mut exact);
+                let mut heap = Vec::new();
+                let input = syntax(&mut exact_host, &mut heap, valid);
+                let result = parse(&mut exact_host, operation, input, &mut heap).unwrap();
+                let (tag, _) = constructor_fields(&result, &heap).unwrap();
+                assert_eq!(
+                    tag,
+                    exact_host
+                        .constructor(if valid {
+                            "ParsedDeclaration"
+                        } else {
+                            "ParseRejected"
+                        })
+                        .unwrap()
+                );
+                assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+            }
+        }
+    }
+
+    #[test]
     fn type_syntax_issuance_arena_refuses_before_copy_and_retries() {
         use super::{HeapCell, RuntimeFailure, SyntaxHost};
         use crate::{
@@ -7814,7 +8913,7 @@ mod tests {
         let (short, paid) = run(&fixture, &packet, 2, cost - 1, true);
         assert!(matches!(short, Err(RuntimeFailure::Report(report))
             if report.primary.reason_code() == "internal.resource.syntax-work"));
-        assert!(paid <= 17 + cost - 1);
+        assert!(paid < 17 + cost);
         assert_eq!(Arc::strong_count(&packet), retained);
         for _ in 0..2 {
             let (exact, paid) = run(&fixture, &packet, 2, cost, true);
@@ -7975,6 +9074,31 @@ mod tests {
         assert_eq!(Arc::strong_count(&nested), before + 1);
         drop(pattern_host);
         assert_eq!(Arc::strong_count(&nested), before);
+        {
+            let packet: Arc<[MacroOutputNode]> =
+                Arc::from([MacroOutputNode::Expression(expression.clone(), span.into())]);
+            let captures = [SurfaceSyntaxCapture::Declaration(
+                SurfaceDeclarationCapture {
+                    contents: Arc::clone(&packet),
+                },
+            )];
+            let retained = Arc::strong_count(&packet);
+            let mut budget = SyntaxBudget::default();
+            let host = fixture
+                .host(&captures, &mut budget)
+                .expect("an unbridged nested expression is retained");
+            assert_eq!(Arc::strong_count(&packet), retained + 1);
+            assert_eq!(Arc::strong_count(&nested), before + 1);
+            drop(host);
+            assert_eq!(Arc::strong_count(&packet), retained);
+            assert_eq!(Arc::strong_count(&nested), before + 1);
+        }
+        assert_eq!(Arc::strong_count(&nested), before);
+        let mut expression = expression;
+        expression.expression.kind = SurfaceExprKind::SyntaxInvocation {
+            name: fixture.caller.clone(),
+            captures: Vec::new(),
+        };
         let nested_packet: Arc<[MacroOutputNode]> =
             Arc::from([MacroOutputNode::Expression(expression, span.into())]);
         let invalid = [SurfaceSyntaxCapture::Declaration(
@@ -8325,9 +9449,521 @@ mod tests {
         );
     }
 
+    // Extend the existing validated fixture so constructor registration is paid
+    // by the real host constructor before the capture request begins.
+    fn repeated_test_fixture() -> DeclarationHostFixture {
+        use crate::{
+            core::{EffectCoreBuilder, validate_effect},
+            resolved::{ResolvedConstructor, ResolvedRegistry},
+            source::Origin,
+            types::{ConstructorId, Type},
+        };
+        use std::sync::Arc;
+
+        let mut fixture = DeclarationHostFixture::new();
+        let registry = fixture.entry.program.registry();
+        let mut nominals = registry.nominals().to_vec();
+        let mut constructors = registry.constructors().to_vec();
+        let effects = registry.effects().to_vec();
+        let owner = nominals[0].id;
+        let shared_origin = constructors.last().unwrap().origin.clone();
+        let mut ids = nominals[0].constructors.to_vec();
+        for (index, name) in ["NoCaptures", "MoreCaptures", "RepeatedCapture"]
+            .iter()
+            .enumerate()
+        {
+            let id = ConstructorId::new(owner, 17 + index as u32);
+            ids.push(id);
+            constructors.push(ResolvedConstructor {
+                id,
+                owner,
+                spelling: (*name).into(),
+                payload: (*name != "NoCaptures").then_some(Type::Unit),
+                origin: shared_origin.clone(),
+            });
+        }
+        nominals[0].constructors = ids.into_boxed_slice();
+        let registry = ResolvedRegistry::new(nominals, constructors).with_effects(effects);
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+        let occurrence = builder
+            .unit(Type::Unit, Origin::Source(fixture.caller.span))
+            .unwrap();
+        fixture.entry.program =
+            validate_effect(builder.finish(occurrence).unwrap(), &[&fixture.source]).unwrap();
+        fixture.entry.occurrence = occurrence;
+        fixture
+    }
+
+    fn repeated_test_identifier(
+        fixture: &DeclarationHostFixture,
+        spelling: String,
+    ) -> crate::surface::SurfaceSyntaxCapture {
+        use crate::surface::{SurfaceIdentifierCapture, SurfaceSyntaxCapture};
+        let mut name = fixture.caller.clone();
+        name.text = spelling;
+        SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name,
+            origin: fixture.caller.span.into(),
+        })
+    }
+
+    fn repeated_test_value(
+        values: Vec<crate::surface::SurfaceSyntaxCapture>,
+    ) -> crate::surface::SurfaceSyntaxCapture {
+        use crate::surface::{SurfaceRepeatedCapture, SurfaceSyntaxCapture};
+        SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(SurfaceRepeatedCapture { values }))
+    }
+
+    fn repeated_test_argument(
+        host: &super::SyntaxHost<'_>,
+        heap: &mut Vec<super::HeapCell>,
+    ) -> super::Value {
+        use super::{HeapCell, Value, allocate_heap};
+        use crate::integer::Integer;
+        Value::Location(
+            allocate_heap(
+                heap,
+                HeapCell::Tuple(vec![host.input(), Value::integer(Integer::from_i64(0))].into()),
+            )
+            .unwrap(),
+        )
+    }
+
+    // Decode returned constructors and authenticated leaf handles, including list
+    // boundaries. The wide case iterates the list; recursion here is only nesting.
+    fn repeated_test_shape(
+        host: &super::SyntaxHost<'_>,
+        heap: &[super::HeapCell],
+        capture: &super::Value,
+        shape: &mut Vec<String>,
+    ) {
+        use super::{constructor_fields, pair};
+        use crate::eval::value::CompilerSyntaxHandleKind;
+        let (tag, payload) = constructor_fields(capture, heap).unwrap();
+        if tag == host.constructor("RepeatedCapture").unwrap() {
+            shape.push("[".into());
+            let mut rest = payload.unwrap();
+            loop {
+                let (tag, payload) = constructor_fields(rest, heap).unwrap();
+                if tag == host.constructor("NoCaptures").unwrap() {
+                    assert!(payload.is_none());
+                    break;
+                }
+                assert_eq!(tag, host.constructor("MoreCaptures").unwrap());
+                let (first, tail) = pair(payload.unwrap(), heap).unwrap();
+                repeated_test_shape(host, heap, first, shape);
+                rest = tail;
+            }
+            shape.push("]".into());
+        } else if tag == host.constructor("IdentifierCapture").unwrap() {
+            let (identifier, _) = pair(payload.unwrap(), heap).unwrap();
+            let CompilerSyntaxHandleKind::Identifier(index) =
+                host.admitted_handle(identifier).unwrap()
+            else {
+                panic!("expected an authenticated identifier")
+            };
+            shape.push(host.identifiers[index].text.clone());
+        } else {
+            assert_eq!(tag, host.constructor("DeclarationCapture").unwrap());
+            let CompilerSyntaxHandleKind::Declaration(index) =
+                host.admitted_handle(payload.unwrap()).unwrap()
+            else {
+                panic!("expected an authenticated declaration")
+            };
+            assert!(host.declarations[index].contents.is_empty());
+            shape.push("declaration".into());
+        }
+    }
+
+    #[derive(Debug)]
+    enum RepeatedTestOutcome {
+        Constructor(super::RuntimeFailure),
+        Request(super::RuntimeFailure, usize, usize, usize),
+        Returned(Vec<String>),
+    }
+
+    fn repeated_test_probe(
+        fixture: &DeclarationHostFixture,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        limit: usize,
+        spent: usize,
+    ) -> (Option<usize>, usize, RepeatedTestOutcome) {
+        use crate::{syntax_resource::SyntaxBudget, types::TypeWorkBudget};
+        let mut budget = SyntaxBudget::with_limit(limit);
+        budget.charge_units(spent).unwrap();
+        let mut constructor_total = None;
+        let outcome = match fixture.host(captures, &mut budget) {
+            Err(error) => RepeatedTestOutcome::Constructor(error),
+            Ok(mut host) => {
+                constructor_total = Some(host.syntax_work.as_ref().unwrap().consumed());
+                let mut heap = Vec::new();
+                let argument = repeated_test_argument(&host, &mut heap);
+                match host.request(
+                    fixture.capture,
+                    argument,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                ) {
+                    Err(error) => RepeatedTestOutcome::Request(
+                        error,
+                        heap.len(),
+                        host.identifiers.len(),
+                        host.declarations.len(),
+                    ),
+                    Ok(value) => {
+                        let (tag, Some(capture)) =
+                            super::constructor_fields(&value, &heap).unwrap()
+                        else {
+                            panic!("expected Captured")
+                        };
+                        assert_eq!(tag, host.constructor("Captured").unwrap());
+                        let mut shape = Vec::new();
+                        repeated_test_shape(&host, &heap, capture, &mut shape);
+                        RepeatedTestOutcome::Returned(shape)
+                    }
+                }
+            }
+        };
+        (constructor_total, budget.consumed(), outcome)
+    }
+
+    fn repeated_test_failure(error: super::RuntimeFailure, reason: &str) {
+        let super::RuntimeFailure::Report(report) = error else {
+            panic!("expected resource failure: {error:?}")
+        };
+        assert_eq!(report.primary.reason_code(), reason);
+    }
+
+    fn repeated_test_graph(
+        fixture: &DeclarationHostFixture,
+    ) -> (
+        [crate::surface::SurfaceSyntaxCapture; 1],
+        std::sync::Weak<crate::surface::SurfaceRepeatedCapture>,
+        std::sync::Weak<crate::surface::SurfaceRepeatedCapture>,
+        std::sync::Weak<[crate::syntax::MacroOutputNode]>,
+    ) {
+        use crate::surface::{
+            SurfaceDeclarationCapture, SurfaceRepeatedCapture, SurfaceSyntaxCapture,
+        };
+        use crate::syntax::MacroOutputNode;
+        use std::sync::Arc;
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let contents_weak = Arc::downgrade(&contents);
+        let nested = Arc::new(SurfaceRepeatedCapture {
+            values: vec![
+                repeated_test_identifier(fixture, "a".into()),
+                repeated_test_identifier(fixture, "b".into()),
+            ],
+        });
+        let nested_weak = Arc::downgrade(&nested);
+        let root = Arc::new(SurfaceRepeatedCapture {
+            values: vec![
+                SurfaceSyntaxCapture::Repeated(nested),
+                repeated_test_value(vec![]),
+                repeated_test_value(vec![
+                    repeated_test_identifier(fixture, "c".into()),
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture { contents }),
+                ]),
+            ],
+        });
+        let root_weak = Arc::downgrade(&root);
+        (
+            [SurfaceSyntaxCapture::Repeated(root)],
+            root_weak,
+            nested_weak,
+            contents_weak,
+        )
+    }
+
+    #[test]
+    fn repeated_host_budget_order_and_owner_lifetime() {
+        use super::{RuntimeFailure, SyntaxHost};
+        use crate::{
+            syntax_resource::{SYNTAX_WORK_LIMIT, SyntaxBudget},
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+        fn exercise() {
+            let fixture = repeated_test_fixture();
+            let (captures, root, nested, contents) = repeated_test_graph(&fixture);
+            assert!(matches!(
+                SyntaxHost::new(
+                    &fixture.entry,
+                    &captures,
+                    &fixture.source,
+                    &fixture.caller,
+                    0,
+                    Arc::clone(&fixture.contexts),
+                    Arc::clone(&fixture.frame),
+                    None,
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(
+                (
+                    root.strong_count(),
+                    nested.strong_count(),
+                    contents.strong_count()
+                ),
+                (1, 1, 1)
+            );
+            let expected = [
+                "[",
+                "[",
+                "a",
+                "b",
+                "]",
+                "[",
+                "]",
+                "[",
+                "c",
+                "declaration",
+                "]",
+                "]",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+            let (constructor, total, outcome) =
+                repeated_test_probe(&fixture, &captures, SYNTAX_WORK_LIMIT, 17);
+            let constructor = constructor.unwrap();
+            assert!(
+                matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+            assert!(constructor > 17 && total > constructor);
+            let (unspent_phase, unspent_total, unspent) =
+                repeated_test_probe(&fixture, &captures, total - 17, 0);
+            assert_eq!(
+                (unspent_phase, unspent_total),
+                (Some(constructor - 17), total - 17)
+            );
+            assert!(
+                matches!(unspent, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+            let (phase, paid, outcome) =
+                repeated_test_probe(&fixture, &captures, constructor - 1, 17);
+            assert_eq!(phase, None);
+            assert!(paid >= 17 && paid < constructor);
+            let RepeatedTestOutcome::Constructor(error) = outcome else {
+                panic!("constructor: {outcome:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, total - 1, 17);
+            assert_eq!(phase, Some(constructor));
+            assert_eq!(paid, total - 1);
+            let RepeatedTestOutcome::Request(error, heap_cells, identifiers, declarations) =
+                outcome
+            else {
+                panic!("request: {outcome:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            // A failed final publication can leave paid private staging until teardown.
+            assert!(heap_cells > 1);
+            assert_eq!((identifiers, declarations), (3, 1));
+            // Every request prefix refuses without returning a value, including
+            // frame, list, leaf-arena and final wrapper reservations.
+            for limit in constructor..total {
+                let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, limit, 17);
+                assert_eq!(phase, Some(constructor));
+                assert!(paid >= constructor && paid <= limit);
+                let RepeatedTestOutcome::Request(error, _, _, _) = outcome else {
+                    panic!("request at {limit}: {outcome:?}")
+                };
+                repeated_test_failure(error, "internal.resource.syntax-work");
+            }
+            for _ in 0..2 {
+                let (phase, paid, outcome) = repeated_test_probe(&fixture, &captures, total, 17);
+                assert_eq!((phase, paid), (Some(constructor), total));
+                assert!(
+                    matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+                );
+            }
+            assert_eq!(
+                (
+                    root.strong_count(),
+                    nested.strong_count(),
+                    contents.strong_count()
+                ),
+                (1, 1, 1)
+            );
+            drop(captures);
+            assert!(
+                root.upgrade().is_none()
+                    && nested.upgrade().is_none()
+                    && contents.upgrade().is_none()
+            );
+
+            // The host owns the retained graph after the producer releases it;
+            // both a returned result and late refusal release it on host teardown.
+            for late_failure in [true, false] {
+                let (captures, root, nested, contents) = repeated_test_graph(&fixture);
+                let mut budget =
+                    SyntaxBudget::with_limit(if late_failure { total - 1 } else { total });
+                budget.charge_units(17).unwrap();
+                let mut host = fixture.host(&captures, &mut budget).unwrap();
+                assert!(
+                    !host.type_accounting,
+                    "nested declaration selects declaration accounting"
+                );
+                assert_eq!(root.strong_count(), 2);
+                drop(captures);
+                assert_eq!(
+                    (
+                        root.strong_count(),
+                        nested.strong_count(),
+                        contents.strong_count()
+                    ),
+                    (1, 1, 1)
+                );
+                let mut heap = Vec::new();
+                let argument = repeated_test_argument(&host, &mut heap);
+                let result = host.request(
+                    fixture.capture,
+                    argument.clone(),
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                );
+                if late_failure {
+                    let Err(error) = result else {
+                        panic!("one-short request returned a value")
+                    };
+                    repeated_test_failure(error, "internal.resource.syntax-work");
+                    assert_eq!(host.declarations.len(), 1);
+                    assert!(heap.len() > 1);
+                    let heap_len = heap.len();
+                    let paid = host.syntax_work.as_ref().unwrap().consumed();
+                    let retry = host.request(
+                        fixture.capture,
+                        argument,
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    );
+                    let Err(error) = retry else {
+                        panic!("exhausted budget allowed a retry")
+                    };
+                    repeated_test_failure(error, "internal.resource.syntax-work");
+                    assert_eq!(host.syntax_work.as_ref().unwrap().consumed(), paid);
+                    assert_eq!(heap.len(), heap_len);
+                } else {
+                    assert!(result.is_ok());
+                }
+                assert!(
+                    contents.strong_count() >= 2,
+                    "the private declaration arena retains contents"
+                );
+                drop(host);
+                assert!(
+                    root.upgrade().is_none()
+                        && nested.upgrade().is_none()
+                        && contents.upgrade().is_none()
+                );
+                drop(heap);
+            }
+
+            let empty = [repeated_test_value(vec![])];
+            let (_, _, outcome) = repeated_test_probe(&fixture, &empty, SYNTAX_WORK_LIMIT, 17);
+            assert!(
+                matches!(outcome, RepeatedTestOutcome::Returned(ref shape) if shape.len() == 2 && shape[0] == "[" && shape[1] == "]")
+            );
+            let wide = [repeated_test_value(
+                (0..256)
+                    .map(|i| repeated_test_identifier(&fixture, format!("i{i}")))
+                    .collect(),
+            )];
+            let (_, wide_total, outcome) =
+                repeated_test_probe(&fixture, &wide, SYNTAX_WORK_LIMIT, 17);
+            assert!(wide_total > total);
+            let RepeatedTestOutcome::Returned(shape) = outcome else {
+                panic!("wide: {outcome:?}")
+            };
+            let mut expected = vec!["[".to_owned()];
+            expected.extend((0..256).map(|i| format!("i{i}")));
+            expected.push("]".into());
+            assert_eq!(shape, expected);
+            let (_, paid, short) = repeated_test_probe(&fixture, &wide, wide_total - 1, 17);
+            assert_eq!(paid, wide_total - 1);
+            let RepeatedTestOutcome::Request(error, _, identifiers, declarations) = short else {
+                panic!("wide one-short: {short:?}")
+            };
+            repeated_test_failure(error, "internal.resource.syntax-work");
+            assert_eq!((identifiers, declarations), (256, 0));
+            let (_, paid, exact) = repeated_test_probe(&fixture, &wide, wide_total, 17);
+            assert_eq!(paid, wide_total);
+            assert!(
+                matches!(exact, RepeatedTestOutcome::Returned(ref shape) if *shape == expected)
+            );
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(exercise)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn repeated_host_composes_repetition_and_leaf_depth_on_small_stack() {
+        use crate::{
+            parser::STRUCTURAL_DEPTH_LIMIT, surface::SurfaceSyntaxCapture, syntax::MacroOrigin,
+            syntax_resource::SyntaxBudget, types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let fixture = repeated_test_fixture();
+                for depth in [STRUCTURAL_DEPTH_LIMIT - 1, STRUCTURAL_DEPTH_LIMIT] {
+                    let SurfaceSyntaxCapture::Identifier(mut leaf) =
+                        repeated_test_identifier(&fixture, "deep".into())
+                    else {
+                        unreachable!()
+                    };
+                    leaf.origin = MacroOrigin::combined(
+                        vec![fixture.caller.span.into()],
+                        Arc::clone(&fixture.frame),
+                    )
+                    .unwrap();
+                    let mut value = SurfaceSyntaxCapture::Identifier(leaf);
+                    for _ in 0..depth {
+                        value = repeated_test_value(vec![value]);
+                    }
+                    let mut budget = SyntaxBudget::default();
+                    let captures = [value];
+                    match fixture.host(&captures, &mut budget) {
+                        Ok(mut host) => {
+                            assert_eq!(depth, STRUCTURAL_DEPTH_LIMIT - 1);
+                            let mut heap = Vec::new();
+                            let argument = repeated_test_argument(&host, &mut heap);
+                            let value = host
+                                .request(
+                                    fixture.capture,
+                                    argument,
+                                    &mut heap,
+                                    &mut TypeWorkBudget::unbounded(),
+                                )
+                                .unwrap();
+                            assert_eq!(
+                                super::constructor_fields(&value, &heap).unwrap().0,
+                                host.constructor("Captured").unwrap()
+                            );
+                        }
+                        Err(error) => {
+                            assert_eq!(depth, STRUCTURAL_DEPTH_LIMIT);
+                            repeated_test_failure(error, "internal.resource.structural-depth");
+                        }
+                    };
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn d5_host_refuses_declaration_before_its_constructor_and_request_clone() {
-        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
         use crate::{
             core::{EffectCoreBuilder, validate::ValidatedMacroEntry, validate_effect},
             integer::Integer,
@@ -8343,7 +9979,7 @@ mod tests {
             },
             syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts},
             syntax_resource::SyntaxBudget,
-            types::{EffectId, OperationId, Type, TypeWorkBudget},
+            types::{ConstructorId, EffectId, NominalTypeId, OperationId, Type, TypeWorkBudget},
         };
         use std::{collections::HashMap, sync::Arc};
 
@@ -8477,22 +10113,21 @@ mod tests {
                     ),
                     Err(RuntimeFailure::InvalidControlState)
                 ));
-                let mut constructor_budget = SyntaxBudget::with_limit(100);
+                let mut constructor_budget = SyntaxBudget::default();
                 constructor_budget.charge_units(17).unwrap();
-                assert!(matches!(
-                    SyntaxHost::new(
-                        &entry,
-                        &repeated_capture,
-                        &source,
-                        &name,
-                        0,
-                        Arc::clone(&contexts),
-                        Arc::clone(&frame),
-                        Some(&mut constructor_budget),
-                    ),
-                    Err(RuntimeFailure::InvalidControlState)
-                ));
-                assert_eq!(constructor_budget.consumed(), 19);
+                let repeated_host = SyntaxHost::new(
+                    &entry,
+                    &repeated_capture,
+                    &source,
+                    &name,
+                    0,
+                    Arc::clone(&contexts),
+                    Arc::clone(&frame),
+                    Some(&mut constructor_budget),
+                )
+                .expect("the budgeted host retains the repeated Arc");
+                assert_eq!(Arc::strong_count(&repeated), repeated_references + 1);
+                drop(repeated_host);
                 assert_eq!(Arc::strong_count(&repeated), repeated_references);
 
                 // Constructor admission makes this state unreachable in the ordinary host.
@@ -8505,6 +10140,7 @@ mod tests {
                     ops,
                     started: false,
                     steps_left: 100,
+                    advance: None,
                     invocation: Arc::new(()),
                     frame,
                     source,
@@ -8542,8 +10178,7 @@ mod tests {
                     ),
                     Err(RuntimeFailure::InvalidControlState)
                 ));
-                // The repeated state is injected only to reach the request guard;
-                // the real constructor above refuses it first.
+                // Without a syntax budget the existing request guard still refuses it.
                 host.captures = vec![SurfaceSyntaxCapture::Repeated(Arc::clone(&repeated))];
                 let repeated_references = Arc::strong_count(&repeated);
                 let heap_len = heap.len();
@@ -8559,19 +10194,38 @@ mod tests {
                 assert_eq!(heap.len(), heap_len);
                 assert_eq!(Arc::strong_count(&repeated), repeated_references);
                 host.syntax_work = Some(&mut request_budget);
-                assert!(matches!(
-                    host.request(
+                let owner = NominalTypeId::new(module, 0);
+                for (index, name) in ["NoCaptures", "RepeatedCapture", "Captured"]
+                    .iter()
+                    .enumerate()
+                {
+                    host.constructors
+                        .insert((*name).into(), ConstructorId::new(owner, index as u32));
+                }
+                let result = host
+                    .request(
                         operation,
                         argument,
                         &mut heap,
-                        &mut TypeWorkBudget::unbounded()
-                    ),
-                    Err(RuntimeFailure::InvalidControlState)
-                ));
-                assert_eq!(heap.len(), heap_len);
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .expect("the budgeted request constructs the empty repeated result");
+                let (tag, Some(repeated_value)) = constructor_fields(&result, &heap).unwrap()
+                else {
+                    panic!("expected Captured")
+                };
+                assert_eq!(tag, host.constructor("Captured").unwrap());
+                let (tag, Some(values)) = constructor_fields(repeated_value, &heap).unwrap() else {
+                    panic!("expected RepeatedCapture")
+                };
+                assert_eq!(tag, host.constructor("RepeatedCapture").unwrap());
+                assert_eq!(
+                    constructor_fields(values, &heap).unwrap().0,
+                    host.constructor("NoCaptures").unwrap()
+                );
                 assert_eq!(Arc::strong_count(&repeated), repeated_references);
                 drop(host);
-                assert_eq!(request_budget.consumed(), 17 + 1 + "capture".len());
+                assert!(request_budget.consumed() > 17 + 1 + "capture".len());
             })
             .unwrap()
             .join()
@@ -8649,6 +10303,7 @@ mod tests {
             ops,
             started: false,
             steps_left: 100,
+            advance: None,
             invocation: Arc::new(()),
             frame: Arc::new(ExpansionFrame {
                 invocation: span,

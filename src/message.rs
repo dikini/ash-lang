@@ -1386,6 +1386,8 @@ messages! {
     syntax_rejection_cause => "syntax-rejection-cause" {},
     syntax_invocation_frame => "syntax-invocation-frame" {},
     syntax_definition_frame => "syntax-definition-frame" {},
+    syntax_generator_step_origin => "syntax-generator-step-origin" {},
+    syntax_generator_step_definition => "syntax-generator-step-definition" {},
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.
     resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },

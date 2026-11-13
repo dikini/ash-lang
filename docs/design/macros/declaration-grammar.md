@@ -1,12 +1,15 @@
 # Declaration-macro grammar
 
-This grammar describes the declaration-macro surface accepted in
-[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It is not
-yet current Ash or an active implementation task. The derive-specific grammar is
-in [derive authoring and grammar](derive-syntax.md). The
-[current expression grammar](../../../spec/syntax.md#grammar) is extended by
-the accepted `syntax` reservation and quotation and escape forms below once
-implemented.
+> This design records the transition as it was developed. References below to
+> proposed work, current behavior, implementation and evidence describe that
+> historical stage. The [specification](../../../spec/syntax-expansion.md)
+> describes the language; [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
+> records delivery and remaining verification.
+
+This grammar records the declaration-macro surface accepted in historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+The derive-specific grammar is in [derive authoring and grammar](derive-syntax.md).
+The [language grammar](../../../spec/syntax.md#grammar) is authoritative.
 
 ## Definitions and imports
 
@@ -110,7 +113,7 @@ The existing compiler-owned path `@builtin.compiler.syntax` remains valid.
 The word `declaration` remains contextual. Test both the rejected old names
 and unaffected names such as `syntax_value` and `declaration`; retain the
 compiler-owned path and existing syntax-definition and targeted-import forms.
-The [accepted quotation and escape forms](../../proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
+The [accepted quotation and escape forms](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
 specify their staging and capture access. Outside an escape, a macro template
 still processes its own `$name` splices, including those inside a quotation in
 its output; an unbound outer splice remains an outer-template error. An escape

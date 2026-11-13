@@ -349,3 +349,49 @@ fn changed_original_native_declarations_refuse_the_canonical_fact_payload() {
         assert_eq!(CALLBACKS.get(), 0);
     }
 }
+
+fn i16_image_admission(entry: &str, expected: &str) {
+    let fixture_root = std::env::var_os("ASH_I16_FIXTURE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/design/macros/fixtures")
+        });
+    let compiled = compile_path(RunConfiguration {
+        entry: fixture_root.join(entry),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_or_else(|failure| panic!("{entry}: source compilation failed: {failure:?}"));
+    assert_eq!(
+        crate::driver::execute(&compiled).unwrap().value_display(),
+        expected,
+        "{entry}"
+    );
+    let configuration = BuildConfiguration::new(PathBuf::from("i16-admission-unused"));
+    match prepare_program(&compiled, configuration) {
+        Ok(_) => eprintln!("{entry}: interpreter {expected}; native preparation admitted"),
+        Err(failure) => panic!(
+            "{entry}: interpreter {expected}; native preparation refused: {} ({failure:?})",
+            failure.reason()
+        ),
+    }
+}
+
+#[test]
+fn i16_hygiene_original_image_admission() {
+    i16_image_admission("hygiene/main.ash", "252");
+}
+
+#[test]
+fn i16_hygiene_control_image_admission() {
+    i16_image_admission("hygiene/control.ash", "252");
+}
+
+#[test]
+fn i16_indexed_integrated_image_admission() {
+    i16_image_admission("indexed/integrated.ash", "42");
+}
+
+#[test]
+fn i16_indexed_control_image_admission() {
+    i16_image_admission("indexed/control_integrated.ash", "42");
+}

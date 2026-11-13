@@ -25,10 +25,10 @@ pub syntax if $condition:expr then $yes:expr else $no:expr => {
 The braces form the resulting block expression. A procedural declaration uses
 `=> using transformer`, where `transformer` is an ordinary global in the
 defining module. Each syntax name begins with a lowercase letter and is not a
-reserved word. A matcher occupies one logical line and contains literal tokens
-and uniquely named `expr` or `ident` captures. Matchers
-contain at least one capture, end in an expression capture, and place a
-literal between adjacent captures. Matchers have no repetition, alternatives,
+reserved word. An expression matcher occupies one logical line and contains
+literal tokens and uniquely named `expr` or `ident` captures. It contains at
+least one capture, ends in an expression capture, and places a literal between
+adjacent captures. Expression matchers have no repetition, alternatives,
 optional items, or parser callbacks. A literal is matched by token kind and
 spelling. Groups, logical line ends, `$`, and `=>` are not matcher literals.
 
@@ -143,8 +143,10 @@ invocation and quotation bridges remain incomplete.
 
 For an expression splice, the step is an ordinary function of type
 `State -> (State, Syntax.ExpressionFragment)`. It receives the current state
-and returns the next state and a fragment. Ordinary checking relates the step
-input, returned state and fragment, including for a zero-iteration repetition;
+and returns the next state and a fragment. It needs no compiler `Input`
+parameter; an ordinary helper receives any values it needs as ordinary
+arguments. Ordinary checking relates the step input, returned state and
+fragment, including for a zero-iteration repetition;
 where the seed expression is available, ordinary checking also relates it to
 the state. Output is admitted and checked at its actual position.
 
@@ -156,10 +158,6 @@ that iteration reuse it. Nested iterations use their own cached values, and
 returning to an outer iteration restores its value. An unused generator is not
 stepped. A zero-iteration repetition creates no instance owned by that
 repetition and evaluates neither that instance's seed nor its step.
-
-The remaining procedural repeated-capture paths are under development. The
-[declaration grammar](../docs/design/macros/declaration-grammar.md) records the
-accepted wider design.
 
 ## Derive syntax
 
@@ -185,10 +183,7 @@ admitted before the next invocation; generated nested expansions are processed
 after the whole list succeeds. The subject is retained once, followed by the
 outputs in list order. Failure publishes no partial module. Generated
 declarations continue through ordinary resolution, visibility, duplicate and
-type checking. Some generated interface parameter and constructor-reference
-cases currently reach the separate downstream limitations recorded in
-[#303](https://github.com/dikini/ash-lang/issues/303) and
-[#306](https://github.com/dikini/ash-lang/issues/306).
+type checking.
 
 ## Quotation and template escapes
 
@@ -203,10 +198,22 @@ Reaching one during ordinary runtime execution fails rather than publishing an
 internal fragment representation.
 
 An imported declaration syntax template can contain `${ expression }` or a
-multiline escaped block. Inside the escaped code, `$name` reads an in-scope
-matcher capture or generator value. Within a repetition it reads the current
-selected element; helpers receive these values through ordinary explicit
-arguments. Quotation holes inside escaped code refer to ordinary Ash variables.
+multiline escaped block. When the token after `{` is a logical line end, the
+escape contains an ordinary block. Otherwise it contains exactly one result
+expression, and its closing `}` must occur before a logical line end at the
+escape's own level. Nested groups and blocks use their ordinary line rules.
+The inline form has no outer local-declaration list; ordinary block grammar is
+unchanged.
+
+Inside escaped code, `$name` reads an in-scope matcher capture or generator
+value. An expression, type, pattern, or declaration capture yields its matching
+fragment; an identifier capture yields an `(Identifier, Origin)` pair. Within
+a repetition it reads the current selected element. Helpers receive these
+values through ordinary explicit arguments. Quotation holes inside escaped
+code refer to ordinary Ash variables, not matcher capture names. A capture read
+counts as a use by its enclosing template repetition; a generator read does not
+drive a repetition. Reached escapes run once in source order. An escape in a
+quote constructed by another escape runs when that quote is constructed.
 
 An escape can produce `Syntax.ExpressionFragment`, `Syntax.TypeFragment`,
 `Syntax.PatternFragment`, `Syntax.DeclarationFragment`, or the
@@ -220,7 +227,12 @@ does not evaluate its body. Failures publish no partial expansion.
 
 A procedural expression transformer can return the token and group view of a
 quoted capture for reparsing, preserving contexts and origins. The supported
-protected quote round trip retains the original syntax boundary. The
+protected quote round trip retains the original syntax boundary. A quotation
+written in an ordinary helper keeps the helper's definition context; a
+caller-written quotation keeps its caller context. A checked imported
+transformer can call an ordinary helper with fragment arguments, including a
+helper retained in a parsed and emitted declaration. Public declarations
+remain subject to ordinary visibility when used by an importing module. The
 caller-owned quote path described above does not yet cover every nested syntax
 invocation or name role.
 
@@ -280,8 +292,9 @@ method heads retain their existing rules.
 ## Canonical syntax interface
 
 `@builtin.compiler.syntax` is a compiler-owned module. It exports opaque
-`Token`, `Identifier`, `ExpressionFragment`, `Input`, `Origin`, and
-`ParseFailure` types. Their hidden constructors are not available to source.
+`Token`, `Identifier`, `ExpressionFragment`, `TypeFragment`,
+`PatternFragment`, `DeclarationFragment`, `Input`, `Origin`, and `ParseFailure`
+types. Their hidden constructors are not available to source.
 The public structural types include these declarations:
 
 ```text
@@ -292,12 +305,21 @@ pub type Node = TokenNode(Token, Origin)
     | IdentifierNode(Identifier, Origin)
     | GroupNode(Delimiter, Syntax, Origin)
     | ExpressionNode(ExpressionFragment, Origin)
+    | TypeNode(TypeFragment, Origin)
+    | PatternNode(PatternFragment, Origin)
+    | DeclarationNode(DeclarationFragment, Origin)
 pub type Delimiter = Parentheses
     | Braces
 pub type Origins = NoOrigins
     | MoreOrigins(Origin, Origins)
 pub type Capture = ExpressionCapture(ExpressionFragment)
     | IdentifierCapture(Identifier, Origin)
+    | TypeCapture(TypeFragment)
+    | PatternCapture(PatternFragment)
+    | DeclarationCapture(DeclarationFragment)
+    | RepeatedCapture(Captures)
+pub type Captures = NoCaptures
+    | MoreCaptures(Capture, Captures)
 pub type CaptureResult = Captured(Capture)
     | MissingCapture
 pub type OriginsResult = Combined(Origin)
@@ -308,6 +330,9 @@ pub type TokenResult = MadeToken(Token)
     | InvalidToken
 pub type ParseResult = Parsed(ExpressionFragment)
     | ParseRejected(ParseFailure)
+    | ParsedType(TypeFragment)
+    | ParsedPattern(PatternFragment)
+    | ParsedDeclaration(DeclarationFragment)
 pub type MacroDiagnostic = MacroDiagnostic(String, Origin, Origins)
     | SyntaxDiagnostic(ParseFailure)
 pub type MacroResult = Expanded(Syntax)
@@ -315,10 +340,12 @@ pub type MacroResult = Expanded(Syntax)
 ```
 
 The closed `TokenKind` family and its spelling rules are listed in
-[lexical structure](lexical-structure.md#public-token-kinds). The module's
-canonical `Ops` effect declares the following operations, and its ordinary
-functions of the same names request them. Each function has the shown latent
-row together with the current implicit default-allocation requirement.
+[lexical structure](lexical-structure.md#public-token-kinds). It includes
+`SyntaxKeyword` for `syntax` and `Dollar` for `$`; a dollar token carried as
+syntax data is not itself a template splice. The module's canonical `Ops`
+effect declares the following operations, and its ordinary functions of the
+same names request them. Each function has the shown latent row together with
+the current implicit default-allocation requirement.
 
 ```text
 capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -328,27 +355,48 @@ token_kind : Token -> TokenKind ! {Ops}
 token_spelling : Token -> String ! {Ops}
 identifier_spelling : Identifier -> String ! {Ops}
 expression_syntax : ExpressionFragment -> Syntax ! {Ops}
+type_syntax : TypeFragment -> Syntax ! {Ops}
+pattern_syntax : PatternFragment -> Syntax ! {Ops}
+declaration_syntax : DeclarationFragment -> Syntax ! {Ops}
 make_token : (TokenKind, String) -> TokenResult ! {Ops}
 parse_expression : (Input, Syntax) -> ParseResult ! {Ops}
+parse_type : (Input, Syntax) -> ParseResult ! {Ops}
+parse_pattern : (Input, Syntax) -> ParseResult ! {Ops}
+parse_declaration : (Input, Syntax) -> ParseResult ! {Ops}
 fresh_identifier : (Input, String, Origin) -> IdentifierResult ! {Ops}
 definition_identifier : (Input, String, Origin) -> IdentifierResult ! {Ops}
 caller_identifier : (Input, String, Origin) -> IdentifierResult ! {Ops}
 combine_origins : (Input, Origins) -> OriginsResult ! {Ops}
 ```
 
-`capture` indexes captures in matcher order. A negative, unrepresentable, or
-out-of-range index returns `MissingCapture`. `make_token` checks the token
+For a matcher, `capture` indexes distinct capture names in first source order.
+A derive supplies its subject and optional name at the indices described above.
+A repeated capture returns `RepeatedCapture` at each repetition depth, with
+ordered elements and `NoCaptures` for zero iterations; nested groups retain
+their boundaries and ordinary leaf categories. A negative, unrepresentable,
+or out-of-range index returns `MissingCapture`. `make_token` checks the token
 kind and exact spelling; it cannot construct an identifier or an unbalanced
 group. Identifier constructors check the spelling and return
 `InvalidIdentifier` when it is not one identifier. `combine_origins` requires
 a nonempty ordered input list and retains the current expansion frame; the
 empty list returns `MissingOrigins`.
 
-`parse_expression` accepts exactly one expression and preserves its contexts
-and protected fragments. It does not resolve names, expand a nested
-invocation, or run another transformer. A failed parse returns a
-`ParseFailure`; returning it in `SyntaxDiagnostic` retains its structured
-cause. Each `Input` and other opaque handle belongs to its issuing invocation.
+The four syntax accessors expose the fragment's ordered contents without
+consuming its handle. They remove that fragment's outer boundary while retaining
+nested protected nodes, source locations, contexts and origins. A protected
+node keeps its category until an accessor explicitly exposes its contents.
+For a source-written derive subject, `declaration_syntax` includes its deriving
+clause and preceding logical line end, but not the module-level terminator.
+
+`parse_expression`, `parse_type`, `parse_pattern`, and `parse_declaration`
+accept exactly one complete fragment in their respective category. A complete
+declaration includes its signature and equations when those form one ordinary
+declaration. The parser preserves the contexts and protected fragments it
+accepts. It does not resolve names, type-check, expand a nested invocation, or
+run another transformer. A syntax rejection returns `ParseRejected`; returning
+its `ParseFailure` in `SyntaxDiagnostic` retains the structured cause.
+
+Each `Input` and other opaque handle belongs to its issuing invocation.
 Numbers, strings, source spans, and origins cannot forge one; a stale or
 foreign handle is rejected at the host boundary.
 
@@ -380,11 +428,14 @@ The generated runtime program does not require a syntax-service interpreter.
 
 ## Output and diagnostics
 
-Successful output must parse as exactly one expression without trailing input,
-missing structure, invalid groups, or recovery nodes. Nested invocations use
-the same expansion boundary. Resulting expressions receive the ordinary
-type, evidence, effect, scope, and Core checks; generated syntax supplies no
-validated semantic fact by itself.
+Successful expression output must parse as exactly one expression.
+Declaration output must parse as an ordered sequence of complete ordinary
+module declarations, which may be empty. Neither output admits trailing input,
+missing structure, invalid groups, or recovery nodes. Declaration output cannot
+introduce an import or a syntax definition. Nested invocations use the same
+expansion boundary. Generated code receives ordinary resolution, type, evidence,
+effect, scope, and Core checks; syntax supplies no validated semantic fact by
+itself.
 
 Compiler diagnostics retain their ordinary structured reason and facts,
 source and construction causes, and relevant invocation and definition

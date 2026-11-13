@@ -578,6 +578,7 @@ pub struct SyntaxRuntimeFailure {
     pub(crate) cause: RuntimeFailure,
     pub(crate) invocation: Span,
     pub(crate) definition: Span,
+    pub(crate) step: Option<crate::syntax::AdvanceLocations>,
 }
 
 impl SyntaxRuntimeFailure {
@@ -1347,6 +1348,7 @@ impl CompilationInput<'_> {
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut crate::module::StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
+        redundant_quote_dependency: Option<crate::module::ModuleDependency>,
     ) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
@@ -1370,6 +1372,7 @@ impl CompilationInput<'_> {
                         owners,
                         transformer,
                         quote_owner,
+                        redundant_quote_dependency,
                     )
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
@@ -1508,6 +1511,7 @@ fn check_loaded_module(check: impl FnOnce() -> Result<(), FileFailure>) -> Resul
 fn select_imported_syntax<'a>(
     imports: &[SurfaceImport],
     edges: &[crate::module::ModuleDependency],
+    work: &mut TypeWorkBudget,
     mut exports: impl FnMut(
         ModuleId,
     ) -> Result<
@@ -1542,7 +1546,7 @@ fn select_imported_syntax<'a>(
                 .any(|selection: &crate::syntax::SelectedSyntax| selection.name == local.text)
             {
                 return Err(FileFailure::from(PipelineFailure::Resolution(
-                    crate::resolve::duplicate_syntax_import(local),
+                    crate::resolve::duplicate_syntax_import(local, work),
                 )));
             }
             selected.push(crate::syntax::SelectedSyntax {
@@ -1554,6 +1558,71 @@ fn select_imported_syntax<'a>(
         }
     }
     Ok(selected)
+}
+
+// This temporary route proof finishes before module projection and checking.
+#[inline(never)]
+fn selected_syntax_reaches_quote_dependency(
+    selected: &[crate::syntax::SelectedSyntax],
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    checked_by_module: &HashMap<ModuleId, usize>,
+    edge: &crate::module::ModuleDependency,
+    checking_type_work: &mut TypeWorkBudget,
+) -> Result<bool, FileFailure> {
+    let type_resource = || {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    };
+    let mut redundant = None;
+    // A selected owner may have retired its own direct edge.
+    // Follow only its finalized checked dependency routes.
+    checking_type_work
+        .charge(
+            selected
+                .len()
+                .saturating_add(checked.len().saturating_mul(2)),
+        )
+        .map_err(|()| type_resource())?;
+    let mut reachable = Vec::new();
+    reachable
+        .try_reserve_exact(checked.len())
+        .map_err(|_| type_resource())?;
+    reachable.resize(checked.len(), false);
+    for selection in selected {
+        *reachable
+            .get_mut(selection.owner)
+            .ok_or_else(internal_file_failure)? = true;
+    }
+    // Checked owners are in dependency order. A reached route
+    // must lead to an earlier, exactly matching checked owner.
+    for index in (0..checked.len()).rev() {
+        if !reachable[index] {
+            continue;
+        }
+        let owner = &checked[index];
+        checking_type_work
+            .charge(owner.direct_dependencies().len().saturating_mul(2))
+            .map_err(|()| type_resource())?;
+        for route in owner.direct_dependencies() {
+            let target = *checked_by_module
+                .get(&route.target())
+                .ok_or_else(internal_file_failure)?;
+            let dependency = checked.get(target).ok_or_else(internal_file_failure)?;
+            if dependency.module() != route.target() || target >= index {
+                return Err(internal_file_failure());
+            }
+            if route.target() == edge.target() {
+                redundant = Some(edge);
+                break;
+            }
+            reachable[target] = true;
+        }
+        if redundant.is_some() {
+            break;
+        }
+    }
+    Ok(redundant.is_some())
 }
 
 fn compile_graph_with_report<I, V>(
@@ -1628,7 +1697,7 @@ where
     let mut coverage_work = UsefulnessBudget::default();
     while input.has_next() {
         let selected = if let Some((imports, edges)) = input.next_imports() {
-            select_imported_syntax(imports, edges, |target| {
+            select_imported_syntax(imports, edges, &mut checking_type_work, |target| {
                 let index = *checked_by_module
                     .get(&target)
                     .ok_or_else(internal_file_failure)?;
@@ -1644,14 +1713,16 @@ where
             Vec::new()
         };
         let mut syntax_owners = Vec::new();
-        let quote_owner = input
-            .next_quote_dependency()
+        let quote_dependency = input.next_quote_dependency();
+        let quote_owner = quote_dependency
             .map(|edge| {
                 let owner = *checked_by_module
                     .get(&edge.target())
                     .ok_or_else(internal_file_failure)?;
                 let dependency = checked.get(owner).ok_or_else(internal_file_failure)?;
-                if !dependency.module().is_builtin_compiler_syntax() {
+                if dependency.module() != edge.target()
+                    || !dependency.module().is_builtin_compiler_syntax()
+                {
                     return Err(internal_file_failure());
                 }
                 Ok(crate::syntax::SyntaxOwner {
@@ -1662,6 +1733,47 @@ where
                 })
             })
             .transpose()?;
+        let redundant_quote_dependency =
+            if let Some(edge) = quote_dependency.filter(|edge| edge.is_compiler_private()) {
+                let type_resource = || {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                    )))
+                };
+                checking_type_work
+                    .charge(selected.len())
+                    .map_err(|()| type_resource())?;
+                let mut redundant = None;
+                for selection in &selected {
+                    let owner = checked
+                        .get(selection.owner)
+                        .ok_or_else(internal_file_failure)?;
+                    checking_type_work
+                        .charge(owner.direct_dependencies().len())
+                        .map_err(|()| type_resource())?;
+                    if owner
+                        .direct_dependencies()
+                        .iter()
+                        .any(|route| route.target() == edge.target())
+                    {
+                        redundant = Some(edge);
+                        break;
+                    }
+                }
+                if redundant.is_none() && !selected.is_empty() {
+                    redundant = selected_syntax_reaches_quote_dependency(
+                        &selected,
+                        &checked,
+                        &checked_by_module,
+                        &edge,
+                        &mut checking_type_work,
+                    )?
+                    .then_some(edge);
+                }
+                redundant
+            } else {
+                None
+            };
         let mut declaration_failure = None;
         let advanced = {
             let mut transformer =
@@ -1754,6 +1866,7 @@ where
                 &mut syntax_owners,
                 Some(&mut transformer),
                 quote_owner,
+                redundant_quote_dependency,
             )
         };
         let advanced = match (advanced, declaration_failure) {
@@ -1778,6 +1891,10 @@ where
         let (module, mut syntax_budget, mut next_quote_ordinal) = input
             .current_with_syntax_budget()
             .ok_or_else(internal_file_failure)?;
+        #[cfg(test)]
+        if let Some(observe) = LOADED_QUOTE_OBSERVER.get() {
+            observe(module);
+        }
         check_loaded_module(|| -> Result<(), FileFailure> {
             let contexts =
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
@@ -1864,96 +1981,249 @@ where
                                 teardown: None,
                             }))
                         };
-                        let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
-                            &selected,
-                            &checked_syntax_imports,
-                            loan.owners,
-                            loan.budget,
-                        ) {
-                            Ok(contexts) => contexts,
-                            Err(resource) => {
+                        if let Some((next_quote_ordinal, quote_introduction)) = loan.quote_source {
+                            let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
+                                &selected,
+                                &checked_syntax_imports,
+                                loan.owners,
+                                loan.budget,
+                            ) {
+                                Ok(contexts) => contexts,
+                                Err(resource) => {
+                                    transformer_failure = Some(resource_failure(resource));
+                                    return Err(span);
+                                }
+                            };
+                            if let Err(resource) = loan.budget.charge_units(2) {
                                 transformer_failure = Some(resource_failure(resource));
                                 return Err(span);
                             }
-                        };
-                        if let Err(resource) = loan.budget.charge_units(2) {
-                            transformer_failure = Some(resource_failure(resource));
-                            return Err(span);
+                            let mut contexts = Some(Arc::new(contexts));
+                            let evaluated = evaluate_selected_transformer(
+                                selection,
+                                None,
+                                captures,
+                                module.source(),
+                                caller,
+                                introduction,
+                                TransformerContexts::Quote(&mut contexts),
+                                Arc::clone(frame),
+                                &checked,
+                                &mut transformer_entries,
+                                constraint_work,
+                                Some(&mut *loan.budget),
+                                Some(&mut *loan.owners),
+                            );
+                            return match evaluated {
+                                Ok((
+                                    crate::syntax::TransformerOutput::Expanded(output),
+                                    fresh_count,
+                                )) => {
+                                    #[cfg(test)]
+                                    if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                                        observe(selection, captures, &output);
+                                    }
+                                    let Some(contexts) = contexts.as_deref() else {
+                                        transformer_failure = Some(internal_file_failure());
+                                        return Err(span);
+                                    };
+                                    match crate::parser::parse_macro_expression_with_quotes(
+                                        module.source(),
+                                        span,
+                                        output,
+                                        contexts,
+                                        frame,
+                                        loan.budget,
+                                        next_quote_ordinal,
+                                        quote_introduction,
+                                    ) {
+                                        Ok(mut expression) => {
+                                            expression.expression.span = span;
+                                            Ok((expression, fresh_count))
+                                        }
+                                        Err(crate::parser::MacroParseFailure::Syntax {
+                                            diagnostics,
+                                            resource,
+                                        }) => {
+                                            transformer_failure = Some(FileFailure::from(
+                                                PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                                    diagnostics,
+                                                    resource,
+                                                    invocation: span,
+                                                    definition: selection.declaration.span,
+                                                    teardown: None,
+                                                }),
+                                            ));
+                                            Err(span)
+                                        }
+                                        Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
+                                    }
+                                }
+                                Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
+                                    transformer_failure = Some(FileFailure::from(
+                                        PipelineFailure::SyntaxExpansion(failure),
+                                    ));
+                                    Err(span)
+                                }
+                                Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
+                                    transformer_failure =
+                                        Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+                                    Err(span)
+                                }
+                                Err(error) => {
+                                    transformer_failure = Some(error);
+                                    Err(span)
+                                }
+                            };
                         }
-                        let mut contexts = Some(Arc::new(contexts));
-                        let evaluated = evaluate_selected_transformer(
+                        #[cfg(test)]
+                        if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                            observe(
+                                selection,
+                                OrdinaryQuoteResourceEvent::PrepareStart {
+                                    budget: loan.budget,
+                                    cache_entries: transformer_entries.len(),
+                                },
+                            );
+                        }
+                        let entry = match selected_transformer_entry(
                             selection,
                             None,
-                            captures,
-                            module.source(),
-                            caller,
-                            introduction,
-                            TransformerContexts::Quote(&mut contexts),
-                            Arc::clone(frame),
                             &checked,
                             &mut transformer_entries,
                             constraint_work,
                             Some(&mut *loan.budget),
-                            Some(&mut *loan.owners),
-                        );
-                        return match evaluated {
-                            Ok((
-                                crate::syntax::TransformerOutput::Expanded(output),
-                                fresh_count,
-                            )) => {
-                                #[cfg(test)]
-                                if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
-                                    observe(selection, captures, &output);
-                                }
-                                let Some(contexts) = contexts.as_deref() else {
-                                    transformer_failure = Some(internal_file_failure());
-                                    return Err(span);
-                                };
-                                match crate::parser::parse_macro_expression_with_quotes(
-                                    module.source(),
-                                    span,
-                                    output,
-                                    contexts,
-                                    frame,
-                                    loan.budget,
-                                    loan.next_quote_ordinal,
-                                    loan.quote_introduction,
-                                ) {
-                                    Ok(mut expression) => {
-                                        expression.expression.span = span;
-                                        Ok((expression, fresh_count))
-                                    }
-                                    Err(crate::parser::MacroParseFailure::Syntax {
-                                        diagnostics,
-                                        resource,
-                                    }) => {
-                                        transformer_failure = Some(FileFailure::from(
-                                            PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                                diagnostics,
-                                                resource,
-                                                invocation: span,
-                                                definition: selection.declaration.span,
-                                                teardown: None,
-                                            }),
-                                        ));
-                                        Err(span)
-                                    }
-                                    Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
-                                }
-                            }
-                            Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
-                                transformer_failure = Some(FileFailure::from(
-                                    PipelineFailure::SyntaxExpansion(failure),
-                                ));
-                                Err(span)
-                            }
-                            Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
-                                transformer_failure =
-                                    Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
-                                Err(span)
-                            }
+                        ) {
+                            Ok(entry) => entry,
                             Err(error) => {
+                                #[cfg(test)]
+                                if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                    observe(
+                                        selection,
+                                        OrdinaryQuoteResourceEvent::PrepareFailure {
+                                            budget: loan.budget,
+                                            cache_entries: transformer_entries.len(),
+                                            failure: &error,
+                                        },
+                                    );
+                                }
                                 transformer_failure = Some(error);
+                                return Err(span);
+                            }
+                        };
+                        if !entry.quote_sites.is_empty() {
+                            let contexts = match crate::syntax::SyntaxContexts::new_budgeted_expression(
+                                &selected,
+                                &checked_syntax_imports,
+                                loan.owners,
+                                loan.budget,
+                            ) {
+                                Ok(contexts) => contexts,
+                                Err(resource) => {
+                                    transformer_failure = Some(resource_failure(resource));
+                                    return Err(span);
+                                }
+                            };
+                            if let Err(resource) = loan.budget.charge_units(2) {
+                                transformer_failure = Some(resource_failure(resource));
+                                return Err(span);
+                            }
+                            let mut contexts = Some(Arc::new(contexts));
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::ContextCreated(
+                                        contexts.as_ref().expect("context was just created"),
+                                    ),
+                                );
+                            }
+                            let evaluated = evaluate_prepared_transformer(
+                                entry,
+                                selection,
+                                captures,
+                                module.source(),
+                                caller,
+                                introduction,
+                                TransformerContexts::Quote(&mut contexts),
+                                Arc::clone(frame),
+                                Some(&mut *loan.budget),
+                                Some(&mut *loan.owners),
+                            );
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::AdmissionStart {
+                                        budget: loan.budget,
+                                        contexts: contexts.as_ref(),
+                                        owners: loan.owners,
+                                        invocation: span,
+                                        host_expanded: matches!(
+                                            &evaluated,
+                                            Ok((crate::syntax::TransformerOutput::Expanded(_), _))
+                                        ),
+                                    },
+                                );
+                            }
+                            let result = finish_ordinary_expression_output(
+                                evaluated,
+                                selection,
+                                captures,
+                                module.source(),
+                                span,
+                                contexts.as_deref(),
+                                frame,
+                                Some(&mut *loan.budget),
+                            );
+                            #[cfg(test)]
+                            if let Some(observe) = ORDINARY_QUOTE_RESOURCE_OBSERVER.get() {
+                                observe(
+                                    selection,
+                                    OrdinaryQuoteResourceEvent::AdmissionEnd {
+                                        budget: loan.budget,
+                                        result: &result,
+                                    },
+                                );
+                            }
+                            return match result {
+                                Ok(result) => Ok(result),
+                                Err(error) => {
+                                    transformer_failure = error;
+                                    Err(span)
+                                }
+                            };
+                        }
+                        let contexts = Arc::new(crate::syntax::SyntaxContexts::new(
+                            &selected,
+                            &checked_syntax_imports,
+                            owners,
+                        ));
+                        let evaluated = evaluate_prepared_transformer(
+                            entry,
+                            selection,
+                            captures,
+                            module.source(),
+                            caller,
+                            introduction,
+                            TransformerContexts::Shared(Arc::clone(&contexts)),
+                            Arc::clone(frame),
+                            None,
+                            None,
+                        );
+                        return match finish_ordinary_expression_output(
+                            evaluated,
+                            selection,
+                            captures,
+                            module.source(),
+                            span,
+                            Some(&contexts),
+                            frame,
+                            None,
+                        ) {
+                            Ok(result) => Ok(result),
+                            Err(error) => {
+                                transformer_failure = error;
                                 Err(span)
                             }
                         };
@@ -1963,7 +2233,7 @@ where
                         &checked_syntax_imports,
                         owners,
                     ));
-                    match evaluate_selected_transformer(
+                    let evaluated = evaluate_selected_transformer(
                         selection,
                         None,
                         captures,
@@ -1977,55 +2247,20 @@ where
                         constraint_work,
                         None,
                         None,
+                    );
+                    match finish_ordinary_expression_output(
+                        evaluated,
+                        selection,
+                        captures,
+                        module.source(),
+                        span,
+                        Some(&contexts),
+                        frame,
+                        None,
                     ) {
-                        Ok((crate::syntax::TransformerOutput::Expanded(output), fresh_count)) => {
-                            #[cfg(test)]
-                            if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
-                                observe(selection, captures, &output);
-                            }
-                            match crate::syntax::admit_transformer_output(
-                                module.source(),
-                                output,
-                                &contexts,
-                                frame,
-                            ) {
-                                Ok(expression) => Ok((
-                                    crate::syntax::ExpandedExpression {
-                                        expression,
-                                        quote_sites: Vec::new(),
-                                    },
-                                    fresh_count,
-                                )),
-                                Err(crate::parser::MacroParseFailure::Syntax {
-                                    diagnostics,
-                                    resource,
-                                }) => {
-                                    transformer_failure = Some(FileFailure::from(
-                                        PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                            diagnostics,
-                                            resource,
-                                            invocation: span,
-                                            definition: selection.declaration.span,
-                                            teardown: None,
-                                        }),
-                                    ));
-                                    Err(span)
-                                }
-                                Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
-                            }
-                        }
-                        Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
-                            transformer_failure =
-                                Some(FileFailure::from(PipelineFailure::SyntaxExpansion(failure)));
-                            Err(span)
-                        }
-                        Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
-                            transformer_failure =
-                                Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
-                            Err(span)
-                        }
+                        Ok(result) => Ok(result),
                         Err(error) => {
-                            transformer_failure = Some(error);
+                            transformer_failure = error;
                             Err(span)
                         }
                     }
@@ -2071,7 +2306,7 @@ where
                         )))
                     })?;
                 let resolution_phase = crate::calibration::Phase::start("resolution");
-                let resolved = crate::resolve::resolve_module_with_syntax(
+                let resolution = crate::resolve::resolve_module_with_syntax(
                     module,
                     &dependencies,
                     &mut resolution_type_work,
@@ -2083,33 +2318,41 @@ where
                 );
                 let template_parse_failure = syntax_expansion.take_parse_failure();
                 drop(syntax_expansion);
-                drop(transformer);
                 if let Some(failure) = template_parse_failure {
                     return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
                 }
                 if let Some(failure) = transformer_failure {
                     return Err(failure);
                 }
-                let resolved = resolved
-                    .map_err(|error| match error {
-                        ResolveModuleError::Resolution(error) => match error.syntax_depth() {
-                            Some((invocation, definition)) => {
-                                PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                    diagnostics: Vec::new(),
-                                    resource: Some(ResourceFailure::StructuralDepth {
-                                        limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
-                                    }),
-                                    invocation,
-                                    definition,
-                                    teardown: None,
-                                })
+                #[allow(clippy::needless_late_init)]
+                // Keep one destination for the large success payload.
+                let resolved;
+                match resolution {
+                    Ok(module) => resolved = module,
+                    Err(error) => {
+                        let failure = match error {
+                            ResolveModuleError::Resolution(error) => match error.syntax_depth() {
+                                Some((invocation, definition)) => {
+                                    PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                        diagnostics: Vec::new(),
+                                        resource: Some(ResourceFailure::StructuralDepth {
+                                            limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                                        }),
+                                        invocation,
+                                        definition,
+                                        teardown: None,
+                                    })
+                                }
+                                None => PipelineFailure::Resolution(error),
+                            },
+                            ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+                            ResolveModuleError::Representation(error) => {
+                                PipelineFailure::Typing(error)
                             }
-                            None => PipelineFailure::Resolution(error),
-                        },
-                        ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
-                        ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
-                    })
-                    .map_err(FileFailure::from)?;
+                        };
+                        return Err(FileFailure::from(failure));
+                    }
+                }
                 resolution_phase.finish(
                     Some(resolution_type_work.used()),
                     resolution_normal_limit,
@@ -2556,77 +2799,7 @@ where
             linked_type_work.limit(),
             true,
         );
-        let registry = Arc::clone(validated_interfaces.registry());
-        let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
-        let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
-            crate::compiler_work::CompilationPhase::FinalElaboration,
-            &sources,
-        )
-        .map_err(|()| {
-            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-            )))
-        })?;
-        let final_limit = final_budget.limit();
-        let rewrite_budget =
-            TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                )))
-            })?);
-        let mut elaborator = Elaborator::for_module_program_with_budgets(
-            &validated_interfaces,
-            final_budget,
-            TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                )))
-            })?),
-            rewrite_budget,
-        )
-        .map_err(|(failure, used)| {
-            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                .with_phase_work(
-                    crate::compiler_work::CompilationPhase::FinalElaboration
-                        .assess_with_allowance(used, final_limit)
-                        .incomplete(),
-                )
-        })?;
-        let typed = if select_effect_core {
-            elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
-        } else {
-            elaborator.synthesize_module_program(&validated_interfaces)
-        }
-        .map_err(|failure| {
-            FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
-                crate::compiler_work::CompilationPhase::FinalElaboration
-                    .assess_with_allowance(elaborator.measured_type_work(), final_limit)
-                    .incomplete(),
-            )
-        })?;
-        let ty = IterativeTypeOwner::new(typed.ty);
-        let type_display = registry.display_type(&ty);
-        let (unchecked, final_work) =
-            elaborator
-                .finish_with_work(typed.node)
-                .map_err(|(failure, used)| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                        .with_phase_work(
-                            crate::compiler_work::CompilationPhase::FinalElaboration
-                                .assess_with_allowance(used, final_limit)
-                                .incomplete(),
-                        )
-                })?;
-        crate::calibration::work(
-            "final-elaboration",
-            final_work,
-            final_normal_limit,
-            final_limit,
-            true,
-        );
-        ::std::mem::drop(validated_interfaces);
-        elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
-        (ty, type_display, unchecked, final_work, final_limit)
+        elaborate_legacy_module_phase(validated_interfaces, &sources, select_effect_core)?
     };
     compilation_work.final_elaboration = Some(
         crate::compiler_work::CompilationPhase::FinalElaboration
@@ -2645,6 +2818,85 @@ where
         compiled.provenance = provenance;
         compiled
     })
+}
+
+// Legacy final elaboration starts after module resolution and checking return.
+#[inline(never)]
+fn elaborate_legacy_module_phase(
+    validated_interfaces: ValidatedInterfaceProgram,
+    sources: &[&SourceFile],
+    select_effect_core: bool,
+) -> Result<(IterativeTypeOwner, String, UnvalidatedProgram, usize, usize), FileFailure> {
+    let registry = Arc::clone(validated_interfaces.registry());
+    let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
+    let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
+        crate::compiler_work::CompilationPhase::FinalElaboration,
+        sources,
+    )
+    .map_err(|()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    })?;
+    let final_limit = final_budget.limit();
+    let rewrite_budget =
+        TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?);
+    let mut elaborator = Elaborator::for_module_program_with_budgets(
+        &validated_interfaces,
+        final_budget,
+        TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?),
+        rewrite_budget,
+    )
+    .map_err(|(failure, used)| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure))).with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess_with_allowance(used, final_limit)
+                .incomplete(),
+        )
+    })?;
+    let typed = if select_effect_core {
+        elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
+    } else {
+        elaborator.synthesize_module_program(&validated_interfaces)
+    }
+    .map_err(|failure| {
+        FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess_with_allowance(elaborator.measured_type_work(), final_limit)
+                .incomplete(),
+        )
+    })?;
+    let ty = IterativeTypeOwner::new(typed.ty);
+    let type_display = registry.display_type(&ty);
+    let (unchecked, final_work) =
+        elaborator
+            .finish_with_work(typed.node)
+            .map_err(|(failure, used)| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                    .with_phase_work(
+                        crate::compiler_work::CompilationPhase::FinalElaboration
+                            .assess_with_allowance(used, final_limit)
+                            .incomplete(),
+                    )
+            })?;
+    crate::calibration::work(
+        "final-elaboration",
+        final_work,
+        final_normal_limit,
+        final_limit,
+        true,
+    );
+    ::std::mem::drop(validated_interfaces);
+    elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
+    Ok((ty, type_display, unchecked, final_work, final_limit))
 }
 
 fn retain_source_provenance(
@@ -2692,8 +2944,73 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
-    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
-    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<fn([usize; 5], [usize; 5])>> = const { std::cell::Cell::new(None) };
+    static ORDINARY_QUOTE_RESOURCE_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteResourceObserver>> = const { std::cell::Cell::new(None) };
+    static ORDINARY_QUOTE_OWNER_OBSERVER: std::cell::Cell<Option<OrdinaryQuoteOwnerObserver>> = const { std::cell::Cell::new(None) };
+    static LOADED_QUOTE_OBSERVER: std::cell::Cell<Option<fn(&crate::module::LoadedModule)>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<GeneratorOwnerObserver>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_ADAPTER_OBSERVER: std::cell::Cell<Option<GeneratorAdapterObserver>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_LIFECYCLE_OBSERVER: std::cell::Cell<Option<GeneratorLifecycleObserver>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+type GeneratorOwnerObserver = fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan);
+
+#[cfg(test)]
+type GeneratorLifecycleObserver = fn([usize; 5], [usize; 5]);
+
+#[cfg(test)]
+type GeneratorAdapterObserver = fn(
+    &crate::module::LoadedModule,
+    &[crate::module::ModuleDependency],
+    &crate::syntax::SelectedSyntax,
+    &[Arc<crate::resolved::CheckedModule>],
+    usize,
+    &[crate::syntax::SyntaxOwner],
+    usize,
+);
+
+#[cfg(test)]
+enum OrdinaryQuoteResourceEvent<'a> {
+    PrepareStart {
+        budget: &'a mut crate::syntax_resource::SyntaxBudget,
+        cache_entries: usize,
+    },
+    PrepareFailure {
+        budget: &'a crate::syntax_resource::SyntaxBudget,
+        cache_entries: usize,
+        failure: &'a FileFailure,
+    },
+    ContextCreated(&'a Arc<crate::syntax::SyntaxContexts>),
+    AdmissionStart {
+        budget: &'a mut crate::syntax_resource::SyntaxBudget,
+        contexts: Option<&'a Arc<crate::syntax::SyntaxContexts>>,
+        owners: &'a [crate::syntax::SyntaxOwner],
+        invocation: Span,
+        host_expanded: bool,
+    },
+    AdmissionEnd {
+        budget: &'a crate::syntax_resource::SyntaxBudget,
+        result: &'a Result<(crate::syntax::ExpandedExpression, usize), Option<FileFailure>>,
+    },
+}
+
+#[cfg(test)]
+type OrdinaryQuoteResourceObserver =
+    for<'a> fn(&crate::syntax::SelectedSyntax, OrdinaryQuoteResourceEvent<'a>);
+
+#[cfg(test)]
+type OrdinaryQuoteOwnerObserver =
+    fn(&crate::syntax::SelectedSyntax, &[crate::syntax::SyntaxOwner], bool);
+
+#[cfg(test)]
+pub(crate) fn observe_ordinary_quote_owners(
+    selection: &crate::syntax::SelectedSyntax,
+    owners: &[crate::syntax::SyntaxOwner],
+    restored: bool,
+) {
+    if let Some(observe) = ORDINARY_QUOTE_OWNER_OBSERVER.get() {
+        observe(selection, owners, restored);
+    }
 }
 
 #[cfg(test)]
@@ -2760,6 +3077,9 @@ fn evaluate_generator_transformer(
     let builtin = checked
         .get(builtin_index)
         .ok_or_else(internal_file_failure)?;
+    if builtin.module() != route.target() {
+        return Err(internal_file_failure());
+    }
     let live = owners.len();
     budget
         .charge_units(if live == owners.capacity() {
@@ -2832,33 +3152,34 @@ fn evaluate_generator_transformer(
         crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
             .map_err(quote_resource_failure)?;
     let quote_projection = staged.quote_projection();
-    let (definition, uses, quote_sites) = crate::syntax::generator_adapter_definition(
-        plan,
-        &escape_categories,
-        &selection.declaration.matcher,
-        captures,
-        source,
-        &contexts,
-        quote_projection,
-        introduction,
-        builtin_introduction,
-        owners,
-        &frame,
-        budget,
-    )
-    .map_err(|error| match error {
-        crate::parser::MacroParseFailure::Syntax {
-            diagnostics,
-            resource,
-        } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
-            diagnostics,
-            resource,
-            invocation: frame.invocation,
-            definition: selection.declaration.span,
-            teardown: None,
-        })),
-        crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
-    })?;
+    let (definition, uses, quote_sites, advance_sites) =
+        crate::syntax::generator_adapter_definition(
+            plan,
+            &escape_categories,
+            &selection.declaration.matcher,
+            captures,
+            source,
+            &contexts,
+            quote_projection,
+            introduction,
+            builtin_introduction,
+            owners,
+            &frame,
+            budget,
+        )
+        .map_err(|error| match error {
+            crate::parser::MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                diagnostics,
+                resource,
+                invocation: frame.invocation,
+                definition: selection.declaration.span,
+                teardown: None,
+            })),
+            crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+        })?;
     let caller_quote_owner = if quote_sites.is_empty() {
         None
     } else {
@@ -2880,8 +3201,27 @@ fn evaluate_generator_transformer(
         )
     };
     let module = staged
-        .adapter_view(source, definition, quote_sites, quote_introduction, budget)
+        .adapter_view(
+            source,
+            definition,
+            quote_sites,
+            quote_introduction,
+            Some(builtin.module()),
+            budget,
+        )
         .map_err(quote_resource_failure)?;
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_ADAPTER_OBSERVER.get() {
+        observe(
+            &module,
+            staged.dependencies(),
+            selection,
+            checked,
+            builtin_index,
+            owners,
+            builtin_introduction,
+        );
+    }
     budget
         .charge_units(module.dependencies().len())
         .map_err(quote_resource_failure)?;
@@ -2919,7 +3259,7 @@ fn evaluate_generator_transformer(
         None,
         &mut nested,
     );
-    let resolved = crate::resolve::resolve_module_with_syntax(
+    let resolved = crate::resolve::resolve_generator_module_with_syntax(
         &module,
         &dependencies,
         resolution_work,
@@ -2927,6 +3267,7 @@ fn evaluate_generator_transformer(
         &uses,
         checked,
         checked_terms,
+        &advance_sites,
         Some(&mut expansion),
     );
     let parse_failure = expansion.take_parse_failure();
@@ -2976,6 +3317,7 @@ fn evaluate_generator_transformer(
     let mut local = Vec::with_capacity(checked.len().saturating_add(1));
     local.extend(checked.iter().cloned());
     local.push(Arc::clone(&checked_module));
+    let mut linked_advance_sites = Vec::new();
     let entry = prepare_transformer_entry(
         &checked_module,
         binder,
@@ -2985,11 +3327,21 @@ fn evaluate_generator_transformer(
         caller_quote_owner
             .as_ref()
             .map(|owner| (owner, module.quote_sites())),
+        Some(&mut linked_advance_sites),
     )?;
+    budget.charge().map_err(quote_resource_failure)?;
+    if linked_advance_sites.len() != advance_sites.len() {
+        return Err(internal_file_failure());
+    }
+    let capsule = GeneratorDiagnosticCapsule {
+        entry: &entry,
+        sites: linked_advance_sites,
+    };
+    let mut step = None;
     budget.charge().map_err(quote_resource_failure)?;
     #[cfg(test)]
     let lifecycle_before = generator_lifecycle_counters();
-    let evaluated = crate::eval::evaluate_transformer_with_owners(
+    let evaluated = crate::eval::evaluate_generator_transformer(
         &entry,
         // Only selected scalar leaves are exposed through the existing host.
         &plan.captures,
@@ -3000,6 +3352,8 @@ fn evaluate_generator_transformer(
         Arc::clone(&frame),
         Some(&mut *budget),
         Some(owners),
+        &capsule,
+        &mut step,
     );
     #[cfg(test)]
     if let Some(observe) = GENERATOR_LIFECYCLE_OBSERVER.get() {
@@ -3010,6 +3364,7 @@ fn evaluate_generator_transformer(
             cause,
             invocation: frame.invocation,
             definition: selection.declaration.span,
+            step,
         }))
     })
 }
@@ -3045,8 +3400,41 @@ fn evaluate_selected_transformer(
     mut syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
     staged_owners: Option<&mut Vec<crate::syntax::SyntaxOwner>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
+    let entry = selected_transformer_entry(
+        selection,
+        adapter,
+        checked,
+        entries,
+        constraint_work,
+        syntax_work.as_deref_mut(),
+    )?;
+    evaluate_prepared_transformer(
+        entry,
+        selection,
+        captures,
+        source,
+        caller,
+        introduction,
+        contexts,
+        frame,
+        syntax_work,
+        staged_owners,
+    )
+}
+
+fn selected_transformer_entry<'a>(
+    selection: &crate::syntax::SelectedSyntax,
+    adapter: Option<&crate::surface::SurfaceName>,
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    entries: &'a mut HashMap<
+        (ModuleId, crate::resolved::BinderId),
+        crate::core::validate::ValidatedMacroEntry,
+    >,
+    constraint_work: &mut InterfaceConstraintBudget,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<&'a crate::core::validate::ValidatedMacroEntry, FileFailure> {
     let (owner, binder) = transformer_owner_and_binder(selection, adapter, checked)?;
-    let entry = match entries.entry((owner.module(), binder)) {
+    Ok(match entries.entry((owner.module(), binder)) {
         std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(prepare_transformer_entry(
@@ -3054,11 +3442,27 @@ fn evaluate_selected_transformer(
                 binder,
                 checked,
                 constraint_work,
-                syntax_work.as_deref_mut(),
+                syntax_work,
+                None,
                 None,
             )?)
         }
-    };
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_prepared_transformer(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    selection: &crate::syntax::SelectedSyntax,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: TransformerContexts<'_>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&mut Vec<crate::syntax::SyntaxOwner>>,
+) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
     let invocation = frame.invocation;
     let staged_owners =
         if entry.quote_sites.is_empty() && matches!(&contexts, TransformerContexts::Shared(_)) {
@@ -3097,8 +3501,76 @@ fn evaluate_selected_transformer(
             cause,
             invocation,
             definition: selection.declaration.span,
+            step: None,
         }))
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_ordinary_expression_output(
+    evaluated: Result<(crate::syntax::TransformerOutput, usize), FileFailure>,
+    selection: &crate::syntax::SelectedSyntax,
+    _captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    invocation: Span,
+    contexts: Option<&crate::syntax::SyntaxContexts>,
+    frame: &Arc<crate::syntax::ExpansionFrame>,
+    budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<(crate::syntax::ExpandedExpression, usize), Option<FileFailure>> {
+    match evaluated {
+        Ok((crate::syntax::TransformerOutput::Expanded(output), fresh_count)) => {
+            #[cfg(test)]
+            if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                observe(selection, _captures, &output);
+            }
+            let contexts = contexts.ok_or_else(|| Some(internal_file_failure()))?;
+            let parsed = if let Some(budget) = budget {
+                crate::parser::parse_macro_expression_budgeted(
+                    source,
+                    invocation,
+                    None,
+                    output,
+                    contexts,
+                    Some(frame),
+                    budget,
+                )
+            } else {
+                crate::syntax::admit_transformer_output(source, output, contexts, frame)
+            };
+            match parsed {
+                Ok(mut expression) => {
+                    expression.span = invocation;
+                    Ok((
+                        crate::syntax::ExpandedExpression {
+                            expression,
+                            quote_sites: Vec::new(),
+                        },
+                        fresh_count,
+                    ))
+                }
+                Err(crate::parser::MacroParseFailure::Syntax {
+                    diagnostics,
+                    resource,
+                }) => Err(Some(FileFailure::from(PipelineFailure::SyntaxParse(
+                    SyntaxParseFailure {
+                        diagnostics,
+                        resource,
+                        invocation,
+                        definition: selection.declaration.span,
+                        teardown: None,
+                    },
+                )))),
+                Err(crate::parser::MacroParseFailure::Invalid) => Err(None),
+            }
+        }
+        Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => Err(Some(
+            FileFailure::from(PipelineFailure::SyntaxExpansion(failure)),
+        )),
+        Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => Err(Some(
+            FileFailure::from(PipelineFailure::SyntaxParse(failure)),
+        )),
+        Err(error) => Err(Some(error)),
+    }
 }
 
 fn transformer_owner_and_binder<'a>(
@@ -3158,6 +3630,23 @@ fn is_caller_quote_site(
     Ok(false)
 }
 
+/// Generator-only evaluator metadata borrowed from this exact validated entry.
+/// Its fields can only be assembled in this module after the independent check.
+pub(crate) struct GeneratorDiagnosticCapsule<'entry> {
+    entry: &'entry crate::core::validate::ValidatedMacroEntry,
+    sites: Vec<crate::elaborate::CheckedAdvanceSite>,
+}
+
+impl GeneratorDiagnosticCapsule<'_> {
+    pub(crate) fn matches_entry(&self, entry: &crate::core::validate::ValidatedMacroEntry) -> bool {
+        std::ptr::eq(self.entry, entry)
+    }
+
+    pub(crate) fn sites(&self) -> &[crate::elaborate::CheckedAdvanceSite] {
+        &self.sites
+    }
+}
+
 fn prepare_transformer_entry(
     owner: &crate::resolved::CheckedModule,
     binder: crate::resolved::BinderId,
@@ -3168,6 +3657,7 @@ fn prepare_transformer_entry(
         &Arc<crate::syntax::CallerQuoteOwner>,
         &[crate::syntax::SurfaceQuoteSite],
     )>,
+    advance_output: Option<&mut Vec<crate::elaborate::CheckedAdvanceSite>>,
 ) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
     #[cfg(test)]
     TRANSFORMER_ENTRY_PREPARATIONS.set(TRANSFORMER_ENTRY_PREPARATIONS.get() + 1);
@@ -3244,6 +3734,7 @@ fn prepare_transformer_entry(
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
     let quote_sites = elaborator.take_checked_quote_sites();
+    let advance_sites = elaborator.take_checked_advance_sites();
     let _ty = IterativeTypeOwner::new(typed.ty);
     let program = elaborator
         .finish(typed.node)
@@ -3263,6 +3754,57 @@ fn prepare_transformer_entry(
     )
     .map_err(PipelineFailure::Validation)
     .map_err(FileFailure::from)?;
+    if let Some(output) = advance_output {
+        let budget = syntax_work
+            .as_deref_mut()
+            .ok_or_else(internal_file_failure)?;
+        budget
+            .charge_units(advance_sites.len())
+            .map_err(quote_resource_failure)?;
+        output
+            .try_reserve_exact(advance_sites.len())
+            .map_err(|_| internal_file_failure())?;
+        for site in advance_sites {
+            // Charge owner, arena, node-kind and direct parent comparisons first.
+            budget.charge_units(6).map_err(quote_resource_failure)?;
+            let application = entry
+                .program
+                .node(site.application)
+                .ok_or_else(internal_file_failure)?;
+            let completion = entry
+                .program
+                .node(site.completion)
+                .ok_or_else(internal_file_failure)?;
+            if site.owner != binder
+                || !matches!(
+                    &application.kind,
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::Apply(_)
+                    ))
+                )
+            {
+                return Err(internal_file_failure());
+            }
+            let crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                crate::core::PureComputation::Match(matched),
+            )) = &completion.kind
+            else {
+                return Err(internal_file_failure());
+            };
+            if matched.scrutinee() != site.application {
+                return Err(internal_file_failure());
+            }
+            for previous in output.iter() {
+                budget.charge_units(2).map_err(quote_resource_failure)?;
+                if previous.application == site.application
+                    || previous.completion == site.completion
+                {
+                    return Err(internal_file_failure());
+                }
+            }
+            output.push(site);
+        }
+    }
     if !quote_sites.is_empty() {
         let budget = syntax_work.ok_or_else(internal_file_failure)?;
         budget
@@ -3825,7 +4367,7 @@ mod tests {
         dependencies: &[(ModuleId, Vec<crate::surface::SurfaceSyntaxDeclaration>)],
     ) -> Result<Vec<crate::syntax::SelectedSyntax>, FileFailure> {
         let (imports, edges) = graph.next_imports().expect("fixture importer");
-        select_imported_syntax(imports, edges, |target| {
+        select_imported_syntax(imports, edges, &mut TypeWorkBudget::default(), |target| {
             let owner = dependencies
                 .iter()
                 .position(|(module, _)| *module == target)
@@ -3987,7 +4529,201 @@ mod tests {
         };
         assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
         assert_eq!(error.primary.span(), name.span);
+        assert_eq!(error.found.as_deref(), Some("declaration"));
         assert_eq!(name.text, "declaration");
+    }
+
+    #[test]
+    fn i21_collision_spelling_uses_the_continuing_work_budget() {
+        let mut graph = i21_graph("collision.ash");
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, edges) = graph.next_imports().unwrap();
+        let SurfaceImportSelection::Targeted(items) = &imports[1].selection else {
+            panic!("the original collision has a targeted import")
+        };
+        let [SurfaceImportItem::Syntax { name, .. }] = items.as_slice() else {
+            panic!("the original collision selects one syntax")
+        };
+        let choose = |work: &mut TypeWorkBudget| {
+            select_imported_syntax(imports, edges, work, |target| {
+                let owner = dependencies
+                    .iter()
+                    .position(|(module, _)| *module == target)
+                    .ok_or_else(internal_file_failure)?;
+                Ok((owner, dependencies[owner].1.as_slice()))
+            })
+        };
+        let mut measured = TypeWorkBudget::with_limit(100_000);
+        let failure = choose(&mut measured).unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("the original graph rejects the collision")
+        };
+        assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+        assert_eq!(error.primary.span(), name.span);
+        assert_eq!(error.found.as_deref(), Some("declaration"));
+        let cost = measured.used();
+        assert_eq!(cost, name.text.len());
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            let failure = choose(&mut short).unwrap_err();
+            let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+                panic!("the short spelling reservation is a resolution failure")
+            };
+            assert_eq!(
+                error.reason,
+                crate::resolve::ResolveReason::TypeResourceExhausted
+            );
+            assert_eq!(error.primary.span(), name.span);
+            assert_eq!(short.used(), prefix);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                let failure = choose(&mut exact).unwrap_err();
+                let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+                    panic!("the paid retry preserves the original conflict")
+                };
+                assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+                assert_eq!(error.primary.span(), name.span);
+                assert_eq!(error.found.as_deref(), Some("declaration"));
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+
+        let mut success_graph = i21_graph("both.ash");
+        let success_dependencies = projected_syntax_dependencies(&mut success_graph);
+        let (success_imports, success_edges) = success_graph.next_imports().unwrap();
+        let mut zero = TypeWorkBudget::with_limit(0);
+        let selected =
+            select_imported_syntax(success_imports, success_edges, &mut zero, |target| {
+                let owner = success_dependencies
+                    .iter()
+                    .position(|(module, _)| *module == target)
+                    .ok_or_else(internal_file_failure)?;
+                Ok((owner, success_dependencies[owner].1.as_slice()))
+            })
+            .unwrap();
+        assert_eq!(zero.used(), 0);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            ["declaration", "make_value"]
+        );
+        for (selection, import) in selected.iter().zip(success_imports) {
+            assert_eq!(
+                selection.declaration,
+                success_dependencies[selection.owner].1[0]
+            );
+            assert_eq!(selection.import_span, import.span);
+        }
+    }
+
+    #[test]
+    fn i20_recursive_bound_preserves_every_frame_and_publishes_no_module() {
+        use crate::eval::machine_test_hooks as hooks;
+        use std::sync::Arc;
+
+        std::thread_local! {
+            static TARGET_PUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        fn observe(source: &SourceFile, _: &crate::surface::SurfaceModule) {
+            if source.display_path().ends_with("diagnostics/recursive.ash") {
+                TARGET_PUBLISHED.set(true);
+            }
+        }
+
+        hooks::reset();
+        TARGET_PUBLISHED.set(false);
+        crate::parser::STAGED_MODULE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/diagnostics/recursive.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        crate::parser::STAGED_MODULE_OBSERVER.set(None);
+        let failure = match result {
+            Err(failure) => failure,
+            Ok(_) => panic!("the original recursive graph must reach its bound"),
+        };
+        assert!(!TARGET_PUBLISHED.get());
+        assert!(hooks::ROOT_CLOSES.get() > 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFER_ATTEMPTS.get());
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+
+        let FileFailure::Graph(graph) = &failure else {
+            panic!("the existing graph failure must retain the resource")
+        };
+        let LoadGraphError::Syntax(syntax) = graph.failure() else {
+            panic!("the original syntax resource remains the failure")
+        };
+        assert_eq!(
+            syntax.resource,
+            Some(ResourceFailure::StructuralDepth {
+                limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+            })
+        );
+        let location = graph.resource_location().expect("actual expansion context");
+        assert!(location.frames.len() > 1);
+        let weak = location
+            .frames
+            .iter()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
+        let diagnostics = crate::presentation::compile_file_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        let mut bytes = Vec::new();
+        crate::presentation::write_json(&mut bytes, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["reason"], "internal.resource.structural-depth");
+        assert_eq!(json["responsibility"], "compiler");
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 2 * location.frames.len());
+        for (index, frame) in location.frames.iter().enumerate() {
+            assert!(
+                !location.frames[..index]
+                    .iter()
+                    .any(|previous| Arc::ptr_eq(previous, frame))
+            );
+            for (offset, span, relationship, expected_path, expected_text) in [
+                (
+                    0,
+                    frame.invocation,
+                    "syntax_invocation",
+                    "recursive.ash",
+                    "repeat_forever",
+                ),
+                (
+                    1,
+                    frame.definition,
+                    "syntax_definition",
+                    "recursive_forms.ash",
+                    "pub syntax declaration: (repeat_forever)",
+                ),
+            ] {
+                let source = graph
+                    .sources()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                let range = span.range();
+                let text = &source.text()[range.start() as usize..range.end() as usize];
+                assert!(source.display_path().ends_with(expected_path));
+                assert!(text.contains(expected_text), "{text:?}");
+                let label = &labels[2 * index + offset];
+                assert_eq!(label["role"], "related");
+                assert_eq!(label["relationship"], relationship);
+                assert_eq!(label["path"], source.display_path());
+                assert_eq!(label["byte_start"], range.start());
+                assert_eq!(label["byte_end"], range.end());
+            }
+        }
+        drop(diagnostics);
+        drop(failure);
+        assert!(weak.into_iter().all(|frame| frame.upgrade().is_none()));
+        hooks::reset();
     }
 
     #[test]
@@ -4017,10 +4753,11 @@ mod tests {
         let _dependencies = projected_syntax_dependencies(&mut graph);
         let (imports, edges) = graph.next_imports().unwrap();
         assert!(imports.is_empty());
-        let selected = select_imported_syntax(imports, edges, |_| {
-            panic!("an unimported local definition must not be looked up")
-        })
-        .unwrap();
+        let selected =
+            select_imported_syntax(imports, edges, &mut TypeWorkBudget::default(), |_| {
+                panic!("an unimported local definition must not be looked up")
+            })
+            .unwrap();
         assert!(selected.is_empty());
     }
 
@@ -5606,6 +6343,68 @@ mod tests {
         }
     }
 
+    type ConstructedQuoteSite = (usize, usize, bool, String);
+    type ConstructedQuoteDefinition = (String, bool, bool, Vec<ConstructedQuoteSite>);
+    type H4PublicName = (
+        String,
+        usize,
+        crate::source::Span,
+        Option<crate::source::Span>,
+    );
+
+    #[derive(Debug)]
+    struct ConstructedQuoteObservation {
+        no_lexical_quote: bool,
+        compiler_edges: Vec<bool>,
+        has_quote_owner: bool,
+        distinct_callees: bool,
+        site_count: usize,
+        definitions: Vec<ConstructedQuoteDefinition>,
+    }
+
+    #[derive(Debug)]
+    struct OrdinaryQuoteSiteObservation {
+        owner: usize,
+        module: ModuleId,
+        source: String,
+        source_matches: bool,
+        text: String,
+        range: (u32, u32),
+        ordinal: usize,
+        holes: usize,
+        application: crate::core::NodeId,
+        callee: crate::core::NodeId,
+        argument: crate::core::NodeId,
+        mapped_application: bool,
+        canonical_constructor: bool,
+    }
+
+    #[derive(Debug)]
+    struct OrdinaryQuoteEntryObservation {
+        reused: Option<bool>,
+        sites: Vec<OrdinaryQuoteSiteObservation>,
+        reaches: usize,
+        completions: usize,
+    }
+
+    #[derive(Debug)]
+    struct OrdinaryQuoteOutputObservation {
+        value: Option<String>,
+        empty_input_sites: bool,
+        retained_input: bool,
+        closed: usize,
+        dropped: usize,
+        active_drops: usize,
+    }
+
+    #[derive(Debug)]
+    struct GeneratorAdapterObservation {
+        quote_sites: usize,
+        original_private: bool,
+        adapter_private: bool,
+        adapter_explicit: bool,
+    }
+
     std::thread_local! {
         static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
         static DERIVE_INPUTS: RefCell<Vec<Vec<crate::surface::SurfaceSyntaxCapture>>> = const { RefCell::new(Vec::new()) };
@@ -5628,8 +6427,108 @@ mod tests {
         static FAILURE_OUTPUTS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CALLERS: Cell<usize> = const { Cell::new(0) };
         static FAILURE_STAGED_CONTROLS: Cell<usize> = const { Cell::new(0) };
+        static ADVANCE_SELECTED_ORIGIN: RefCell<Option<Origin>> = const { RefCell::new(None) };
+        static ADVANCE_SELECTED_COUNT: Cell<usize> = const { Cell::new(0) };
+        static ADVANCE_CAPTURE_RANGES: RefCell<Vec<crate::eval::machine_test_hooks::AdvanceCaptureObservation>> = const { RefCell::new(Vec::new()) };
+        static ADVANCE_TRACE: RefCell<Vec<(&'static str, usize, usize, usize)>> = const { RefCell::new(Vec::new()) };
         static CALLER_QUOTE_REFERENCES: RefCell<Vec<(usize, crate::source::Span)>> = const { RefCell::new(Vec::new()) };
-        static H4_PUBLIC_NAMES: RefCell<Vec<(String, usize, crate::source::Span, Option<crate::source::Span>)>> = const { RefCell::new(Vec::new()) };
+        static H4_PUBLIC_NAMES: RefCell<Vec<H4PublicName>> = const { RefCell::new(Vec::new()) };
+        static CONSTRUCTED_QUOTE_OBSERVATIONS: RefCell<Vec<ConstructedQuoteObservation>> = const { RefCell::new(Vec::new()) };
+        static ORDINARY_QUOTE_ENTRY: RefCell<Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>> = const { RefCell::new(None) };
+        static ORDINARY_QUOTE_ENTRIES: RefCell<Vec<OrdinaryQuoteEntryObservation>> = const { RefCell::new(Vec::new()) };
+        static ORDINARY_QUOTE_OUTPUTS: RefCell<Vec<OrdinaryQuoteOutputObservation>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_ADAPTER_OBSERVATIONS: RefCell<Vec<GeneratorAdapterObservation>> = const { RefCell::new(Vec::new()) };
+        static CAPTURED_ONLY_CALLER: Cell<bool> = const { Cell::new(false) };
+        static CAPTURED_ONLY_TRANSFORM: Cell<bool> = const { Cell::new(false) };
+        static EARLY_FINAL_HANDOFF: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn observe_generator_adapter_dependencies(
+        module: &crate::module::LoadedModule,
+        original: &[crate::module::ModuleDependency],
+        selection: &crate::syntax::SelectedSyntax,
+        checked: &[Arc<crate::resolved::CheckedModule>],
+        builtin_index: usize,
+        owners: &[crate::syntax::SyntaxOwner],
+        builtin_introduction: usize,
+    ) {
+        let builtin = &checked[builtin_index];
+        let builtin_id = builtin.module();
+        assert!(builtin_id.is_builtin_compiler_syntax());
+        assert!(
+            checked[selection.owner]
+                .direct_dependencies()
+                .iter()
+                .any(|edge| edge.target() == builtin_id)
+        );
+        assert_eq!(owners[builtin_introduction - 1].owner, Some(builtin_index));
+        let canonical_source = &builtin
+            .exports()
+            .defining_sources()
+            .iter()
+            .find(|(owner, _)| *owner == builtin_id)
+            .expect("the checked builtin retains its source")
+            .1;
+        assert!(
+            module.dependencies().iter().any(|edge| {
+                checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .is_some_and(|dependency| {
+                        dependency
+                            .exports()
+                            .defining_sources()
+                            .iter()
+                            .any(|(owner, source)| {
+                                *owner == builtin_id && Arc::ptr_eq(source, canonical_source)
+                            })
+                    })
+            }),
+            "the actual remaining dependency closure retains the canonical builtin source"
+        );
+        let private = |edge: &crate::module::ModuleDependency| {
+            edge.is_compiler_private() && edge.target() == builtin_id
+        };
+        let original_private = original.iter().any(private);
+        let adapter_private = module.dependencies().iter().any(private);
+        let adapter_explicit = module
+            .dependencies()
+            .iter()
+            .any(|edge| !edge.is_compiler_private() && edge.target() == builtin_id);
+        let mut expected = original.to_vec();
+        if module.quote_sites().is_empty()
+            && module.quote_introduction().is_none()
+            && let Some(index) = expected
+                .iter()
+                .position(|edge| edge.is_compiler_private() && edge.target() == builtin_id)
+        {
+            expected.remove(index);
+        }
+        assert_eq!(module.dependencies(), expected);
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            slot.borrow_mut().push(GeneratorAdapterObservation {
+                quote_sites: module.quote_sites().len(),
+                original_private,
+                adapter_private,
+                adapter_explicit,
+            });
+        });
+    }
+
+    struct GeneratorAdapterObserverGuard;
+
+    impl GeneratorAdapterObserverGuard {
+        fn install() -> Self {
+            GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+            GENERATOR_ADAPTER_OBSERVER.set(Some(observe_generator_adapter_dependencies));
+            Self
+        }
+    }
+
+    impl Drop for GeneratorAdapterObserverGuard {
+        fn drop(&mut self) {
+            GENERATOR_ADAPTER_OBSERVER.set(None);
+        }
     }
 
     fn observe_h4_public_names(source: &SourceFile, module: &crate::surface::SurfaceModule) {
@@ -5957,10 +6856,23 @@ mod tests {
         source.write_sibling("forms.ash", FORMS);
         source.write_sibling("api.ash", "pub number : Unit -> Int\nnumber () = 42\n");
         hooks::reset();
+        let _adapter_guard = GeneratorAdapterObserverGuard::install();
         CALLER_QUOTE_REFERENCES.with(|slot| slot.borrow_mut().clear());
         TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_caller_quote_reference));
         let compiled = compile_path(source.configuration()).expect("both caller quotes compile");
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 2);
+            assert!(
+                observations.iter().all(|observation| {
+                    observation.quote_sites > 0
+                        && observation.original_private
+                        && observation.adapter_private
+                }),
+                "{observations:?}"
+            );
+        });
         let references =
             CALLER_QUOTE_REFERENCES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
         assert_eq!(references.len(), 2);
@@ -6029,6 +6941,129 @@ mod tests {
         assert_eq!(execute(&compiled).unwrap().value_display(), "84");
         assert_generator_cleanup(1);
         hooks::reset();
+    }
+
+    #[test]
+    fn generator_adapter_keeps_an_explicit_compiler_syntax_import() {
+        let source = TestSource::write(
+            "import @builtin.compiler.syntax as Syntax\nimport forms (syntax make)\n\nmake answer\nmain : Unit -> Int\nmain () = answer(())\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            "import @builtin.compiler.syntax as Syntax\npub syntax declaration: (make) $name:ident => {\n    pub $name : Unit -> Int\n    $name () = ${ syntax { 42 } }\n}\n",
+        );
+        let _guard = GeneratorAdapterObserverGuard::install();
+        let compiled = compile_path(source.configuration()).expect("explicit import compiles");
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 1);
+            let observed = &observations[0];
+            assert_eq!(observed.quote_sites, 0);
+            assert!(!observed.original_private && !observed.adapter_private);
+            assert!(observed.adapter_explicit, "{observed:?}");
+        });
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
+
+    #[test]
+    fn generator_adapter_uses_nested_alias_and_facade_sources() {
+        let source = TestSource::write(
+            "import forms (syntax make as build)\n\nbuild answer\nmain : Unit -> Int\nmain () = answer(())\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            "import inner (syntax identity as inner)\nimport facade (renamed)\npub syntax declaration: (make) $name:ident => {\n    pub $name : Unit -> Int\n    $name () = ${ inner (renamed(())) }\n}\n",
+        );
+        source.write_sibling(
+            "inner.ash",
+            "pub syntax identity $value:expr => {\n    $value\n}\n",
+        );
+        source.write_sibling("facade.ash", "pub import helper (fragment as renamed)\n");
+        source.write_sibling(
+            "helper.ash",
+            "import @builtin.compiler.syntax as Syntax\npub fragment : Unit -> Syntax.ExpressionFragment\nfragment () = syntax { 42 }\n",
+        );
+        let _guard = GeneratorAdapterObserverGuard::install();
+        let compiled = compile_path(source.configuration()).expect("nested adapter compiles");
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 1);
+            let observed = &observations[0];
+            assert_eq!(observed.quote_sites, 0);
+            assert!(
+                observed.original_private && !observed.adapter_private,
+                "{observed:?}"
+            );
+        });
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
+
+    #[test]
+    fn captured_only_generated_quote_keeps_the_callers_private_edge() {
+        use crate::surface::{CapturedQuoteSites, SurfaceSyntaxCapture};
+
+        fn inspect_caller(module: &crate::module::LoadedModule) {
+            if !module.source().text().contains("make_quote retained\n") {
+                return;
+            }
+            assert!(
+                !crate::lexer::lex(module.source())
+                    .unwrap()
+                    .needs_quote_dependency()
+            );
+            assert!(module.quote_sites().is_empty());
+            assert!(module.quote_introduction().is_some());
+            assert!(module.dependencies().iter().any(|edge| {
+                edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax()
+            }));
+            CAPTURED_ONLY_CALLER.set(true);
+        }
+        fn inspect_capture(
+            selection: &crate::syntax::SelectedSyntax,
+            captures: &[SurfaceSyntaxCapture],
+            _output: &[crate::syntax::MacroOutputNode],
+        ) {
+            if selection.declaration.name.text != "identity" {
+                return;
+            }
+            let [SurfaceSyntaxCapture::Expression(capture)] = captures else {
+                panic!("identity receives the generated quoted expression")
+            };
+            assert!(
+                matches!(&capture.quote_sites, CapturedQuoteSites::Owned(sites) if !sites.is_empty())
+            );
+            CAPTURED_ONLY_TRANSFORM.set(true);
+        }
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                LOADED_QUOTE_OBSERVER.set(None);
+                TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            }
+        }
+
+        let source = TestSource::write(
+            "import forms (syntax make_quote)\n\nmake_quote retained\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        source.write_sibling(
+            "forms.ash",
+            include_str!(
+                "../tests/fixtures/surface-macros/quote-constructed/captured_only_forms.ash"
+            ),
+        );
+        source.write_sibling(
+            "identity.ash",
+            include_str!("../tests/fixtures/surface-macros/identity-roundtrip/identity.ash"),
+        );
+        CAPTURED_ONLY_CALLER.set(false);
+        CAPTURED_ONLY_TRANSFORM.set(false);
+        let _guard = Guard;
+        LOADED_QUOTE_OBSERVER.set(Some(inspect_caller));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(inspect_capture));
+        let compiled = compile_path(source.configuration()).expect("captured quote compiles");
+        assert!(CAPTURED_ONLY_CALLER.get());
+        assert!(CAPTURED_ONLY_TRANSFORM.get());
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
     }
 
     fn observe_caller_quote_roles(
@@ -6602,7 +7637,32 @@ main () = one(()) + two(())
     fn original_escape_categories_retain_captures_after_host_teardown() {
         use crate::eval::machine_test_hooks as hooks;
 
+        fn observe_handoff(module: &crate::module::LoadedModule) {
+            if !module
+                .canonical_path()
+                .ends_with("escapes/early_categories.ash")
+            {
+                return;
+            }
+            assert!(module.quote_sites().is_empty());
+            assert!(module.quote_introduction().is_some());
+            assert!(!module.dependencies().iter().any(|edge| {
+                edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax()
+            }));
+            EARLY_FINAL_HANDOFF.set(true);
+        }
+        struct HandoffGuard;
+        impl Drop for HandoffGuard {
+            fn drop(&mut self) {
+                LOADED_QUOTE_OBSERVER.set(None);
+            }
+        }
+
         hooks::reset();
+        let _adapter_guard = GeneratorAdapterObserverGuard::install();
+        let _handoff_guard = HandoffGuard;
+        EARLY_FINAL_HANDOFF.set(false);
+        LOADED_QUOTE_OBSERVER.set(Some(observe_handoff));
         ESCAPE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
         ESCAPE_CHECKED_HELPERS.set(0);
         GENERATOR_LIFECYCLES.with(|slot| slot.borrow_mut().clear());
@@ -6618,6 +7678,19 @@ main () = one(()) + two(())
         GENERATOR_OWNER_OBSERVER.set(None);
         GENERATOR_LIFECYCLE_OBSERVER.set(None);
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert!(EARLY_FINAL_HANDOFF.get());
+        GENERATOR_ADAPTER_OBSERVATIONS.with(|slot| {
+            let observations = slot.borrow();
+            assert_eq!(observations.len(), 6);
+            assert!(
+                observations.iter().all(|observation| {
+                    observation.quote_sites == 0
+                        && observation.original_private
+                        && !observation.adapter_private
+                }),
+                "{observations:?}"
+            );
+        });
         assert_eq!(ESCAPE_CHECKED_HELPERS.get(), 8);
         assert_eq!(
             ESCAPE_OBSERVATIONS.with(|slot| slot.borrow().clone()),
@@ -6778,6 +7851,740 @@ main () = one(()) + two(())
         hooks::reset();
     }
 
+    fn observe_constructed_quote_module(module: &crate::module::LoadedModule) {
+        use crate::surface::{SurfaceDefinitionKind, SurfaceExprKind, SurfaceReference};
+
+        let path = module.canonical_path();
+        if !path.ends_with("quote-constructed/implicit.ash")
+            && !path.ends_with("quote-constructed/explicit.ash")
+        {
+            return;
+        }
+        let sites = module.quote_sites();
+        let definitions = module
+            .surface()
+            .definitions
+            .iter()
+            .filter_map(|definition| {
+                let SurfaceDefinitionKind::Equational(global) = &definition.kind else {
+                    return None;
+                };
+                if !["first", "second"].contains(&global.interface.name.text.as_str()) {
+                    return None;
+                }
+                let call = match global.equations.as_slice() {
+                    [equation] => match &equation.body.kind {
+                        SurfaceExprKind::Apply(call) => Some(call),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let owner_matches = call.is_some_and(|call| {
+                    matches!(
+                        &call.function.kind,
+                        SurfaceExprKind::Name(SurfaceReference::Unqualified(name))
+                            if name.text == "HiddenExpressionFragment"
+                                && Some(name.introduction) == module.quote_introduction()
+                                && !name.written
+                    )
+                });
+                let matches = call
+                    .map(|call| {
+                        let callee = std::ptr::from_ref(call.function.as_ref()) as usize;
+                        sites
+                            .iter()
+                            .filter(|site| site.callee == callee)
+                            .map(|site| {
+                                let span = site.template.origin;
+                                let range = span.range();
+                                let text = module
+                                    .source()
+                                    .text()
+                                    .get(range.start() as usize..range.end() as usize)
+                                    .unwrap_or("")
+                                    .to_owned();
+                                (
+                                    site.template.ordinal,
+                                    site.template.holes,
+                                    span.source() == module.source().id(),
+                                    text,
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((
+                    global.interface.name.text.clone(),
+                    definition.public,
+                    owner_matches,
+                    matches,
+                ))
+            })
+            .collect();
+        let observation = ConstructedQuoteObservation {
+            no_lexical_quote: crate::lexer::lex(module.source())
+                .is_ok_and(|tokens| !tokens.needs_quote_dependency()),
+            compiler_edges: module
+                .dependencies()
+                .iter()
+                .filter(|edge| edge.target().is_builtin_compiler_syntax())
+                .map(|edge| edge.is_compiler_private())
+                .collect(),
+            has_quote_owner: module.quote_introduction().is_some(),
+            distinct_callees: matches!(sites, [first, second] if first.callee != second.callee),
+            site_count: sites.len(),
+            definitions,
+        };
+        CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| slot.borrow_mut().push(observation));
+    }
+
+    #[test]
+    fn constructed_quotes_keep_distinct_target_module_sites() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/quote-constructed");
+        for (entry, private) in [
+            ("implicit_referenced.ash", true),
+            ("explicit_referenced.ash", false),
+        ] {
+            hooks::reset();
+            CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| slot.borrow_mut().clear());
+            LOADED_QUOTE_OBSERVER.set(Some(observe_constructed_quote_module));
+            let result = compile_path(RunConfiguration {
+                entry: directory.join(entry),
+                roots: ModuleRoots::empty(),
+            });
+            LOADED_QUOTE_OBSERVER.set(None);
+            let program = result.unwrap_or_else(|failure| panic!("{entry}: {failure:?}"));
+            let observations =
+                CONSTRUCTED_QUOTE_OBSERVATIONS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+            let [observation] = observations.as_slice() else {
+                panic!("{entry}: expected one target module: {observations:?}")
+            };
+            assert!(observation.no_lexical_quote, "{entry}: {observation:?}");
+            assert_eq!(observation.compiler_edges, [private], "{entry}");
+            assert!(observation.has_quote_owner, "{entry}: {observation:?}");
+            assert!(observation.distinct_callees, "{entry}: {observation:?}");
+            assert_eq!(observation.site_count, 2, "{entry}: {observation:?}");
+            assert_eq!(observation.definitions.len(), 2, "{entry}: {observation:?}");
+            let mut ordinals = Vec::new();
+            for ((name, public, owner_matches, sites), expected) in
+                observation.definitions.iter().zip(["first", "second"])
+            {
+                assert_eq!(name, expected, "{entry}");
+                assert!(*public && *owner_matches, "{entry}: {observation:?}");
+                let [(ordinal, holes, same_source, text)] = sites.as_slice() else {
+                    panic!("{entry}: expected one matching quote site: {observation:?}")
+                };
+                assert_eq!(*holes, 1, "{entry}");
+                assert!(*same_source, "{entry}");
+                assert_eq!(text, &format!("make_quote {expected}"), "{entry}");
+                ordinals.push(*ordinal);
+            }
+            assert_ne!(ordinals[0], ordinals[1], "{entry}");
+            assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+            assert!(hooks::ROOT_CLOSES.get() >= 2, "{entry}");
+            assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0, "{entry}");
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 0, "{entry}");
+            assert_eq!(execute(&program).unwrap().value_display(), "42", "{entry}");
+            drop(program);
+        }
+        hooks::reset();
+    }
+
+    fn observe_ordinary_quote_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::{
+            core::{EffectExprKind, PureComputation, PureExprKind},
+            eval::machine_test_hooks as hooks,
+        };
+
+        let reused = ORDINARY_QUOTE_ENTRY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let reused = slot.as_ref().map(|previous| {
+                previous
+                    .upgrade()
+                    .is_some_and(|previous| Arc::ptr_eq(&previous, &entry.quote_sites))
+            });
+            if slot.is_none() {
+                *slot = Some(Arc::downgrade(&entry.quote_sites));
+            }
+            reused
+        });
+        let sites = entry
+            .quote_sites
+            .iter()
+            .map(|site| {
+                let nodes = &site.nodes;
+                let span = nodes.template.origin;
+                let range = span.range();
+                let mapped_application = matches!(
+                    entry.program.node(nodes.application).map(|node| &node.kind),
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::Apply(application)
+                    ))) if application.function() == nodes.callee
+                        && application.argument() == nodes.argument
+                );
+                let canonical_constructor = nodes.constructor.owner().module()
+                    == entry.syntax_module
+                    && entry
+                        .program
+                        .registry()
+                        .constructors()
+                        .iter()
+                        .any(|constructor| {
+                            constructor.id == nodes.constructor
+                                && constructor.spelling == "HiddenExpressionFragment"
+                        });
+                OrdinaryQuoteSiteObservation {
+                    owner: site.owner,
+                    module: nodes.owner,
+                    source: site.source.display_path().to_owned(),
+                    source_matches: span.source() == site.source.id(),
+                    text: site
+                        .source
+                        .text()
+                        .get(range.start() as usize..range.end() as usize)
+                        .unwrap_or("")
+                        .to_owned(),
+                    range: (range.start(), range.end()),
+                    ordinal: nodes.template.ordinal,
+                    holes: nodes.template.holes,
+                    application: nodes.application,
+                    callee: nodes.callee,
+                    argument: nodes.argument,
+                    mapped_application,
+                    canonical_constructor,
+                }
+            })
+            .collect();
+        ORDINARY_QUOTE_ENTRIES.with(|slot| {
+            slot.borrow_mut().push(OrdinaryQuoteEntryObservation {
+                reused,
+                sites,
+                reaches: hooks::QUOTE_REACHES.get(),
+                completions: hooks::QUOTE_COMPLETIONS.get(),
+            })
+        });
+    }
+
+    fn observe_ordinary_quote_output(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{
+            eval::machine_test_hooks as hooks,
+            surface::{CapturedQuoteSites, SurfaceExprKind, SurfaceSyntaxCapture},
+            syntax::MacroOutputNode,
+        };
+
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        fn retains(nodes: &[MacroOutputNode], original: &Arc<[MacroOutputNode]>) -> bool {
+            nodes.iter().any(|node| match node {
+                MacroOutputNode::Group(_, children, _) => retains(children, original),
+                MacroOutputNode::Expression(capture, _)
+                | MacroOutputNode::ForwardedExpression(capture, _) => {
+                    Arc::ptr_eq(&capture.contents, original) || retains(&capture.contents, original)
+                }
+                _ => false,
+            })
+        }
+        let (value, empty_input_sites, retained_input) = match captures {
+            [SurfaceSyntaxCapture::Expression(capture)] => (
+                match &capture.expression.kind {
+                    SurfaceExprKind::Integer(value) => Some(value.to_string()),
+                    _ => None,
+                },
+                matches!(capture.quote_sites, CapturedQuoteSites::Empty),
+                retains(output, &capture.contents),
+            ),
+            _ => (None, false, false),
+        };
+        ORDINARY_QUOTE_OUTPUTS.with(|slot| {
+            slot.borrow_mut().push(OrdinaryQuoteOutputObservation {
+                value,
+                empty_input_sites,
+                retained_input,
+                closed: hooks::ROOT_CLOSES.get(),
+                dropped: hooks::TRANSFORMER_DROPS.get(),
+                active_drops: hooks::ACTIVE_ROOT_DROPS.get(),
+            })
+        });
+    }
+
+    #[test]
+    fn ordinary_quote_helpers_use_checked_sites_and_reuse_only_the_entry() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        TRANSFORMER_ENTRY_PREPARATIONS.set(0);
+        TRANSFORMER_ENTRY_VALIDATIONS.set(0);
+        ORDINARY_QUOTE_ENTRY.with(|slot| *slot.borrow_mut() = None);
+        ORDINARY_QUOTE_ENTRIES.with(|slot| slot.borrow_mut().clear());
+        ORDINARY_QUOTE_OUTPUTS.with(|slot| slot.borrow_mut().clear());
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_ordinary_quote_entry));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_ordinary_quote_output));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/quote-constructed/control_twice.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let program = result.expect("both ordinary transformer calls compile");
+        let entries = ORDINARY_QUOTE_ENTRIES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        let outputs = ORDINARY_QUOTE_OUTPUTS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(outputs.len(), 2, "{outputs:?}");
+        assert_eq!(TRANSFORMER_ENTRY_PREPARATIONS.get(), 1);
+        assert_eq!(TRANSFORMER_ENTRY_VALIDATIONS.get(), 1);
+        assert_eq!(entries[0].reused, None);
+        assert_eq!(entries[1].reused, Some(true));
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.reaches, (index + 1) * 2, "{entry:?}");
+            assert_eq!(entry.completions, (index + 1) * 2, "{entry:?}");
+            let [first, second] = entry.sites.as_slice() else {
+                panic!("expected the two real helper sites: {entry:?}")
+            };
+            assert_eq!(first.owner, second.owner);
+            assert_eq!(first.module, second.module);
+            assert_ne!(first.ordinal, second.ordinal);
+            assert_ne!(first.range, second.range);
+            assert_ne!(first.application, second.application);
+            assert_ne!(first.callee, second.callee);
+            assert_ne!(first.argument, second.argument);
+            for site in [first, second] {
+                assert!(site.source.ends_with("quote-constructed/control.ash"));
+                assert!(
+                    site.source_matches && site.mapped_application && site.canonical_constructor
+                );
+                assert_eq!(site.text, "syntax { $fragment }");
+                assert_eq!(site.holes, 1);
+            }
+        }
+        for (index, (output, expected)) in outputs.iter().zip(["20", "22"]).enumerate() {
+            assert_eq!(output.value.as_deref(), Some(expected), "{output:?}");
+            assert!(
+                output.empty_input_sites && output.retained_input,
+                "{output:?}"
+            );
+            assert_eq!((output.closed, output.dropped), (index + 1, index + 1));
+            assert_eq!(output.active_drops, 0);
+        }
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 2);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        ORDINARY_QUOTE_ENTRY.with(|slot| {
+            assert!(slot.borrow().as_ref().unwrap().upgrade().is_none());
+        });
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+        hooks::reset();
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum OrdinaryQuoteResourceTrial {
+        ColdPreparation,
+        MeasureAdmission,
+        LimitAdmission(usize),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct OrdinaryQuotePhaseCounts {
+        reaches: usize,
+        completions: usize,
+        transfers: usize,
+        transfer_failures: usize,
+        root_closes: usize,
+        drops: usize,
+        active_drops: usize,
+        preparations: usize,
+    }
+
+    impl OrdinaryQuotePhaseCounts {
+        fn current() -> Self {
+            use crate::eval::machine_test_hooks as hooks;
+            Self {
+                reaches: hooks::QUOTE_REACHES.get(),
+                completions: hooks::QUOTE_COMPLETIONS.get(),
+                transfers: hooks::TRANSFER_ATTEMPTS.get(),
+                transfer_failures: hooks::TRANSFER_FAILURES.get(),
+                root_closes: hooks::ROOT_CLOSES.get(),
+                drops: hooks::TRANSFORMER_DROPS.get(),
+                active_drops: hooks::ACTIVE_ROOT_DROPS.get(),
+                preparations: TRANSFORMER_ENTRY_PREPARATIONS.get(),
+            }
+        }
+
+        fn since(self, before: Self) -> Self {
+            Self {
+                reaches: self.reaches - before.reaches,
+                completions: self.completions - before.completions,
+                transfers: self.transfers - before.transfers,
+                transfer_failures: self.transfer_failures - before.transfer_failures,
+                root_closes: self.root_closes - before.root_closes,
+                drops: self.drops - before.drops,
+                active_drops: self.active_drops - before.active_drops,
+                preparations: self.preparations - before.preparations,
+            }
+        }
+    }
+
+    type OrdinaryOwnerSnapshot = (Option<usize>, Option<usize>, Span, Span);
+
+    struct OrdinaryQuoteResourceObservation {
+        trial: OrdinaryQuoteResourceTrial,
+        calls: usize,
+        prefix: Vec<OrdinaryOwnerSnapshot>,
+        restored: Option<Vec<OrdinaryOwnerSnapshot>>,
+        counts_before: Option<OrdinaryQuotePhaseCounts>,
+        budget_before: Option<(usize, usize)>,
+        admission_remaining: Option<usize>,
+        admission_work: Option<usize>,
+        admitted: Option<bool>,
+        invocation: Option<Span>,
+        context_address: Option<usize>,
+        initial_context_owners: Option<usize>,
+        context: Option<std::sync::Weak<crate::syntax::SyntaxContexts>>,
+        entry: Option<std::sync::Weak<[crate::syntax::PreparedQuoteSite]>>,
+        cache_before: Option<usize>,
+        preparation_failed: bool,
+    }
+
+    impl OrdinaryQuoteResourceObservation {
+        fn new(trial: OrdinaryQuoteResourceTrial) -> Self {
+            Self {
+                trial,
+                calls: 0,
+                prefix: Vec::new(),
+                restored: None,
+                counts_before: None,
+                budget_before: None,
+                admission_remaining: None,
+                admission_work: None,
+                admitted: None,
+                invocation: None,
+                context_address: None,
+                initial_context_owners: None,
+                context: None,
+                entry: None,
+                cache_before: None,
+                preparation_failed: false,
+            }
+        }
+    }
+
+    std::thread_local! {
+        static ORDINARY_QUOTE_RESOURCE_TRIAL: RefCell<Option<OrdinaryQuoteResourceObservation>> = const { RefCell::new(None) };
+    }
+
+    fn observe_ordinary_quote_resource_owners(
+        selection: &crate::syntax::SelectedSyntax,
+        owners: &[crate::syntax::SyntaxOwner],
+        restored: bool,
+    ) {
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        let snapshot = owners
+            .iter()
+            .map(|owner| {
+                (
+                    owner.owner,
+                    owner
+                        .caller_quote_owner
+                        .as_ref()
+                        .map(|caller| Arc::as_ptr(caller) as usize),
+                    owner.declaration,
+                    owner.import_span,
+                )
+            })
+            .collect();
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            if restored {
+                observation.restored = Some(snapshot);
+            } else {
+                observation.prefix = snapshot;
+            }
+        });
+    }
+
+    fn observe_ordinary_quote_resource_entry(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        _evaluation: &crate::eval::Evaluation,
+    ) {
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            assert_eq!(entry.quote_sites.len(), 2);
+            if let Some(previous) = &observation.entry {
+                assert!(std::ptr::eq(
+                    previous.as_ptr(),
+                    Arc::as_ptr(&entry.quote_sites)
+                ));
+            } else {
+                observation.entry = Some(Arc::downgrade(&entry.quote_sites));
+            }
+        });
+    }
+
+    fn observe_ordinary_quote_resource(
+        selection: &crate::syntax::SelectedSyntax,
+        event: OrdinaryQuoteResourceEvent<'_>,
+    ) {
+        if selection.declaration.name.text != "checked" {
+            return;
+        }
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let observation = slot.as_mut().unwrap();
+            match event {
+                OrdinaryQuoteResourceEvent::PrepareStart {
+                    budget,
+                    cache_entries,
+                } => {
+                    observation.calls += 1;
+                    if matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ) || observation.calls == 2
+                    {
+                        observation.counts_before = Some(OrdinaryQuotePhaseCounts::current());
+                        observation.cache_before = Some(cache_entries);
+                    }
+                    if matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ) {
+                        assert_eq!(observation.calls, 1);
+                        assert_eq!(cache_entries, 0);
+                        assert!(budget.consumed() > 0);
+                        let remaining = budget.test_remaining();
+                        assert!(remaining > 0);
+                        observation.budget_before = Some((budget.test_limit(), remaining));
+                        budget.charge_units(remaining).unwrap();
+                    }
+                }
+                OrdinaryQuoteResourceEvent::PrepareFailure {
+                    budget,
+                    cache_entries,
+                    failure,
+                } => {
+                    assert!(matches!(
+                        observation.trial,
+                        OrdinaryQuoteResourceTrial::ColdPreparation
+                    ));
+                    let (limit, _) = observation.budget_before.unwrap();
+                    assert_eq!(budget.test_limit(), limit);
+                    assert_eq!(budget.test_remaining(), 0);
+                    assert_eq!(cache_entries, observation.cache_before.unwrap());
+                    let Some(PipelineFailure::Syntax(failure)) = failure.pipeline_failure() else {
+                        panic!("preparation must return its original syntax resource failure")
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit })
+                    );
+                    observation.preparation_failed = true;
+                }
+                OrdinaryQuoteResourceEvent::ContextCreated(contexts) if observation.calls == 2 => {
+                    // A Weak here would make Arc::get_mut fail inside the host.
+                    assert_eq!(Arc::strong_count(contexts), 1);
+                    assert_eq!(Arc::weak_count(contexts), 0);
+                    observation.context_address = Some(Arc::as_ptr(contexts) as usize);
+                    observation.initial_context_owners = Some(contexts.owner_count());
+                }
+                OrdinaryQuoteResourceEvent::AdmissionStart {
+                    budget,
+                    contexts,
+                    owners,
+                    invocation,
+                    host_expanded,
+                } if observation.calls == 2 => {
+                    assert!(host_expanded);
+                    let contexts = contexts.expect("the host must recover its contexts");
+                    assert_eq!(
+                        Some(Arc::as_ptr(contexts) as usize),
+                        observation.context_address
+                    );
+                    assert_eq!(Arc::strong_count(contexts), 1);
+                    assert_eq!(Arc::weak_count(contexts), 0);
+                    assert_eq!(
+                        contexts.owner_count(),
+                        observation.initial_context_owners.unwrap() + 2
+                    );
+                    assert_eq!(owners.len(), contexts.owner_count());
+                    assert_eq!(owners.len(), observation.prefix.len() + 3);
+                    assert_eq!(
+                        OrdinaryQuotePhaseCounts::current()
+                            .since(observation.counts_before.unwrap()),
+                        OrdinaryQuotePhaseCounts {
+                            reaches: 2,
+                            completions: 2,
+                            transfers: 1,
+                            transfer_failures: 0,
+                            root_closes: 1,
+                            drops: 1,
+                            active_drops: 0,
+                            preparations: 0,
+                        }
+                    );
+                    observation.context = Some(Arc::downgrade(contexts));
+                    observation.invocation = Some(invocation);
+                    let remaining = budget.test_remaining();
+                    assert!(budget.consumed() > 0);
+                    observation.budget_before = Some((budget.test_limit(), remaining));
+                    if let OrdinaryQuoteResourceTrial::LimitAdmission(target) = observation.trial {
+                        assert!(remaining > target);
+                        budget.charge_units(remaining - target).unwrap();
+                    }
+                    observation.admission_remaining = Some(budget.test_remaining());
+                }
+                OrdinaryQuoteResourceEvent::AdmissionEnd { budget, result }
+                    if observation.calls == 2 =>
+                {
+                    let (limit, _) = observation.budget_before.unwrap();
+                    assert_eq!(budget.test_limit(), limit);
+                    let before = observation.admission_remaining.unwrap();
+                    observation.admission_work = Some(before - budget.test_remaining());
+                    match result {
+                        Ok((expression, _)) => {
+                            let crate::surface::SurfaceExprKind::Integer(value) =
+                                &expression.expression.kind
+                            else {
+                                panic!("the actual second output must admit its integer expression")
+                            };
+                            assert_eq!(value.to_string(), "22");
+                            observation.admitted = Some(true);
+                        }
+                        Err(Some(failure)) => {
+                            let Some(PipelineFailure::SyntaxParse(failure)) =
+                                failure.pipeline_failure()
+                            else {
+                                panic!("admission must return its original parser failure")
+                            };
+                            assert_eq!(
+                                failure.resource,
+                                Some(ResourceFailure::SyntaxWork { limit })
+                            );
+                            assert_eq!(Some(failure.invocation), observation.invocation);
+                            assert_eq!(failure.definition, selection.declaration.span);
+                            assert!(failure.teardown.is_none());
+                            observation.admitted = Some(false);
+                        }
+                        Err(None) => panic!("admission must retain the parser resource failure"),
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
+    struct OrdinaryQuoteResourceObserverGuard;
+
+    impl Drop for OrdinaryQuoteResourceObserverGuard {
+        fn drop(&mut self) {
+            ORDINARY_QUOTE_RESOURCE_OBSERVER.set(None);
+            ORDINARY_QUOTE_OWNER_OBSERVER.set(None);
+            crate::eval::machine_test_hooks::reset();
+            ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    fn run_ordinary_quote_resource_trial(
+        trial: OrdinaryQuoteResourceTrial,
+    ) -> (
+        Result<CompiledProgram, FileFailure>,
+        OrdinaryQuoteResourceObservation,
+        OrdinaryQuotePhaseCounts,
+    ) {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        TRANSFORMER_ENTRY_PREPARATIONS.set(0);
+        TRANSFORMER_ENTRY_VALIDATIONS.set(0);
+        ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| {
+            *slot.borrow_mut() = Some(OrdinaryQuoteResourceObservation::new(trial));
+        });
+        let _guard = OrdinaryQuoteResourceObserverGuard;
+        ORDINARY_QUOTE_RESOURCE_OBSERVER.set(Some(observe_ordinary_quote_resource));
+        ORDINARY_QUOTE_OWNER_OBSERVER.set(Some(observe_ordinary_quote_resource_owners));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_ordinary_quote_resource_entry));
+        let result = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/quote-constructed/control_twice.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        let counts = OrdinaryQuotePhaseCounts::current();
+        let observation =
+            ORDINARY_QUOTE_RESOURCE_TRIAL.with(|slot| slot.borrow_mut().take().unwrap());
+        (result, observation, counts)
+    }
+
+    #[test]
+    fn ordinary_quote_cold_preparation_refusal_restores_the_owner_prefix() {
+        let (result, observation, counts) =
+            run_ordinary_quote_resource_trial(OrdinaryQuoteResourceTrial::ColdPreparation);
+        assert!(result.is_err());
+        assert_eq!(observation.calls, 1);
+        assert!(observation.preparation_failed);
+        assert_eq!(observation.restored.as_ref(), Some(&observation.prefix));
+        assert_eq!(
+            counts.since(observation.counts_before.unwrap()),
+            OrdinaryQuotePhaseCounts {
+                reaches: 0,
+                completions: 0,
+                transfers: 0,
+                transfer_failures: 0,
+                root_closes: 0,
+                drops: 0,
+                active_drops: 0,
+                preparations: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn ordinary_quote_warm_admission_uses_the_continuing_budget_and_rolls_back() {
+        let (measured_result, measured, _) =
+            run_ordinary_quote_resource_trial(OrdinaryQuoteResourceTrial::MeasureAdmission);
+        let program = measured_result.expect("the measurement compile succeeds");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+        assert_eq!(measured.calls, 2);
+        assert_eq!(measured.admitted, Some(true));
+        let work = measured.admission_work.unwrap();
+        assert!(work > 1);
+
+        for (allowance, expected) in [(work, true), (work - 1, false)] {
+            let (result, observation, _) = run_ordinary_quote_resource_trial(
+                OrdinaryQuoteResourceTrial::LimitAdmission(allowance),
+            );
+            assert_eq!(observation.calls, 2);
+            assert_eq!(observation.budget_before, measured.budget_before);
+            assert_eq!(observation.admission_remaining, Some(allowance));
+            assert_eq!(observation.admitted, Some(expected));
+            assert!(observation.context.unwrap().upgrade().is_none());
+            assert!(observation.entry.unwrap().upgrade().is_none());
+            if expected {
+                assert_eq!(observation.admission_work, Some(work));
+                eprintln!(
+                    "exact admission work={work}; enclosing compile succeeded={}",
+                    result.is_ok()
+                );
+            } else {
+                assert!(result.is_err(), "the compiler must not return a program");
+                assert!(!observation.prefix.is_empty());
+                assert_eq!(observation.restored.as_ref(), Some(&observation.prefix));
+            }
+        }
+    }
+
     fn observe_failure_output(
         selection: &crate::syntax::SelectedSyntax,
         _captures: &[crate::surface::SurfaceSyntaxCapture],
@@ -6806,14 +8613,20 @@ main () = one(()) + two(())
                 );
                 FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1);
             }
-            "abort" => FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1),
+            "abort" | "diverging" | "capture_step" => {
+                FAILURE_OUTPUTS.set(FAILURE_OUTPUTS.get() + 1)
+            }
             _ => {}
         }
     }
 
     fn observe_failure_staged_module(source: &SourceFile, _module: &crate::surface::SurfaceModule) {
         if source.display_path().ends_with("atomic.ash")
+            || source.display_path().ends_with("diverging.ash")
             || source.display_path().ends_with("wrong_category.ash")
+            || source
+                .display_path()
+                .ends_with("generator-advance-experiment/entry.ash")
         {
             FAILURE_STAGED_CALLERS.set(FAILURE_STAGED_CALLERS.get() + 1);
         }
@@ -6880,11 +8693,109 @@ main () = one(()) + two(())
             matches!(failure.pipeline_failure(), Some(PipelineFailure::SyntaxRuntime(cause))
             if cause.cause().reason_code() == "runtime.resource-capacity")
         );
+        eprintln!(
+            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get(),
+            hooks::ACTIVE_ROOT_DROPS.get(),
+            hooks::ACTIVE_ROOT_RECORDS.get()
+        );
+        assert_eq!(FAILURE_OUTPUTS.get(), 0);
+        assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    fn observe_actual_advance_callable(origin: &Origin) {
+        ADVANCE_SELECTED_ORIGIN.with(|record| *record.borrow_mut() = Some(origin.clone()));
+        ADVANCE_SELECTED_COUNT.set(ADVANCE_SELECTED_COUNT.get() + 1);
+    }
+
+    fn observe_advance_capture_range(
+        observation: crate::eval::machine_test_hooks::AdvanceCaptureObservation,
+    ) {
+        ADVANCE_CAPTURE_RANGES.with(|events| events.borrow_mut().push(observation));
+    }
+
+    fn observe_advance_trace(event: &'static str, guards: usize, host: usize, depth: usize) {
+        ADVANCE_TRACE.with(|events| events.borrow_mut().push((event, guards, host, depth)));
+    }
+
+    #[test]
+    fn original_diverging_step_observes_callable_and_failure_cleanup() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        assert_failure_stage_observer_is_active();
+        hooks::reset();
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/generators/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the original diverging step exceeds the existing execution bound");
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the original transformer must retain its ordinary runtime failure: {failure:?}")
+        };
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        let actual_origin = ADVANCE_SELECTED_ORIGIN
+            .with(|origin| origin.borrow_mut().take())
+            .expect("the selected callable was observed");
+        eprintln!("actual selected callable origin: {actual_origin:?}");
+        let Origin::Generated {
+            cause,
+            reason: crate::source::GeneratedReason::FunctionLowering,
+        } = &actual_origin
+        else {
+            panic!("the original callable keeps its actual function-lowering origin")
+        };
+        let Origin::Related { primary, .. } = cause.as_ref() else {
+            panic!("the lowered callable keeps its actual related primary")
+        };
+        let Origin::Source(actual) = primary.as_ref() else {
+            panic!("the original callable's primary is its actual source span")
+        };
+        let actual = *actual;
+        let projected = runtime
+            .step
+            .expect("the selected callable's paid location was copied");
+        assert_eq!(projected.primary, actual);
+        assert_eq!(projected.definition, None);
+        assert_eq!(actual.range(), ByteRange::new(97, 135).unwrap());
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == actual.source())
+            .unwrap();
+        assert!(source.display_path().ends_with("diverging_forms.ash"));
+        assert_eq!(
+            &source.text()[97..135],
+            "next_number state = next_number(state)"
+        );
         assert_eq!(FAILURE_OUTPUTS.get(), 0);
         assert_eq!(FAILURE_STAGED_CALLERS.get(), 0);
         assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
         eprintln!(
-            "bounded abort cleanup: root completions closed {}, transformer drops {}, active root drops {}, active records {}",
+            "actual selected Source span {:?}; outputs={} caller stages={} transfer attempts={} root closes={} transformer drops={} active root drops={} active root records={}",
+            actual,
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get(),
             hooks::ROOT_CLOSES.get(),
             hooks::TRANSFORMER_DROPS.get(),
             hooks::ACTIVE_ROOT_DROPS.get(),
@@ -6893,6 +8804,621 @@ main () = one(()) + two(())
         assert_eq!(hooks::ROOT_CLOSES.get(), 0);
         assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
         assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn step_local_resume_reports_actual_capture_interval() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        ADVANCE_CAPTURE_RANGES.with(|events| events.borrow_mut().clear());
+        ADVANCE_TRACE.with(|events| events.borrow_mut().clear());
+        hooks::CAPTURE_RANGE_OBSERVER.set(Some(observe_advance_capture_range));
+        hooks::ADVANCE_TRACE_OBSERVER.set(Some(observe_advance_trace));
+        let compiled = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the real source step-local handler and resumes are admitted");
+        hooks::CAPTURE_RANGE_OBSERVER.set(None);
+        hooks::ADVANCE_TRACE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "84");
+        assert_generator_cleanup(1);
+        let events = ADVANCE_CAPTURE_RANGES.with(|events| events.borrow().clone());
+        eprintln!("actual selected handlers and capture ranges: {events:?}");
+        let active: Vec<_> = events
+            .iter()
+            .filter(|event| event.live_guards != 0)
+            .collect();
+        let local: Vec<_> = active
+            .iter()
+            .filter(|event| !event.canonical_default)
+            .collect();
+        assert_eq!(local.len(), 2, "{events:?}");
+        assert_eq!(
+            local[0].handler_effect, local[1].handler_effect,
+            "{events:?}"
+        );
+        for event in &active {
+            assert_eq!(event.live_guards, 1, "{events:?}");
+            assert_eq!(
+                event.handler_effect,
+                Some(event.operation.owner()),
+                "{events:?}"
+            );
+            assert!(event.selected < event.depth, "{events:?}");
+            if event.captured_guards != 0 {
+                assert!(event.canonical_default, "{events:?}");
+            }
+        }
+        for event in local {
+            assert!(
+                event
+                    .first_direct_guard
+                    .is_some_and(|guard| guard < event.selected),
+                "{events:?}"
+            );
+            assert_eq!(event.captured_guards, 0, "{events:?}");
+        }
+        assert!(
+            active
+                .iter()
+                .any(|event| event.canonical_default && event.captured_guards != 0),
+            "{events:?}"
+        );
+        let trace = ADVANCE_TRACE.with(|events| events.borrow().clone());
+        eprintln!("advance, capture/resume and default allocation trace: {trace:?}");
+        let mut captured = 0_usize;
+        let mut allocated = 0_usize;
+        let mut allocations = 0;
+        let mut calls = 0;
+        for (event, guards, metadata, _) in &trace {
+            match *event {
+                "call" => {
+                    assert_eq!(captured, 0, "{trace:?}");
+                    assert_eq!(allocated, 0, "{trace:?}");
+                    assert_eq!(*guards, 1, "{trace:?}");
+                    assert_eq!(*metadata, 1, "{trace:?}");
+                    calls += 1;
+                }
+                "capture" => captured += guards,
+                "resume" => {
+                    captured = captured
+                        .checked_sub(*guards)
+                        .expect("resumed guard was captured")
+                }
+                "allocate" => {
+                    assert_eq!(*metadata, 1, "{trace:?}");
+                    allocated += guards;
+                    allocations += 1;
+                }
+                "restore" => {
+                    allocated = allocated
+                        .checked_sub(*guards)
+                        .expect("restored guard was allocated")
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(captured, 0, "{trace:?}");
+        assert_eq!(allocated, 0, "{trace:?}");
+        assert_eq!(calls, 2, "{trace:?}");
+        assert!(allocations > 0, "{trace:?}");
+        hooks::reset();
+    }
+
+    #[test]
+    fn actual_generator_work_cutoffs_and_prepaid_failure_copy() {
+        use crate::eval::machine_test_hooks::{self as hooks, AdvanceCutPoint as Cut};
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        // Each row starts a fresh real source compilation. The one-shot hook
+        // only reduces the current host remainder at the reached phase.
+        let cases = [
+            (Cut::Install, 0, hooks::ADVANCE_INSTALLED, false, false),
+            (Cut::Install, 4, hooks::ADVANCE_INSTALLED, false, false),
+            (Cut::Install, 5, hooks::ADVANCE_INSTALLED, true, false),
+            (
+                Cut::CompletionLookup,
+                0,
+                hooks::ADVANCE_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::CompletionLookup,
+                4,
+                hooks::ADVANCE_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::CompletionLookup,
+                5,
+                hooks::ADVANCE_LOOKED_UP,
+                true,
+                false,
+            ),
+            (
+                Cut::FramePayment,
+                2,
+                hooks::ADVANCE_FRAME_PAID,
+                false,
+                false,
+            ),
+            (Cut::FramePayment, 3, hooks::ADVANCE_FRAME_PAID, true, false),
+            (
+                Cut::GuardCreation,
+                11,
+                hooks::ADVANCE_GUARD_CREATED,
+                false,
+                false,
+            ),
+            (
+                Cut::GuardCreation,
+                12,
+                hooks::ADVANCE_GUARD_CREATED,
+                true,
+                false,
+            ),
+            (
+                Cut::ApplicationLookup,
+                4,
+                hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                false,
+                false,
+            ),
+            (
+                Cut::ApplicationLookup,
+                5,
+                hooks::ADVANCE_APPLICATION_LOOKED_UP,
+                true,
+                false,
+            ),
+            (
+                Cut::ReferenceCreation,
+                2,
+                hooks::ADVANCE_REFERENCE_CREATED,
+                false,
+                false,
+            ),
+            (
+                Cut::ReferenceCreation,
+                3,
+                hooks::ADVANCE_REFERENCE_CREATED,
+                true,
+                false,
+            ),
+            (
+                Cut::ReferenceVerification,
+                1,
+                hooks::ADVANCE_REFERENCE_VERIFIED,
+                false,
+                false,
+            ),
+            (
+                Cut::ReferenceVerification,
+                2,
+                hooks::ADVANCE_REFERENCE_VERIFIED,
+                true,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                0,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                false,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                8,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                false,
+                false,
+            ),
+            (
+                Cut::OriginProjection,
+                9,
+                hooks::ADVANCE_ORIGIN_PUBLISHED,
+                true,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                0,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                false,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                1,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                false,
+                true,
+            ),
+            (
+                Cut::GuardReturn,
+                2,
+                hooks::ADVANCE_GUARD_VERIFIED,
+                true,
+                false,
+            ),
+        ];
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut observations = Vec::new();
+        for (phase, remaining, bit, completed, has_step) in cases {
+            hooks::reset();
+            FAILURE_OUTPUTS.set(0);
+            FAILURE_STAGED_CALLERS.set(0);
+            hooks::ADVANCE_CUT.set(Some((phase, remaining)));
+            STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+            TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+            let entry = if phase == Cut::GuardReturn {
+                fixtures.join("tests/fixtures/generator-advance-experiment/entry.ash")
+            } else {
+                fixtures.join("docs/design/macros/fixtures/generators/diverging.ash")
+            };
+            let result = compile_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            STAGED_MODULE_OBSERVER.set(None);
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let (reason, step) = match &result {
+                Err(failure) => match failure.pipeline_failure() {
+                    Some(PipelineFailure::SyntaxRuntime(runtime)) => {
+                        (runtime.cause().reason_code().to_owned(), runtime.step)
+                    }
+                    _ => (failure.reason_code(), None),
+                },
+                Ok(_) => ("unexpected-success".to_owned(), None),
+            };
+            observations.push((
+                phase,
+                remaining,
+                bit,
+                completed,
+                has_step,
+                hooks::ADVANCE_CUT_BEFORE.get(),
+                hooks::ADVANCE_STAGES.get(),
+                reason,
+                step,
+                (
+                    FAILURE_OUTPUTS.get(),
+                    FAILURE_STAGED_CALLERS.get(),
+                    hooks::TRANSFER_ATTEMPTS.get(),
+                ),
+                (
+                    hooks::ROOT_CLOSES.get(),
+                    hooks::TRANSFORMER_DROPS.get(),
+                    hooks::ACTIVE_ROOT_DROPS.get(),
+                    hooks::ADVANCE_GUARD_DROPS.get(),
+                ),
+            ));
+        }
+        eprintln!("actual generator one-shot work cutoffs: {observations:#?}");
+        for (
+            phase,
+            remaining,
+            bit,
+            completed,
+            has_step,
+            before,
+            stages,
+            reason,
+            step,
+            (outputs, callers, transfers),
+            (closes, drops, active_drops, guard_drops),
+        ) in observations
+        {
+            let before = before.expect("the actual installed-capsule phase was reached");
+            assert!(before >= remaining, "{phase:?}, {remaining}, {before}");
+            if phase != Cut::Install {
+                assert!(before < 1_000_000, "{phase:?}, {before}");
+            }
+            assert_eq!(
+                stages & bit != 0,
+                completed,
+                "{phase:?}, {remaining}, stages={stages}"
+            );
+            assert_eq!(
+                reason, "runtime.resource-capacity",
+                "{phase:?}, {remaining}"
+            );
+            assert_eq!(step.is_some(), has_step, "{phase:?}, {remaining}");
+            if phase == Cut::OriginProjection && has_step {
+                assert_eq!(
+                    step.unwrap().primary.range(),
+                    ByteRange::new(97, 135).unwrap()
+                );
+            }
+            if phase == Cut::GuardReturn {
+                assert_eq!(guard_drops, 1);
+            }
+            let expected_cleanup = match (phase, completed) {
+                (Cut::Install, false) => (0, 0, 0),
+                (Cut::Install, true) => (0, 1, 0),
+                _ => (0, 1, 1),
+            };
+            assert_eq!(
+                (closes, drops, active_drops),
+                expected_cleanup,
+                "{phase:?}, {remaining}"
+            );
+            assert_eq!(
+                (outputs, callers, transfers),
+                (0, 0, 0),
+                "{phase:?}, {remaining}"
+            );
+        }
+        hooks::reset();
+    }
+
+    #[test]
+    fn injected_generator_allocation_and_transfer_refusals_do_not_publish() {
+        use crate::eval::machine_test_hooks as hooks;
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut observations = Vec::new();
+        for kind in ["arc", "box", "transfer"] {
+            hooks::reset();
+            FAILURE_OUTPUTS.set(0);
+            FAILURE_STAGED_CALLERS.set(0);
+            match kind {
+                "arc" => hooks::FAIL_ADVANCE_ARC.set(true),
+                "box" => hooks::FAIL_ADVANCE_BOX.set(true),
+                "transfer" => hooks::FAIL_ADVANCE_TRANSFER.set(true),
+                _ => unreachable!(),
+            }
+            STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+            TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+            let entry = if kind == "transfer" {
+                root.join("tests/fixtures/generator-advance-experiment/entry.ash")
+            } else {
+                root.join("docs/design/macros/fixtures/generators/diverging.ash")
+            };
+            let result = compile_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            STAGED_MODULE_OBSERVER.set(None);
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let (reason, step) = match &result {
+                Err(failure) => match failure.pipeline_failure() {
+                    Some(PipelineFailure::SyntaxRuntime(runtime)) => {
+                        (runtime.cause().reason_code().to_owned(), runtime.step)
+                    }
+                    _ => (failure.reason_code(), None),
+                },
+                Ok(_) => ("unexpected-success".to_owned(), None),
+            };
+            observations.push((
+                kind,
+                reason,
+                step,
+                hooks::ADVANCE_STAGES.get(),
+                (
+                    hooks::FAIL_ADVANCE_ARC.get(),
+                    hooks::FAIL_ADVANCE_BOX.get(),
+                    hooks::FAIL_ADVANCE_TRANSFER.get(),
+                ),
+                (
+                    FAILURE_OUTPUTS.get(),
+                    FAILURE_STAGED_CALLERS.get(),
+                    hooks::TRANSFER_ATTEMPTS.get(),
+                    hooks::TRANSFER_FAILURES.get(),
+                ),
+                (
+                    hooks::ROOT_CLOSES.get(),
+                    hooks::TRANSFORMER_DROPS.get(),
+                    hooks::ACTIVE_ROOT_DROPS.get(),
+                    hooks::ADVANCE_GUARD_DROPS.get(),
+                ),
+            ));
+        }
+        eprintln!("injected generator refusal observations: {observations:#?}");
+        for (
+            kind,
+            reason,
+            step,
+            stages,
+            (arc, boxed, transfer),
+            (outputs, callers, attempts, transfer_failures),
+            (closes, drops, active_drops, guard_drops),
+        ) in observations
+        {
+            assert_eq!(reason, "runtime.heap-capacity", "{kind}");
+            assert!(step.is_none(), "{kind}: {step:?}");
+            assert_eq!((outputs, callers), (0, 0), "{kind}");
+            match kind {
+                "arc" => {
+                    assert!(!arc);
+                    assert_eq!(stages & hooks::ADVANCE_GUARD_CREATED, 0);
+                    assert_eq!(guard_drops, 0);
+                }
+                "box" => {
+                    assert!(!boxed);
+                    assert_ne!(stages & hooks::ADVANCE_GUARD_CREATED, 0);
+                    assert_eq!(guard_drops, 1);
+                }
+                "transfer" => {
+                    assert!(!transfer);
+                    assert_ne!(stages & hooks::ADVANCE_TRANSFER_REACHED, 0);
+                    assert_eq!((attempts, transfer_failures), (1, 1));
+                    assert_eq!(guard_drops, 2);
+                }
+                _ => unreachable!(),
+            }
+            if kind != "transfer" {
+                assert_eq!((attempts, transfer_failures), (0, 0));
+            }
+            let expected_cleanup = if kind == "transfer" {
+                (1, 1, 0)
+            } else {
+                (0, 1, 1)
+            };
+            assert_eq!((closes, drops, active_drops), expected_cleanup, "{kind}");
+        }
+        hooks::reset();
+    }
+
+    fn observe_later_escape_plan(
+        _owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        GENERATOR_PLAN.with(|record| {
+            *record.borrow_mut() = plan
+                .actions
+                .iter()
+                .map(|action| {
+                    let kind = match action {
+                        crate::syntax::GeneratorAction::Enter { .. } => "enter",
+                        crate::syntax::GeneratorAction::Advance { .. } => "step",
+                        crate::syntax::GeneratorAction::Escape { .. } => "escape",
+                    };
+                    (kind.to_owned(), String::new())
+                })
+                .collect();
+        });
+    }
+
+    #[test]
+    fn completed_generator_step_does_not_label_a_later_escape_failure() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        GENERATOR_PLAN.with(|plan| plan.borrow_mut().clear());
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_later_escape_plan));
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/later-escape/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the later escape diverges");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+
+        let plan = GENERATOR_PLAN.with(|plan| plan.borrow().clone());
+        let origin = ADVANCE_SELECTED_ORIGIN.with(|origin| origin.borrow_mut().take());
+        eprintln!(
+            "later failure plan={plan:?}; selected={origin:?}; calls={}; outputs={} callers={} transfers={} guard drops={}",
+            ADVANCE_SELECTED_COUNT.get(),
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get(),
+            hooks::ADVANCE_GUARD_DROPS.get()
+        );
+        assert_eq!(
+            plan.iter()
+                .map(|(kind, _)| kind.as_str())
+                .collect::<Vec<_>>(),
+            ["enter", "step", "escape"]
+        );
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        assert!(origin.is_some());
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the later escape keeps its ordinary runtime failure")
+        };
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        assert!(runtime.step.is_none());
+        assert_eq!(
+            (
+                FAILURE_OUTPUTS.get(),
+                FAILURE_STAGED_CALLERS.get(),
+                hooks::TRANSFER_ATTEMPTS.get()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(hooks::ADVANCE_GUARD_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn generated_step_uses_its_actual_callable_origin_spine() {
+        use crate::{eval::machine_test_hooks as hooks, parser::STAGED_MODULE_OBSERVER};
+
+        hooks::reset();
+        ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+        ADVANCE_SELECTED_COUNT.set(0);
+        FAILURE_OUTPUTS.set(0);
+        FAILURE_STAGED_CALLERS.set(0);
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+        STAGED_MODULE_OBSERVER.set(Some(observe_failure_staged_module));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_failure_output));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generator-advance-experiment/generated-step/diverging.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the generated step diverges");
+        hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        let origin = ADVANCE_SELECTED_ORIGIN
+            .with(|origin| origin.borrow_mut().take())
+            .expect("the actual generated callable was selected");
+        let Some(PipelineFailure::SyntaxRuntime(runtime)) = failure.pipeline_failure() else {
+            panic!("the generated step retains its ordinary runtime failure")
+        };
+        eprintln!(
+            "actual generated callable origin={origin:?}, projected={:?}, outputs={}, caller stages={}, transfers={}",
+            runtime.step,
+            FAILURE_OUTPUTS.get(),
+            FAILURE_STAGED_CALLERS.get(),
+            hooks::TRANSFER_ATTEMPTS.get()
+        );
+        assert_eq!(ADVANCE_SELECTED_COUNT.get(), 1);
+        assert_eq!(runtime.cause().reason_code(), "runtime.resource-capacity");
+        let mut current = &origin;
+        let (primary, definition) = loop {
+            match current {
+                Origin::Generated { cause, .. } => current = cause,
+                Origin::Related { primary, .. } => current = primary,
+                Origin::Source(span) => break (*span, None),
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => break (*invocation, Some(*definition)),
+            }
+        };
+        let projected = runtime
+            .step
+            .expect("the real callable origin was paid and copied");
+        assert_eq!(
+            (projected.primary, projected.definition),
+            (primary, definition)
+        );
+        assert_eq!(primary.range(), ByteRange::new(33, 54).unwrap());
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == primary.source())
+            .unwrap();
+        assert!(
+            source
+                .display_path()
+                .ends_with("generated-step/stepdefs.ash")
+        );
+        assert_eq!(&source.text()[33..54], "make_step actual_step");
+        assert_eq!(
+            (FAILURE_OUTPUTS.get(), FAILURE_STAGED_CALLERS.get()),
+            (0, 0)
+        );
         hooks::reset();
     }
 
@@ -6941,6 +9467,79 @@ main () = one(()) + two(())
         if !names.is_empty() {
             GENERATOR_ORDER.with(|slot| *slot.borrow_mut() = names);
         }
+    }
+
+    fn observe_generator_shapes_and_actions(
+        _owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        GENERATOR_PLAN.with(|record| {
+            let mut record = record.borrow_mut();
+            record.extend(plan.shapes.iter().map(|(generators, binding)| {
+                ("shape".to_owned(), generators[*binding].name.text.clone())
+            }));
+            record.extend(plan.actions.iter().map(|action| match action {
+                crate::syntax::GeneratorAction::Enter {
+                    generators,
+                    binding,
+                    ..
+                } => ("enter".to_owned(), generators[*binding].name.text.clone()),
+                crate::syntax::GeneratorAction::Advance {
+                    generators,
+                    binding,
+                    ..
+                } => ("step".to_owned(), generators[*binding].name.text.clone()),
+                crate::syntax::GeneratorAction::Escape { .. } => {
+                    ("escape".to_owned(), String::new())
+                }
+            }));
+        });
+    }
+
+    #[test]
+    fn zero_iteration_checks_generator_shape_without_creating_an_instance() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        for (entry, value) in [("main.ash", "310"), ("zero_iterations.ash", "42")] {
+            hooks::reset();
+            GENERATOR_PLAN.with(|record| record.borrow_mut().clear());
+            GENERATOR_LIFECYCLES.with(|record| record.borrow_mut().clear());
+            ADVANCE_SELECTED_COUNT.set(0);
+            ADVANCE_SELECTED_ORIGIN.with(|origin| *origin.borrow_mut() = None);
+            GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_shapes_and_actions));
+            GENERATOR_LIFECYCLE_OBSERVER.set(Some(observe_generator_lifecycle));
+            hooks::ADVANCE_CALLABLE_OBSERVER.set(Some(observe_actual_advance_callable));
+
+            let compiled = compile_path(RunConfiguration {
+                entry: fixtures.join(entry),
+                roots: ModuleRoots::empty(),
+            })
+            .expect("the unchanged generator graph compiles");
+            GENERATOR_OWNER_OBSERVER.set(None);
+            GENERATOR_LIFECYCLE_OBSERVER.set(None);
+            hooks::ADVANCE_CALLABLE_OBSERVER.set(None);
+
+            let plan = GENERATOR_PLAN.with(|record| record.borrow().clone());
+            let lifecycles = GENERATOR_LIFECYCLES.with(|record| record.borrow().clone());
+            assert_eq!(lifecycles, [[1, 0, 1, 1, 0]]);
+            assert_generator_cleanup(0);
+            assert_eq!(execute(&compiled).unwrap().value_display(), value);
+            assert_generator_cleanup(1);
+            if entry == "main.ash" {
+                assert!(plan.iter().any(|(kind, _)| kind == "enter"));
+                assert!(plan.iter().any(|(kind, _)| kind == "step"));
+                assert!(ADVANCE_SELECTED_COUNT.get() > 0);
+            } else {
+                // The step shape is checked, but the empty repetition never
+                // creates a state or executes the fixture's diverging seed.
+                assert_eq!(plan, [("shape".to_owned(), "number".to_owned())]);
+                assert_eq!(ADVANCE_SELECTED_COUNT.get(), 0);
+            }
+            drop(compiled);
+        }
+        hooks::reset();
     }
 
     #[test]
@@ -7384,6 +9983,7 @@ main () = one(()) + two(())
         for (entry, expected) in [
             ("one.ash", vec!["Red"]),
             ("main.ash", vec!["Red", "Blue"]),
+            ("integrated.ash", vec!["Red", "Blue"]),
             ("three.ash", vec!["Red", "Blue", "Green"]),
         ] {
             hooks::reset();

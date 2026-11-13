@@ -179,7 +179,10 @@ The interpreter supports cells, lexical regions, retained control, scheduling
 and pinned-worker networks. Native calls require admitted host callbacks or a
 generated linked host. Generated executable images support cells, regions,
 retained control, scheduling and the pointer/void FFI. They do not support
-Network scopes or operations; `ash build` rejects those programs.
+Network scopes or operations; `ash build` rejects those programs. Generated
+images also reject retained concrete implementation or adapter method evidence;
+supported declaration metadata alone does not establish support for those
+concrete evidence forms.
 
 ### Generated-host linkage checks
 
@@ -343,9 +346,19 @@ diagnostics retain the invocation and definition relationships where applicable.
 An introduced signature can use a nominal visible to its defining module
 without importing the nominal into the caller.
 An imported declaration syntax template or one of its repetitions can bind
-state-threaded generators with a `with` clause. The
+state-threaded generators with a `with` clause. A step receives its state and
+returns the next state and an expression fragment; repeated reads in one
+iteration reuse the fragment. The step needs no compiler input parameter;
+helpers receive their values as ordinary arguments. The
 [declaration syntax specification](../../spec/syntax-expansion.md#imported-declaration-syntax)
-describes their scope, checking, and current caller-quotation boundary.
+describes generator scope, checking, and the caller-quotation boundary.
+
+A procedural declaration transformer can inspect nested repeated captures and
+use `declaration_syntax` and `parse_declaration` to traverse or parse a complete
+declaration. Parsing syntax does not expand macros, resolve names, or type-check
+it. A transformer can handle `ParseRejected` or return its `ParseFailure` as a
+`SyntaxDiagnostic`; the latter preserves the parser reason and relevant source
+labels. An invalid or exhausted invocation does not publish partial output.
 
 ## Imported derives
 
@@ -364,7 +377,7 @@ name with an optional `$target:ident`. A checked transformer receives the
 complete Declaration at capture 0 and that optional Identifier at capture 1.
 Derives run in list order; their declarations are checked by the ordinary
 compiler. The [derive specification](../../spec/syntax-expansion.md#derive-syntax)
-describes capture behavior and the currently recorded downstream limitations.
+describes capture behavior and ordering.
 An introduced implementation method head uses its authenticated syntax
 context; the [name rules](../../spec/syntax-expansion.md#names-and-hygiene)
 describe how an unbound head selects an interface member.
@@ -376,9 +389,10 @@ under development.
 During checked declaration expansion, an ordinary helper can construct an
 expression fragment with `syntax { ... }`. A `$name` inside the quote inserts
 the fragment stored in that ordinary variable. An imported declaration
-syntax template can run an expression or multiline block in `${ ... }`.
-Escaped code can read in-scope captures and generator values and pass them to
-ordinary helpers. Its result can be an expression, identifier with origin,
+syntax template can run a single inline expression or a multiline block in
+`${ ... }`. The inline form does not change ordinary block syntax. Escaped
+code can read in-scope captures and generator values and pass them to ordinary
+helpers. Its result can be an expression, identifier with origin,
 type, pattern, or declaration fragment, and is admitted in its actual output
 position. The code is checked as ordinary Ash; integers and other primitive
 values are not implicitly converted to syntax.
@@ -388,8 +402,10 @@ ordinary program without that host fails. A procedural expression transformer
 can return the token and group view of a quoted capture for reparsing. The
 supported protected quote round trip preserves its syntax boundary. A
 caller-owned quoted seed can retain ordinary caller references when its output
-is resolved in the completed caller. Some nested syntax invocation and
-quotation paths remain under development. See
+is resolved in the completed caller. A checked imported transformer can call an
+ordinary helper that constructs a quote, including a helper retained in a parsed
+and emitted declaration. Some nested syntax invocation and quotation paths
+remain under development. See
 [quotation and template escapes](../../spec/syntax-expansion.md#quotation-and-template-escapes)
 for the current boundary.
 

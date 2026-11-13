@@ -1647,6 +1647,20 @@ fn compile_syntax_runtime_failure<'a>(
             value: FactValue::Text(cause),
         }],
     };
+    if let Some(step) = failure.step {
+        diagnostic.related.push(label(
+            step.primary,
+            "generator_step_origin",
+            Message::syntax_generator_step_origin(),
+        )?);
+        if let Some(definition) = step.definition {
+            diagnostic.related.push(label(
+                definition,
+                "generator_step_definition",
+                Message::syntax_generator_step_definition(),
+            )?);
+        }
+    }
     let teardown = match failure.cause() {
         crate::eval::RuntimeFailure::Report(report) => report.teardown.or_else(|| {
             report
@@ -2038,6 +2052,17 @@ fn compile_graph_syntax<'a>(
         &sources,
         Some(failure.source.display_path()),
     )?;
+    if let (Some(_), Some(location), Some(diagnostic)) = (
+        failure.resource,
+        context.resource_location(),
+        diagnostics.first_mut(),
+    ) {
+        append_diagnostic_locations(
+            diagnostic,
+            std::iter::once((location, location.primary.primary())),
+            &sources,
+        )?;
+    }
     for diagnostic in &mut diagnostics {
         if let Some(import) = import_label(context, "import_context")? {
             diagnostic.related.push(import);

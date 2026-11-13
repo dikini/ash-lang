@@ -33653,8 +33653,7 @@ mod tests {
             );
             let error = validator
                 .validate_module_registry(None)
-                .err()
-                .expect("the restored fixed-original pair refuses");
+                .expect_err("the restored fixed-original pair refuses");
             assert_eq!(error.reason(), ValidationReason::Registry);
             assert_eq!(
                 validator.nominal_overlap_refusal.get(),
@@ -34047,8 +34046,7 @@ mod tests {
             );
             let error = validator
                 .validate_module_registry(None)
-                .err()
-                .expect("the fixed-original overlap must refuse");
+                .expect_err("the fixed-original overlap must refuse");
             assert_eq!(error.reason(), ValidationReason::Registry);
             assert_eq!(
                 validator.nominal_overlap_refusal.get(),
@@ -34145,6 +34143,595 @@ mod tests {
         );
         eprintln!(
             "linked: actual checked original pair rejected the coordinated contained mutation"
+        );
+    }
+
+    /// Exercise the checked implementation selected at a real I16 Core call site.
+    #[test]
+    fn i16_actual_indexed_selection_rejects_unrelated_method_binder() {
+        use std::fmt::Write as _;
+
+        #[derive(Clone, Copy, Debug)]
+        struct Site {
+            implementation: ImplMethodId,
+            binder: BinderId,
+            variable: NodeId,
+            application: NodeId,
+            argument: NodeId,
+            span: Span,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        struct Donor {
+            implementation: ImplMethodId,
+            binder: BinderId,
+        }
+
+        struct Inspection {
+            report: String,
+            sites: Vec<Site>,
+            same_graph_donors: Vec<Donor>,
+        }
+
+        fn inspect(
+            program: &UnvalidatedEffectProgram,
+            sources: &[&SourceFile],
+            relations: &[(ModuleId, SourceId)],
+            linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+            exported_path: &str,
+        ) -> Result<Inspection, String> {
+            fn find_module(
+                suffix: &str,
+                sources: &[&SourceFile],
+                relations: &[(ModuleId, SourceId)],
+            ) -> Result<(ModuleId, SourceId), String> {
+                let matches = sources
+                    .iter()
+                    .filter(|source| std::path::Path::new(source.display_path()).ends_with(suffix))
+                    .collect::<Vec<_>>();
+                let [source] = matches.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source, found {}",
+                        matches.len()
+                    ));
+                };
+                let modules = relations
+                    .iter()
+                    .filter(|(_, source_id)| *source_id == source.id())
+                    .map(|(module, _)| *module)
+                    .collect::<Vec<_>>();
+                let [module] = modules.as_slice() else {
+                    return Err(format!(
+                        "{suffix}: expected one source/module relation, found {}",
+                        modules.len()
+                    ));
+                };
+                Ok((*module, source.id()))
+            }
+
+            let (api_id, _) = find_module("indexed/api.ash", sources, relations)?;
+            let (export_id, export_source) = find_module(exported_path, sources, relations)?;
+            let api = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == api_id)
+                .ok_or_else(|| "the linked api group is absent".to_owned())?;
+            let exported = linked
+                .groups()
+                .iter()
+                .find(|group| group.module() == export_id)
+                .ok_or_else(|| "the linked exported group is absent".to_owned())?;
+            let interfaces = api
+                .interface_facts()
+                .iter()
+                .filter(|fact| fact.spelling == "Indexed")
+                .collect::<Vec<_>>();
+            let [interface] = interfaces.as_slice() else {
+                return Err(format!(
+                    "expected one checked Indexed interface, found {}",
+                    interfaces.len()
+                ));
+            };
+            let methods = interface
+                .methods
+                .iter()
+                .filter(|method| method.spelling == "index")
+                .collect::<Vec<_>>();
+            let [method] = methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index method, found {}",
+                    methods.len()
+                ));
+            };
+            let colors = program.registry.nominals().iter().filter(|nominal| {
+                nominal.id.module() == export_id && nominal.spelling == "Color"
+                    && matches!(&nominal.origin, Origin::Source(span) if span.source() == export_source)
+            }).collect::<Vec<_>>();
+            let [color] = colors.as_slice() else {
+                return Err(format!(
+                    "expected the original exported Color nominal, found {}",
+                    colors.len()
+                ));
+            };
+            let implementations = exported
+                .implementation_facts()
+                .iter()
+                .filter(|implementation| {
+                    implementation.interface() == interface.id
+                        && matches!(implementation.arguments(),
+                    [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                })
+                .collect::<Vec<_>>();
+            let [implementation] = implementations.as_slice() else {
+                return Err(format!(
+                    "expected the actual Indexed<Color> implementation, found {}",
+                    implementations.len()
+                ));
+            };
+            let implementation_methods = implementation
+                .methods
+                .iter()
+                .filter(|selected| selected.method == method.id)
+                .collect::<Vec<_>>();
+            let [selected] = implementation_methods.as_slice() else {
+                return Err(format!(
+                    "expected one checked index implementation method, found {}",
+                    implementation_methods.len()
+                ));
+            };
+            let definitions = exported
+                .definitions()
+                .iter()
+                .filter_map(|definition| match definition.kind() {
+                    crate::resolved::ResolvedDefinitionKind::Equational(global)
+                        if global.interface.name.spelling == "computed" =>
+                    {
+                        Some(global)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [computed] = definitions.as_slice() else {
+                return Err(format!(
+                    "expected one checked computed definition, found {}",
+                    definitions.len()
+                ));
+            };
+            let [equation] = computed.equations.as_slice() else {
+                return Err(format!(
+                    "expected one computed equation, found {}",
+                    computed.equations.len()
+                ));
+            };
+            let mut pending = vec![&equation.body];
+            let mut occurrences = Vec::new();
+            while let Some(expression) = pending.pop() {
+                match &expression.kind {
+                    crate::resolved::ResolvedExprKind::Add(binary) => {
+                        pending.push(&binary.right);
+                        pending.push(&binary.left);
+                    }
+                    crate::resolved::ResolvedExprKind::Apply(application) => {
+                        pending.push(&application.argument);
+                        pending.push(&application.function);
+                    }
+                    crate::resolved::ResolvedExprKind::Occurrence(occurrence)
+                        if occurrence.term
+                            == crate::resolved::ResolvedTermName::Method(method.id) =>
+                    {
+                        occurrences.push(occurrence);
+                    }
+                    crate::resolved::ResolvedExprKind::Constructor(_)
+                    | crate::resolved::ResolvedExprKind::Integer(_) => {}
+                    other => {
+                        return Err(format!("unexpected fixed computed expression: {other:?}"));
+                    }
+                }
+            }
+            if occurrences.is_empty() {
+                return Err("no real resolved index occurrence in computed".to_owned());
+            }
+            let catalog = &program.method_evidence;
+            let mut report = format!(
+                "I16 original: interface={:?} method={:?} Color={:?} implementation={:?} implementation_method={:?} binder={:?}",
+                interface.id, method.id, color.id, implementation.id, selected.id, selected.binder
+            );
+            let mut sites = Vec::new();
+            for occurrence in &occurrences {
+                let [slot] = occurrence.evidence.as_ref() else {
+                    return Err(format!(
+                        "index occurrence has {} evidence slots",
+                        occurrence.evidence.len()
+                    ));
+                };
+                let (checked_method, application, method_arguments, _, selection) = slot
+                    .filled_method()
+                    .ok_or_else(|| "the actual checked index slot is not published".to_owned())?;
+                if checked_method != method.id
+                    || application.interface() != interface.id
+                    || !matches!(application.arguments(),
+                        [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] if *id == color.id)
+                    || !method_arguments.is_empty()
+                {
+                    return Err(
+                        "the checked index slot is not the original Indexed<Color> occurrence"
+                            .to_owned(),
+                    );
+                }
+                let selection_node = selection.root();
+                let Some(EvidenceNode::Implementation {
+                    implementation: selected_impl,
+                    methods,
+                    ..
+                }) = selection.node(selection_node)
+                else {
+                    return Err(
+                        "the actual root selection is not a concrete implementation".to_owned()
+                    );
+                };
+                if selected_impl != implementation.id || !methods.contains(&selected.id) {
+                    return Err(
+                        "the actual selection does not choose the checked implementation method"
+                            .to_owned(),
+                    );
+                }
+                let slot_id = slot.storage_id();
+                let original_span = occurrence.origin.primary_span();
+                let matching_variables = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable))
+                            if variable.binder() == selected.binder =>
+                        {
+                            let node_id = node_id(program.arena, index).ok()?;
+                            Some((node_id, node.origin.as_ref().map(Origin::primary_span)))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let at_occurrence = matching_variables
+                    .iter()
+                    .filter_map(|(node, origin)| (*origin == Some(original_span)).then_some(*node))
+                    .collect::<Vec<_>>();
+                let [variable] = at_occurrence.as_slice() else {
+                    return Err(format!(
+                        "expected one real variable at {original_span:?}, found {}",
+                        at_occurrence.len()
+                    ));
+                };
+                let applications = program
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Apply(application),
+                        )) if application.function() == *variable => {
+                            Some((node_id(program.arena, index).ok()?, application.argument()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let [(application, argument)] = applications.as_slice() else {
+                    return Err(format!(
+                        "expected one Apply.function edge for {variable:?}, found {}",
+                        applications.len()
+                    ));
+                };
+                sites.push(Site {
+                    implementation: selected.id,
+                    binder: selected.binder,
+                    variable: *variable,
+                    application: *application,
+                    argument: *argument,
+                    span: original_span,
+                });
+                let retained_occurrences = catalog
+                    .occurrences()
+                    .iter()
+                    .filter(|row| row.slot == slot_id)
+                    .count();
+                let anchors = program.method_evidence_anchors.iter().filter(|anchor| {
+                    anchor.occurrence == Some(slot_id) && anchor.method == method.id
+                        && matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { implementation: actual, selection_node: node }
+                            if actual == selected.id && node == selection_node)
+                }).map(|anchor| anchor.node).collect::<Vec<_>>();
+                writeln!(report, "\nslot={slot_id} span={original_span:?} selection_node={selection_node:?} selected={:?} binder={:?} binder_variables={matching_variables:?} variable={variable:?} application={application:?} argument={argument:?} retained_occurrences={retained_occurrences} matching_adapter_nodes={anchors:?}", selected.id, selected.binder).unwrap();
+            }
+            let checked_occurrences = catalog
+                .occurrences()
+                .iter()
+                .filter(|row| row.checked_method == Some(method.id))
+                .map(|row| {
+                    (
+                        row.slot,
+                        row.checked_application.interface(),
+                        row.selection.root(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let implementation_owners = catalog
+                .implementation_owners()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.binder))
+                .collect::<Vec<_>>();
+            let adapters = catalog
+                .adapters()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| (row.implementation, row.selection_node, row.binder))
+                .collect::<Vec<_>>();
+            let concrete_sources = catalog
+                .concrete_sources()
+                .iter()
+                .filter(|row| row.implementation == selected.id)
+                .map(|row| {
+                    (
+                        row.occurrence,
+                        row.selection_node,
+                        row.implementation,
+                        row.binder,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expectations = catalog
+                .expectations()
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.method == method.id)
+                .map(|(index, row)| (index, row.occurrence, row.role))
+                .collect::<Vec<_>>();
+            let method_anchors = program
+                .method_evidence_anchors
+                .iter()
+                .filter(|anchor| anchor.method == method.id)
+                .map(|anchor| (anchor.node, anchor.occurrence, anchor.role))
+                .collect::<Vec<_>>();
+            writeln!(report, "\nchecked_occurrences={checked_occurrences:?} implementation_owners={implementation_owners:?} adapters={adapters:?} concrete_sources={concrete_sources:?} method_expectations={expectations:?} method_anchors={method_anchors:?}").unwrap();
+            let same_graph_donors = linked
+                .groups()
+                .iter()
+                .flat_map(|group| group.implementation_facts())
+                .filter(|candidate| candidate.id != implementation.id)
+                .flat_map(|candidate| {
+                    let candidate_id = candidate.id;
+                    candidate
+                        .methods
+                        .iter()
+                        .filter_map(move |candidate_method| {
+                            (candidate_method.id.implementation() == candidate_id
+                                && candidate_method.binder.module() == Some(candidate_id.module())
+                                && candidate_method.binder != selected.binder)
+                                .then_some(Donor {
+                                    implementation: candidate_method.id,
+                                    binder: candidate_method.binder,
+                                })
+                        })
+                })
+                .collect::<Vec<_>>();
+            writeln!(report, "\nsame_graph_donors={same_graph_donors:?}").unwrap();
+            Ok(Inspection {
+                report,
+                sites,
+                same_graph_donors,
+            })
+        }
+
+        fn configuration(entry: &str) -> crate::driver::RunConfiguration {
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("docs/design/macros/fixtures/indexed")
+                    .join(entry),
+                roots: ModuleRoots::empty(),
+            }
+        }
+
+        fn positive(entry: &str, exported_path: &str) -> Inspection {
+            let inventory = std::cell::RefCell::new(None);
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                configuration(entry),
+                |program, sources, relations, linked| {
+                    *inventory.borrow_mut() =
+                        Some(inspect(&program, sources, relations, linked, exported_path));
+                    validate_effect_modules_linked_with_work(
+                        program,
+                        sources,
+                        relations,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .unwrap_or_else(|error| panic!("{entry} must independently validate: {error}"));
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42"
+            );
+            inventory
+                .into_inner()
+                .expect("the actual linked validation callback must run")
+                .unwrap_or_else(|reason| {
+                    panic!("I16 STOP: {entry} actual-site inventory unavailable: {reason}")
+                })
+        }
+
+        let control = positive("control_integrated.ash", "indexed/control_exported.ash");
+        let original = positive("integrated.ash", "indexed/exported.ash");
+        assert_eq!(control.sites.len(), 2, "two actual handwritten index calls");
+        assert_eq!(original.sites.len(), 2, "two actual generated index calls");
+        eprintln!("I16 handwritten control: {}", control.report);
+        eprintln!("I16 unchanged original: {}", original.report);
+        let control_donor = Donor {
+            implementation: control.sites[0].implementation,
+            binder: control.sites[0].binder,
+        };
+
+        let reached = Cell::new(false);
+        let negative = crate::driver::compile_path_with_effect_validation_for_test(
+            configuration("integrated.ash"),
+            |mut program, sources, relations, linked| {
+                let observed =
+                    inspect(&program, sources, relations, linked, "indexed/exported.ash")
+                        .unwrap_or_else(|reason| {
+                            panic!("I16 STOP: actual-site inventory unavailable: {reason}")
+                        });
+                let [target, other] = observed.sites.as_slice() else {
+                    panic!(
+                        "I16 STOP: expected two actual index calls, found {}",
+                        observed.sites.len()
+                    );
+                };
+                let (donor, donor_kind) = match observed.same_graph_donors.first() {
+                    Some(donor) => (*donor, "same checked graph"),
+                    None => (control_donor, "separately checked handwritten control"),
+                };
+                assert_ne!(donor.implementation, target.implementation);
+                assert_ne!(
+                    donor.implementation.implementation(),
+                    target.implementation.implementation()
+                );
+                assert_ne!(donor.binder, target.binder);
+                assert_eq!(
+                    donor.binder.module(),
+                    Some(donor.implementation.implementation().module())
+                );
+                if observed.same_graph_donors.is_empty() {
+                    assert_ne!(
+                        donor.implementation.implementation().module(),
+                        target.implementation.implementation().module(),
+                        "the independent donor must retain its distinct module identity"
+                    );
+                }
+                assert_ne!(target.variable, other.variable);
+                assert_eq!(target.implementation, other.implementation);
+                assert_eq!(target.binder, other.binder);
+
+                let target_index = target.variable.index().expect("actual variable index");
+                let other_index = other.variable.index().expect("other variable index");
+                let application_index = target.application.index().expect("actual call index");
+                let application = match &program.nodes[application_index].kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                        application,
+                    ))) => *application,
+                    _ => panic!("I16 STOP: selected call is not an Apply"),
+                };
+                assert_eq!(application.function(), target.variable);
+                assert_eq!(application.argument(), target.argument);
+                let node = &program.nodes[target_index];
+                assert_eq!(
+                    node.origin.as_ref().map(Origin::primary_span),
+                    Some(target.span)
+                );
+                let before_type = node.ty.clone();
+                let before_effects = node.effects.clone();
+                let before_origin = node.origin.clone();
+                let before_dialect = node.dialect;
+                let original_registry = Arc::clone(&program.registry);
+                let original_catalog = Arc::clone(&program.method_evidence);
+                let original_owners = Arc::clone(&program.generated_parameter_anchors);
+                let original_anchors = program.method_evidence_anchors.as_ptr();
+                let original_anchor_count = program.method_evidence_anchors.len();
+                let original_root = program.root;
+                let original_arena = program.arena;
+                let original_node_count = program.nodes.len();
+                let variable_binders = |program: &UnvalidatedEffectProgram| {
+                    program
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, node)| match &node.kind {
+                            EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                                Some((index, variable.binder()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let before_binders = variable_binders(&program);
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &mut program.nodes[target_index].kind
+                else {
+                    panic!("I16 STOP: selected Apply.function is not a variable")
+                };
+                assert_eq!(variable.binder(), target.binder);
+                *variable = super::super::variable::VariableNode::new(donor.binder);
+                let after_binders = variable_binders(&program);
+                assert_eq!(before_binders.len(), after_binders.len());
+                let changed = before_binders
+                    .iter()
+                    .zip(&after_binders)
+                    .filter(|(before, after)| before != after)
+                    .map(|(before, after)| (*before, *after))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    changed,
+                    vec![((target_index, target.binder), (target_index, donor.binder))]
+                );
+                let node = &program.nodes[target_index];
+                assert_eq!(node.ty, before_type);
+                assert_eq!(node.effects, before_effects);
+                assert_eq!(node.origin, before_origin);
+                assert_eq!(node.dialect, before_dialect);
+                assert!(matches!(
+                    &program.nodes[other_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if variable.binder() == other.binder
+                ));
+                assert!(matches!(
+                    &program.nodes[application_index].kind,
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(actual)))
+                        if *actual == application
+                ));
+                assert_eq!(program.root, original_root);
+                assert_eq!(program.arena, original_arena);
+                assert_eq!(program.nodes.len(), original_node_count);
+                assert!(Arc::ptr_eq(&program.registry, &original_registry));
+                assert!(Arc::ptr_eq(&program.method_evidence, &original_catalog));
+                assert!(Arc::ptr_eq(
+                    &program.generated_parameter_anchors,
+                    &original_owners
+                ));
+                assert_eq!(program.method_evidence_anchors.as_ptr(), original_anchors);
+                assert_eq!(program.method_evidence_anchors.len(), original_anchor_count);
+                eprintln!("I16 original linked facts: {}", observed.report);
+                eprintln!(
+                    "I16 selected callee {target:?}; {donor_kind} donor {donor:?}; exactly one binder changed"
+                );
+
+                reached.set(true);
+                let result = validate_effect_modules_linked_with_work(
+                    program,
+                    sources,
+                    relations,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                );
+                match &result {
+                    Ok(_) => eprintln!("I16 mutated Core was accepted"),
+                    Err(error) => eprintln!(
+                        "I16 mutated Core refused: reason={:?} node={:?} cause={:?}",
+                        error.reason(),
+                        error.node,
+                        error.cause_name()
+                    ),
+                }
+                assert!(
+                    result.is_err(),
+                    "the independent linked Core validator must reject the changed binder"
+                );
+                result
+            },
+        );
+        assert!(
+            reached.get(),
+            "the actual selected call mutation must be reached"
+        );
+        assert!(
+            negative.is_err(),
+            "independent linked Core validation must reject the unrelated selected method binder"
         );
     }
 
@@ -34293,8 +34880,7 @@ mod tests {
                 assert_eq!(
                     result
                         .as_ref()
-                        .err()
-                        .expect("one-short linked preparation refuses")
+                        .expect_err("one-short linked preparation refuses")
                         .reason(),
                     ValidationReason::Resource
                 );
@@ -35364,7 +35950,10 @@ mod tests {
         const SOURCE_PAIR_COUNT: usize = 4;
         const FOREIGN_SOURCE_BYTES: usize = 216;
         const RESERVED_SOURCE_SCAN_WORK: usize = SOURCE_PAIR_COUNT + FOREIGN_SOURCE_BYTES;
-        const CANONICAL_REGISTRY_RECORDS: usize = RESERVED_SOURCE_SCAN_WORK + R;
+        // The first canonical parameter also grows the per-module span map.
+        const CANONICAL_PARAMETER_MAP_GROWTH: usize = 1;
+        const CANONICAL_REGISTRY_RECORDS: usize =
+            RESERVED_SOURCE_SCAN_WORK + R + CANONICAL_PARAMETER_MAP_GROWTH;
         const ROW_STRUCTURE: usize = 2 * S + 2 * R;
         // The seven stored envelopes contain 42 Type/binder-Kind cells:
         // 3 + 7 + 12 for the resolved value/function/scheme, 1 + 3 + 8 for
@@ -35463,7 +36052,7 @@ mod tests {
         let exact_work = EXPECTED.total();
         assert_eq!(
             exact_work,
-            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1
+            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1 + CANONICAL_PARAMETER_MAP_GROWTH
         );
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact module/source relation is canonical");
@@ -40441,12 +41030,26 @@ mod tests {
     fn registry_canonical_binder_kind_authentication_is_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
         const KIND_NODES: usize = 2 * DEPTH + 1;
-        // The canonical registry scan visits one binder record. Authenticating
-        // it against its ordered nominal record visits a second record plus
-        // every pair of Kind nodes. The reserved-source scan also visits
-        // the one materialized nominal before binder authentication.
+        // Both paths scan one source, retain the full nominal and constructor
+        // spans, and authenticate one canonical binder against the ordered
+        // record and every pair of Kind nodes.
         const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        const EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK + KIND_NODES + 2;
+        const NOMINAL_SPAN_WORK: usize = 2;
+        const CONSTRUCTOR_SPAN_WORK: usize = 2;
+        const BINDER_RECORDS_AND_KIND_WORK: usize = KIND_NODES + 2;
+        const SINGLE_SOURCE_EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK
+            + NOMINAL_SPAN_WORK
+            + CONSTRUCTOR_SPAN_WORK
+            + BINDER_RECORDS_AND_KIND_WORK;
+        // The module path also grows one initially empty map for each span
+        // and one for the first canonical parameter of this module.
+        const MODULE_NOMINAL_MAP_GROWTH: usize = 1;
+        const MODULE_CONSTRUCTOR_MAP_GROWTH: usize = 1;
+        const MODULE_PARAMETER_MAP_GROWTH: usize = 1;
+        const MODULE_EXACT_WORK: usize = SINGLE_SOURCE_EXACT_WORK
+            + MODULE_NOMINAL_MAP_GROWTH
+            + MODULE_CONSTRUCTOR_MAP_GROWTH
+            + MODULE_PARAMETER_MAP_GROWTH;
 
         fn deep_kind() -> crate::types::Kind {
             let mut kind = crate::types::Kind::Type;
@@ -40533,7 +41136,7 @@ mod tests {
                 assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - SINGLE_SOURCE_EXACT_WORK)
                     .expect("the exact fixture precharge should fit");
                 exact
                     .validate_registry()
@@ -40543,13 +41146,28 @@ mod tests {
                 let short_program = registry_program(&file, None, None);
                 let short = Validator::new(&short_program, &[&file]);
                 short
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(
+                        CORE_VALIDATION_TYPE_WORK_LIMIT - (SINGLE_SOURCE_EXACT_WORK - 1),
+                    )
                     .expect("the one-short fixture precharge should fit");
                 let error = short
                     .validate_registry()
+                    .expect_err("one missing constructor-span cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                // The two-cell constructor-span charge refuses atomically.
+                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT - 1);
+
+                let kind_short_program = registry_program(&file, None, None);
+                let kind_short = Validator::new(&kind_short_program, &[&file]);
+                let kind_allowance = SINGLE_SOURCE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - 1;
+                kind_short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short Kind fixture precharge should fit");
+                let error = kind_short
+                    .validate_registry()
                     .expect_err("one missing Kind-pair visit must reject validation");
                 assert_eq!(error.reason(), ValidationReason::Resource);
-                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                assert_eq!(kind_short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let mismatched_program =
                     registry_program(&file, None, Some(crate::types::Kind::Type));
@@ -40565,7 +41183,7 @@ mod tests {
                     Validator::new_modules(&module_program, &[&file], &[(module, file.id())])
                         .expect("the module/source relation should be valid");
                 module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - MODULE_EXACT_WORK)
                     .expect("the module fixture precharge should fit");
                 module_validator
                     .validate_registry()
@@ -40580,14 +41198,35 @@ mod tests {
                     Validator::new_modules(&short_module_program, &[&file], &[(module, file.id())])
                         .expect("the one-short module/source relation should be valid");
                 short_module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (MODULE_EXACT_WORK - 1))
                     .expect("the one-short module fixture precharge should fit");
-                let error = short_module_validator.validate_registry().expect_err(
+                let error = short_module_validator
+                    .validate_registry()
+                    .expect_err("one missing module constructor-map cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(
+                    short_module_validator.type_work.get(),
+                    CORE_VALIDATION_TYPE_WORK_LIMIT
+                );
+
+                let kind_short_module_program = registry_program(&file, Some(module), None);
+                let kind_short_module = Validator::new_modules(
+                    &kind_short_module_program,
+                    &[&file],
+                    &[(module, file.id())],
+                )
+                .expect("the one-short module/source relation should be valid");
+                let kind_allowance =
+                    MODULE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - MODULE_CONSTRUCTOR_MAP_GROWTH - 1;
+                kind_short_module
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short module Kind precharge should fit");
+                let error = kind_short_module.validate_registry().expect_err(
                     "one missing module-registry Kind-pair visit must reject validation",
                 );
                 assert_eq!(error.reason(), ValidationReason::Resource);
                 assert_eq!(
-                    short_module_validator.type_work.get(),
+                    kind_short_module.type_work.get(),
                     CORE_VALIDATION_TYPE_WORK_LIMIT
                 );
             })

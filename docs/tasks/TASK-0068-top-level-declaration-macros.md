@@ -1,46 +1,39 @@
 # TASK-0068: Top-Level Declaration and Derive Macros
 
 - ID: `TASK-0068`
-- Status: active; partial deliveries retained
+- Status: implementation complete; retaining acceptance tracked in #206 and #258
 - Related: [GitHub parent issue #206](https://github.com/dikini/ash-lang/issues/206),
-  [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md),
+  [retaining acceptance #258](https://github.com/dikini/ash-lang/issues/258),
+  [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md),
   [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
-  [slice 2 delivery plan](../design/macros/slice2-delivery-plan.md),
-  [reviewed work structure](../design/macros/slice2-work-structure.md),
+  [slice 2 delivery plan](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-delivery-plan.md),
+  [reviewed work structure](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-work-structure.md),
   [integration corpus](../design/macros/fixtures/README.md).
 
-> This task tracks delivery of the accepted transition. CP-0034 is partially
-> implemented on the retaining branch; this task does not define current Ash
-> semantics or extend the authorized scope.
+> This task records delivery of the accepted transition. Current language
+> semantics are defined by the specification. Retaining acceptance is tracked
+> by the linked issues; Main integration is a separate gate. The related
+> CP-0034, plan and work structure links point to their original paths at the
+> exact pre-cleanup commit.
 
 ## Dependencies
 
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
-is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
-checks are recorded in the delivery plan. The E4 checkpoint was retained by
+is the slice 1 baseline. The accepted CP-0034 and the historical delivery plan
+record the C1–C4 contract and corpus checks. The E4 checkpoint was retained by
 [PR #298](https://github.com/dikini/ash-lang/pull/298) at
 `17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`, tree
-`2a9235f9c52c39376a12c724fbfa18394b04a419`. I19 was subsequently retained by
+`2a9235f9c52c39376a12c724fbfa18394b04a419`. I19 was retained by
 [PR #299](https://github.com/dikini/ash-lang/pull/299) at
 `6e089e2e0c299c5ac158301bd132e28dd94f9f2e`, tree
-`86e8d1a258e6fc1ea04790dc5d224c33facb10fc`. Recheck refs and worker ownership
-before dispatch. The plan records earlier retained squash commits, their
-partial criteria and the remaining producer/consumer interfaces.
+`86e8d1a258e6fc1ea04790dc5d224c33facb10fc`.
 
-The reviewed work structure is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206)
-as seven workstreams and 45 child issues. All 112 native blocking links still
-match the reviewed graph. The retained acceptance records below identify the
-closed units; later connected criteria remain open. The user has authorized
-delivery and squash merges into the retaining branch; Main remains separate.
-
-The active `/root` orchestrator inherits its launching model/effort and owns
-integration. Planning uses GPT 6.1 Sol Max; development uses GPT 6.1 Terra Max;
-independent QA uses Terra 6.1 Medium; independent review and acceptance checking
-use Sol 6.1 Max, including replacements. Sol independently checks the developer's
-acceptance record; the developer applies the checked record and performs
-readback; the orchestrator confirms. Keep these roles independent,
-assign shared-file ownership before parallel edits, and use one assigned
-heavy-build operator with one Cargo job and the compatible cache.
+The reviewed structure under [issue #206](https://github.com/dikini/ash-lang/issues/206)
+records seven workstreams, 45 child issues and 112 original prerequisite links.
+The linked issues record criterion acceptance and retaining readback. Development,
+QA, review and acceptance checks remain independent: the developer prepares the
+record, an independent reviewer checks it, and the developer applies and reads it
+back. Main integration remains separate from the retaining branch.
 
 ## Work
 
@@ -93,8 +86,8 @@ generator, escape, checked-capture, and separately approved #304/#310 work at
 original focused criteria after independent acceptance readback. G3
 [#236](https://github.com/dikini/ash-lang/issues/236) and E2
 [#239](https://github.com/dikini/ash-lang/issues/239) have also closed on their
-original focused criteria after independent retained readback. Other partial
-issues retain their original open criteria.
+original focused criteria after independent retained readback. The linked issue
+records carry the status of the other original criteria.
 
 ### Retained caller-owned quotation
 
@@ -149,49 +142,88 @@ authorized bounded downstream repairs in [#303](https://github.com/dikini/ash-la
 [#320](https://github.com/dikini/ash-lang/issues/320). The original H6 matrix
 and its corrected supplemental importer controls were independently checked;
 the unchanged relation graph and the original method, Global and nested derive
-graphs now return 42 with their recorded controls. The H6 acceptance does not
-replace the remaining integrated corpus and verification gates.
+graphs return 42 with their recorded controls. The focused H6 acceptance is
+separate from the integrated corpus and verification evidence.
 
-### Remaining work and gates
+[PR #324](https://github.com/dikini/ash-lang/pull/324), retained at
+`3285587c2461ecd9cc3088a70cabaf946dd32a35`, completed V1
+[#241](https://github.com/dikini/ash-lang/issues/241) and the separately
+authorized diagnostic repairs in [#313](https://github.com/dikini/ash-lang/issues/313),
+[#321](https://github.com/dikini/ash-lang/issues/321) and
+[#322](https://github.com/dikini/ash-lang/issues/322). The original I01–I08
+driver corpus, handwritten controls and prescribed negative variants were
+reviewed in human and JSON modes, alongside the focused provenance, locale and
+work-budget checks. Independent retained and issue-state readbacks completed.
 
-The original G/E criteria and I01–I22 corpus remain at their named gates. The
-retained downstream repair carries checked original owner and nominal-pair facts
-through validation and the supported image path; the independently checked
-issue records preserve the original positive and fixed-original mutation evidence.
+### Completion evidence
 
+[PR #327](https://github.com/dikini/ash-lang/pull/327) carries the completion
+from retaining base `3285587c2461ecd9cc3088a70cabaf946dd32a35`. The reviewed
+code checkpoint is `fab27a4242f49921f70843bccfea1a1f4784c73d`, tree
+`48932f65435aebd21764acfd1222089fc36e7369`. The actual quote-helper calls and
+checked-entry, site, owner and cache reuse are recorded in
+[#329](https://github.com/dikini/ash-lang/issues/329); caller-owned quote
+identity is tracked in [#328](https://github.com/dikini/ash-lang/issues/328).
+The cold and warm resource controls passed on the continuing ledger, with
+source and raw evidence reviewed in the handoff at
+`evidence/completion-independent-qa/quote-resource-335b4021/receipt.md`
+(SHA-256 `679a8818a70223fde0350cbce5c6969bc3c9d4aad4e217544ac79f89c4babfe9`).
+
+On the code checkpoint, 35 individually selected focused cases passed, including
+the original early categories result 246, actual captured quotes, resource and
+payment boundaries, four native admission controls and the public declaration
+service. The focused receipt is `attempt6-controls-receipt.json` (SHA-256
+`988a360ccd5b8c437678a0bdf6cb62c0550aae5218f3ff18c600fc887b87279a`).
+The unchanged 441-row public union plus Bulgarian presentation passed 442 cases;
+its receipt is `attempt6-public/receipt.json` (SHA-256
+`893103e1d6ee33cd75c05cf1f0e753c9782e9b31fece84424614452861f0ff7e`).
+Both records are under `evidence/adapter-producer-335b-development/` in the
+local handoff. The original I16 same-host transfer, foreign-handle refusal and
+selected-method Core mutation also passed; their receipt in that directory is
+`fab-i16-controls-receipt.json` (SHA-256
+`5b49f9728b044af79ab0c53a5e6d93761f957ca36ccdb131597d8efc9c8e4eb1`).
+Independent focused and public QA verified the earlier two records.
+
+The two original copied native hosts returned 252 and 42 after their complete
+source graphs were moved away. Their receipt is
+`evidence/completion-fab27a42/native-execution/receipt.json` (SHA-256
+`285c8997e15f467593d86fe1a0eafe6fd92b591a40e8ae8a1dc2d37aabb16bea`). The
+receipts identify their exact inputs and are transferred to later
+documentation-only trees only when the complete runtime input set remains equal.
+
+The reviewed original graph remains 45 units, 150 predicted points and 112
+prerequisite edges. The completion handoff began with 33 closed and 12 pending
+units; the linked issue records carry subsequent acceptance. G7
+[#245](https://github.com/dikini/ash-lang/issues/245), its G4, G5, G6 and E5
+successors, and the original I01–I22 corpus keep their original criteria. The
+separately authorized repairs for [#317](https://github.com/dikini/ash-lang/issues/317),
+[#325](https://github.com/dikini/ash-lang/issues/325) and
+[#326](https://github.com/dikini/ash-lang/issues/326) are recorded in the handoff
+at `receipts/user-authorization-317-325-326-retention.json` (SHA-256
+`24c2ec674265b58834a8f2d50e8f42b5540e632e95f5d7bff11ef35dfbfebb23`).
+
+The original I16 mutation and native/image evidence, independent final reviews,
+fresh full verification, retained input equality and acceptance are tracked by
+[the retaining criterion](https://github.com/dikini/ash-lang/issues/258) and
+[the parent issue](https://github.com/dikini/ash-lang/issues/206). Before this
+completion, the last full workspace checkpoint was E4 at
+`17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`; focused checks do not replace a
+fresh full gate. Main integration is separate.
+
+The retained downstream repair carries checked original owner and nominal-pair
+facts through validation and the supported image path; the independently
+checked issue records preserve the original positive and fixed mutation evidence.
 For #303 and #319 the user approved a supported-image proof amendment. The
-original concrete method and handwritten control still run to 42 and the actual
+original concrete method and handwritten control run to 42 and the actual
 Core-use mutation remains a refusal. A concrete method implementation remains
 unsupported by the existing MethodEvidence image boundary; the supported image
-case instead uses a genuine declaration-only Interface and Method-local owner.
-No concrete implementation or adaptor preservation after image restore is claimed.
-
-G7 [#245](https://github.com/dikini/ash-lang/issues/245) remains open because
-the original diverging generator diagnostic omits the actual step-function
-origin; [#317](https://github.com/dikini/ash-lang/issues/317) records that
-separate downstream boundary. Only a later bounded #317 experiment is authorized;
-its repair and retention are not. Its native G4, G5, G6 and E5 successors remain
-at their original gates. V1 remains open for its full original criteria,
-including the distinct diagnostic gaps in
-[#313](https://github.com/dikini/ash-lang/issues/313),
-[#321](https://github.com/dikini/ash-lang/issues/321) and
-[#322](https://github.com/dikini/ash-lang/issues/322). The user has authorized
-one bounded diagnostic repair and retention for these three issues. The
-candidate retains the existing contextual names, source labels and profile
-causes through the diagnostic presenter. Its original I01–I08 driver corpus,
-handwritten controls and prescribed negative variants were replayed in human
-and JSON modes; focused locale, provenance and work-budget checks also passed.
-Independent final review, retention and issue acceptance remain in progress.
-
-Full V2/V3, the original I16 mutation and native/image criteria, fresh V7, and
-V8 retained equality and acceptance remain required. The last full workspace
-checkpoint was E4 at `17788de140a48a1c1d4a1d3aeb1d1ef2878d0a92`; focused and
-native checks above do not replace it. Main integration is separate.
+case uses a genuine declaration-only Interface and Method-local owner. No
+concrete implementation or adaptor preservation after image restore is claimed.
 
 ### Earlier retained acceptances
 
-S5 and R6 are closed on their original focused criteria; their later connected
-corpus and verification gates remain in the work structure.
+S5 and R6 were closed on their original focused criteria. Their connected
+corpus and verification criteria are recorded separately in the work structure.
 
 - D2 [#216](https://github.com/dikini/ash-lang/issues/216), D7
   [#217](https://github.com/dikini/ash-lang/issues/217) and H1
@@ -220,29 +252,31 @@ corpus and verification gates remain in the work structure.
   original focused criteria after the I19 delivery and independent readback.
   D6 [#219](https://github.com/dikini/ash-lang/issues/219) and G2
   [#231](https://github.com/dikini/ash-lang/issues/231) subsequently closed
-  on their focused criteria after PR #307. Other connected declaration,
-  repetition and generator graphs remain at their original gates.
+  on their focused criteria after PR #307. Connected declaration, repetition
+  and generator graphs retain their original acceptance criteria.
 
+## Verification criteria
 
-## Verification
+The original criteria follow. Their acceptance status is tracked in the linked
+issues and is not inferred from this list.
 
-- [ ] Exercise I01–I22, including their fixed positive, negative, mutation,
-      hygiene, origin and diagnostic cases, through the specified component
-      and connected paths. Preserve the supplemental early cases and the full
-      original integration graphs.
-- [ ] Run the retained slice 1 regression cases; exercise the real macro
-      library, caller and importer through the public driver, interpreter and
-      supported build/image path. Verify existing host bounds, transfer and
-      teardown, and I16's specified independent validator and handle controls.
-- [ ] Update implementation, tests, specification and tool documentation
-      together. Check that accepted but unimplemented behavior is not reported
-      as current Ash before it is retained.
-- [ ] Obtain independent QA and review on the pinned integrated candidate;
-      repair and re-review findings. Run the agreed fresh full gate and retain
-      its receipts for the exact inputs.
-- [ ] Integrate to the authorized retaining branch, verify retained evidence
-      and complete independent acceptance readback. Main integration remains a
-      separate gate under the project workflow.
+- Exercise I01–I22, including their fixed positive, negative, mutation,
+  hygiene, origin and diagnostic cases, through the specified component and
+  connected paths. Preserve the supplemental early cases and the full original
+  integration graphs.
+- Run the retained slice 1 regression cases; exercise the real macro
+  library, caller and importer through the public driver, interpreter and
+  supported build/image path. Verify existing host bounds, transfer and
+  teardown, and I16's specified independent validator and handle controls.
+- Update implementation, tests, specification and tool documentation
+  together. Check that accepted but unimplemented behavior is not reported as
+  current Ash before it is retained.
+- Obtain independent QA and review on the pinned integrated candidate;
+  repair and re-review findings. Run the agreed fresh full gate and retain its
+  receipts for the exact inputs.
+- Integrate to the authorized retaining branch, verify retained evidence
+  and complete independent acceptance readback. Main integration remains a
+  separate gate under the project workflow.
 
 ## Durable findings and evidence
 
@@ -250,7 +284,8 @@ The S2 broad expression-admission proposal would change existing allowance
 consumption and error ordering. Its reviewed narrow Declaration route retains
 the existing expression paths and ledgers; protected or generated consumers
 require their own actual accounting and ownership evidence. The original
-[reviewed work structure](../design/macros/slice2-work-structure.md) preserves
+[reviewed work structure](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/design/macros/slice2-work-structure.md)
+preserves
 the individual criteria and prerequisite edges. The S2 analysis and narrow
 plan remain in the handoff under `evidence/host-consumer-plan/` with SHA-256
 `801df2a0c32307afab3e867786f70ea78cb321d73bad1da5de23095be3013aaf`
@@ -295,6 +330,7 @@ not part of the delivery checkout. Main's unrelated work remains separate.
 
 [PR #281](https://github.com/dikini/ash-lang/pull/281) retained the accepted
 inline result-expression alternative for escapes. It does not add inline outer
-local declarations or change ordinary block grammar. Other semantic gaps
-return to CP-0034 or their separately owned downstream issues; the existing
-compiler path and original criteria remain authoritative.
+local declarations or change ordinary block grammar. Further semantic changes
+require the proposal workflow; separately owned downstream gaps stay with their
+owning tasks. The specification defines current semantics, and the original
+criteria continue to govern delivery acceptance.
