@@ -1560,6 +1560,71 @@ fn select_imported_syntax<'a>(
     Ok(selected)
 }
 
+// This temporary route proof finishes before module projection and checking.
+#[inline(never)]
+fn selected_syntax_reaches_quote_dependency(
+    selected: &[crate::syntax::SelectedSyntax],
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    checked_by_module: &HashMap<ModuleId, usize>,
+    edge: &crate::module::ModuleDependency,
+    checking_type_work: &mut TypeWorkBudget,
+) -> Result<bool, FileFailure> {
+    let type_resource = || {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    };
+    let mut redundant = None;
+    // A selected owner may have retired its own direct edge.
+    // Follow only its finalized checked dependency routes.
+    checking_type_work
+        .charge(
+            selected
+                .len()
+                .saturating_add(checked.len().saturating_mul(2)),
+        )
+        .map_err(|()| type_resource())?;
+    let mut reachable = Vec::new();
+    reachable
+        .try_reserve_exact(checked.len())
+        .map_err(|_| type_resource())?;
+    reachable.resize(checked.len(), false);
+    for selection in selected {
+        *reachable
+            .get_mut(selection.owner)
+            .ok_or_else(internal_file_failure)? = true;
+    }
+    // Checked owners are in dependency order. A reached route
+    // must lead to an earlier, exactly matching checked owner.
+    for index in (0..checked.len()).rev() {
+        if !reachable[index] {
+            continue;
+        }
+        let owner = &checked[index];
+        checking_type_work
+            .charge(owner.direct_dependencies().len().saturating_mul(2))
+            .map_err(|()| type_resource())?;
+        for route in owner.direct_dependencies() {
+            let target = *checked_by_module
+                .get(&route.target())
+                .ok_or_else(internal_file_failure)?;
+            let dependency = checked.get(target).ok_or_else(internal_file_failure)?;
+            if dependency.module() != route.target() || target >= index {
+                return Err(internal_file_failure());
+            }
+            if route.target() == edge.target() {
+                redundant = Some(edge);
+                break;
+            }
+            reachable[target] = true;
+        }
+        if redundant.is_some() {
+            break;
+        }
+    }
+    Ok(redundant.is_some())
+}
+
 fn compile_graph_with_report<I, V>(
     input: &mut CompilationInput<'_>,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1694,6 +1759,16 @@ where
                         redundant = Some(edge);
                         break;
                     }
+                }
+                if redundant.is_none() && !selected.is_empty() {
+                    redundant = selected_syntax_reaches_quote_dependency(
+                        &selected,
+                        &checked,
+                        &checked_by_module,
+                        &edge,
+                        &mut checking_type_work,
+                    )?
+                    .then_some(edge);
                 }
                 redundant
             } else {
@@ -2231,7 +2306,7 @@ where
                         )))
                     })?;
                 let resolution_phase = crate::calibration::Phase::start("resolution");
-                let resolved = crate::resolve::resolve_module_with_syntax(
+                let resolution = crate::resolve::resolve_module_with_syntax(
                     module,
                     &dependencies,
                     &mut resolution_type_work,
@@ -2249,26 +2324,35 @@ where
                 if let Some(failure) = transformer_failure {
                     return Err(failure);
                 }
-                let resolved = resolved
-                    .map_err(|error| match error {
-                        ResolveModuleError::Resolution(error) => match error.syntax_depth() {
-                            Some((invocation, definition)) => {
-                                PipelineFailure::SyntaxParse(SyntaxParseFailure {
-                                    diagnostics: Vec::new(),
-                                    resource: Some(ResourceFailure::StructuralDepth {
-                                        limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
-                                    }),
-                                    invocation,
-                                    definition,
-                                    teardown: None,
-                                })
+                #[allow(clippy::needless_late_init)]
+                // Keep one destination for the large success payload.
+                let resolved;
+                match resolution {
+                    Ok(module) => resolved = module,
+                    Err(error) => {
+                        let failure = match error {
+                            ResolveModuleError::Resolution(error) => match error.syntax_depth() {
+                                Some((invocation, definition)) => {
+                                    PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                        diagnostics: Vec::new(),
+                                        resource: Some(ResourceFailure::StructuralDepth {
+                                            limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                                        }),
+                                        invocation,
+                                        definition,
+                                        teardown: None,
+                                    })
+                                }
+                                None => PipelineFailure::Resolution(error),
+                            },
+                            ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+                            ResolveModuleError::Representation(error) => {
+                                PipelineFailure::Typing(error)
                             }
-                            None => PipelineFailure::Resolution(error),
-                        },
-                        ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
-                        ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
-                    })
-                    .map_err(FileFailure::from)?;
+                        };
+                        return Err(FileFailure::from(failure));
+                    }
+                }
                 resolution_phase.finish(
                     Some(resolution_type_work.used()),
                     resolution_normal_limit,
