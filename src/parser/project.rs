@@ -8467,6 +8467,83 @@ fn capture_contents_with_escapes(
         Ok(())
     }
 
+    // Repeat construction starts after its recursive body has returned. Keep
+    // its owned scratch off every delimiter and repetition descent frame.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn push_template_repeat(
+        source: &SourceFile,
+        indices: &[(usize, bool)],
+        position: &mut usize,
+        tokens: &ProjectionTokens<'_>,
+        generators: Option<&[CapturedTemplateGenerator]>,
+        token: &Token,
+        body: Vec<MacroOutputNode>,
+        output: &mut Vec<MacroOutputNode>,
+    ) -> Result<(), ProjectionError> {
+        let next = indices
+            .get(*position)
+            .and_then(|(next, _)| tokens.get(*next))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        let separator = if matches!(next.kind, TokenKind::Star | TokenKind::Plus) {
+            None
+        } else {
+            if !matcher_separator(&next.kind) {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            *position += 1;
+            let spelling = matcher_spelling(source, next)?;
+            charge_expression_allocation(
+                spelling.len().saturating_add(2),
+                tokens.expression_budget,
+            )?;
+            if let Some(budget) = tokens.expression_budget {
+                crate::syntax::charge_type_token_copy(&next.kind, &mut budget.borrow_mut())
+                    .map_err(ProjectionError::ResourceLimit)?;
+            }
+            Some((
+                next.kind.clone(),
+                std::sync::Arc::from(spelling),
+                next.span.into(),
+            ))
+        };
+        let operator = indices
+            .get(*position)
+            .and_then(|(next, _)| tokens.get(*next))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        if !matches!(operator.kind, TokenKind::Star | TokenKind::Plus) {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        *position += 1;
+        let mut bindings = None;
+        if let Some((index, _)) = indices.get(*position) {
+            for (start, clause) in generators.into_iter().flatten() {
+                charge_expression_allocation(1, tokens.expression_budget)?;
+                if start == index {
+                    charge_expression_allocation(1, tokens.expression_budget)?;
+                    bindings = Some(std::sync::Arc::clone(clause));
+                    *position += 1;
+                    break;
+                }
+            }
+        }
+        charge_expression_allocation(1, tokens.expression_budget)?;
+        output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
+            crate::syntax::TemplateRepeat {
+                body,
+                generators: bindings,
+                separator,
+                one_or_more: operator.kind == TokenKind::Plus,
+                origin: join_spans(source, token.span, operator.span)?.into(),
+            },
+        )));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sequence(
         source: &SourceFile,
@@ -8534,66 +8611,16 @@ fn capture_contents_with_escapes(
                     allow_repetition,
                 )?;
                 contains_protected_type |= child_contains_type;
-                let next = indices
-                    .get(*position)
-                    .and_then(|(next, _)| tokens.get(*next))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let separator = if matches!(next.kind, TokenKind::Star | TokenKind::Plus) {
-                    None
-                } else {
-                    if !matcher_separator(&next.kind) {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    *position += 1;
-                    let spelling = matcher_spelling(source, next)?;
-                    charge_expression_allocation(
-                        spelling.len().saturating_add(2),
-                        tokens.expression_budget,
-                    )?;
-                    if let Some(budget) = tokens.expression_budget {
-                        crate::syntax::charge_type_token_copy(&next.kind, &mut budget.borrow_mut())
-                            .map_err(ProjectionError::ResourceLimit)?;
-                    }
-                    Some((
-                        next.kind.clone(),
-                        std::sync::Arc::from(spelling),
-                        next.span.into(),
-                    ))
-                };
-                let operator = indices
-                    .get(*position)
-                    .and_then(|(next, _)| tokens.get(*next))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                if !matches!(operator.kind, TokenKind::Star | TokenKind::Plus) {
-                    return malformed(InternalReason::UnexpectedShape);
-                }
-                *position += 1;
-                let mut bindings = None;
-                if let Some((index, _)) = indices.get(*position) {
-                    for (start, clause) in generators.into_iter().flatten() {
-                        charge_expression_allocation(1, tokens.expression_budget)?;
-                        if start == index {
-                            charge_expression_allocation(1, tokens.expression_budget)?;
-                            bindings = Some(std::sync::Arc::clone(clause));
-                            *position += 1;
-                            break;
-                        }
-                    }
-                }
-                charge_expression_allocation(1, tokens.expression_budget)?;
-                output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
-                    crate::syntax::TemplateRepeat {
-                        body,
-                        generators: bindings,
-                        separator,
-                        one_or_more: operator.kind == TokenKind::Plus,
-                        origin: join_spans(source, token.span, operator.span)?.into(),
-                    },
-                )));
+                push_template_repeat(
+                    source,
+                    indices,
+                    position,
+                    tokens,
+                    generators,
+                    token,
+                    body,
+                    &mut output,
+                )?;
             } else if matches!(token.kind, TokenKind::LeftParen | TokenKind::LeftBrace) {
                 let (delimiter, end) = if matches!(token.kind, TokenKind::LeftParen) {
                     (MacroDelimiter::Parentheses, TokenKind::RightParen)
@@ -15209,10 +15236,16 @@ mod tests {
     fn r1_unconsumed_forms_fail_shape_before_complete_or_staged_projection() {
         let forms = SourceFile::new(
             "forms.ash",
-            "pub syntax declaration: (stamp) $name:ident => {\n$name : Int\n$name = 42\n}\n",
+            "pub syntax declaration: (stamp) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
         )
         .unwrap();
-        let selected = [h1_selection(&forms, 0, None)];
+        let marker_forms =
+            SourceFile::new("marker.ash", "pub syntax derive: (marker) => {}\n").unwrap();
+        let selected = [
+            h1_selection(&forms, 0, None),
+            h1_selection(&marker_forms, 1, None),
+        ];
+        let imports = [vec![], vec![]];
         for text in [
             "pub syntax derive: (marker) => {}\n",
             "type Item = Item\nderiving (marker)\n",
@@ -15227,33 +15260,101 @@ mod tests {
                         .any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation),
                     has_invocation
                 );
-                assert_eq!(
-                    project_module(&source, &tree),
-                    Err(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape
-                    )),
-                    "{text:?}"
-                );
+                let is_definition = text.starts_with("pub syntax");
+                let direct = project_module(&source, &tree);
+                if is_definition && !has_invocation {
+                    let module = direct.expect("an ordinary source derive definition projects");
+                    assert_eq!(module.syntax_declarations.len(), 1);
+                    assert_eq!(
+                        module.syntax_declarations[0].category,
+                        SurfaceSyntaxCategory::Derive
+                    );
+                } else {
+                    assert_eq!(
+                        direct,
+                        Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape
+                        )),
+                        "{text:?}"
+                    );
+                }
+                let run =
+                    |owners: &mut Vec<crate::syntax::SyntaxOwner>,
+                     budget: &mut crate::syntax_resource::SyntaxBudget| {
+                        project_declaration_expansions(
+                            &source, &tree, &selected, &imports, owners, budget, None,
+                        )
+                    };
                 let mut owners = Vec::new();
                 let mut budget = crate::syntax_resource::SyntaxBudget::default();
-                assert!(matches!(
-                    project_declaration_expansions(
-                        &source,
-                        &tree,
-                        &selected,
-                        &[],
-                        &mut owners,
-                        &mut budget,
-                        None,
-                    ),
-                    Err(DeclarationExpansionFailure::Projection(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                    ))
-                ));
-                assert!(owners.is_empty());
-                assert_eq!(budget.consumed(), 0);
+                budget.charge_units(17).unwrap();
+                let module = run(&mut owners, &mut budget)
+                    .expect("staging consumes the selected invocation and derive");
+                assert_eq!(module.syntax_declarations.len(), usize::from(is_definition));
+                assert_eq!(module.type_declarations.len(), usize::from(!is_definition));
+                if !is_definition {
+                    assert_eq!(module.type_declarations[0].name.text, "Item");
+                }
+                assert_eq!(module.definitions.len(), usize::from(has_invocation));
+                if has_invocation {
+                    assert_eq!(
+                        output_definition_name(&module.definitions[0]).text,
+                        "answer"
+                    );
+                }
+                let expected_owners = usize::from(has_invocation) + usize::from(!is_definition);
+                assert_eq!(owners.len(), expected_owners);
+                let used = budget.consumed();
+                assert!(used > 17);
+                let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+                short.charge_units(17).unwrap();
+                let mut failed_owners = Vec::new();
+                let failure = run(&mut failed_owners, &mut short).unwrap_err();
+                assert_eq!(
+                    failure.resource(),
+                    Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+                );
+                assert!(failed_owners.is_empty());
+                for _ in 0..2 {
+                    let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+                    exact.charge_units(17).unwrap();
+                    let mut retried_owners = Vec::new();
+                    assert_eq!(run(&mut retried_owners, &mut exact).unwrap(), module);
+                    assert_eq!(retried_owners.len(), expected_owners);
+                    assert_eq!(exact.consumed(), used);
+                }
             }
         }
+        let missing = SourceFile::new(
+            "missing.ash",
+            "stamp answer\ntype Item = Item\nderiving (missing)\n",
+        )
+        .unwrap();
+        let tree = h1_tree(&missing, &selected);
+        let mut owners = Vec::new();
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        let failure = project_declaration_expansions(
+            &missing,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut budget,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(failure, DeclarationExpansionFailure::Syntax { diagnostics, resource: None }
+            if diagnostics.len() == 1
+                && diagnostics[0].reason == ParseReason::UnexpectedToken
+                && diagnostics[0].expected.as_deref() == Some("derive syntax")
+                && diagnostics[0].found.as_deref() == Some("missing"))
+        );
+        assert!(budget.consumed() > 0);
+        assert!(
+            owners.is_empty(),
+            "the earlier stamp owner must not be published"
+        );
     }
 
     #[test]
@@ -15308,7 +15409,7 @@ mod tests {
         let mut measured = crate::syntax_resource::SyntaxBudget::default();
         let baseline = parse_at(&mut measured).unwrap();
         // This component path starts with the real template instantiation and
-        // uses one already-spent ledger for instantiation, parsing and refusal.
+        // uses one already-spent ledger for instantiation, parsing and validation.
         let stage = |budget: &mut crate::syntax_resource::SyntaxBudget| {
             let output = crate::syntax::instantiate_declaration_template(
                 &invocation.selection,
@@ -15351,22 +15452,17 @@ mod tests {
             assert_eq!(retry.original_nodes, staged.original_nodes);
             assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
         }
-        let refusal = validate_declaration_template(
+        let validation = validate_declaration_template(
             &caller,
             invocation.span,
             &staged,
             &contexts,
             &mut measured_stage,
         );
-        assert!(matches!(
-            refusal,
-            Err(DeclarationExpansionFailure::Projection(
-                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-            ))
-        ));
-        let refusal_used = measured_stage.consumed();
-        assert!(refusal_used > staged_used);
-        for limit in [refusal_used - 1, refusal_used, refusal_used] {
+        assert!(validation.is_ok());
+        let validation_used = measured_stage.consumed();
+        assert!(validation_used > staged_used);
+        for limit in [validation_used - 1, validation_used, validation_used] {
             let mut budget = crate::syntax_resource::SyntaxBudget::with_limit(limit);
             budget.charge_units(17).unwrap();
             let retry = stage(&mut budget).unwrap();
@@ -15377,18 +15473,13 @@ mod tests {
                 &contexts,
                 &mut budget,
             );
-            if limit < refusal_used {
+            if limit < validation_used {
                 assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
                     resource: Some(ResourceFailure::SyntaxWork { limit: found }), ..
                 }) if found == limit));
             } else {
-                assert!(matches!(
-                    result,
-                    Err(DeclarationExpansionFailure::Projection(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                    ))
-                ));
-                assert_eq!(budget.consumed(), refusal_used);
+                assert!(result.is_ok());
+                assert_eq!(budget.consumed(), validation_used);
             }
             assert_eq!(retry.original_nodes, staged.original_nodes);
             assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
@@ -15462,18 +15553,16 @@ mod tests {
             imports[0][0].declaration.span
         );
         let mut validation_budget = crate::syntax_resource::SyntaxBudget::default();
-        assert!(matches!(
+        assert!(
             validate_declaration_template(
                 &caller,
                 invocation.span,
                 &parsed,
                 &contexts,
                 &mut validation_budget,
-            ),
-            Err(DeclarationExpansionFailure::Projection(
-                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-            ))
-        ));
+            )
+            .is_ok()
+        );
         assert_eq!(
             project_macro_declarations(
                 &caller,
@@ -15630,26 +15719,30 @@ mod tests {
     #[test]
     fn r1_generated_forms_reach_cst_but_both_wrappers_refuse_unconsumed_forms() {
         use crate::syntax::SyntaxContexts;
-        for (body, expected_kind, accepted) in [
-            ("type Item = Item", NodeKind::TypeDeclaration, true),
+        for (body, expected_kind, admitted, projected) in [
+            ("type Item = Item", NodeKind::TypeDeclaration, true, true),
             (
                 "newtype Item = Item(Int)",
                 NodeKind::NewtypeDeclaration,
+                true,
                 true,
             ),
             (
                 "type Item = Item\nderiving (marker)",
                 NodeKind::TypeDeclaration,
+                true,
                 false,
             ),
             (
                 "newtype Item = Item(Int)\nderiving (marker)",
                 NodeKind::NewtypeDeclaration,
+                true,
                 false,
             ),
             (
                 "pub syntax derive: (marker) => {}",
                 NodeKind::SyntaxDeclaration,
+                false,
                 false,
             ),
         ] {
@@ -15696,14 +15789,17 @@ mod tests {
             let projection = super::super::parse_macro_declarations(
                 &caller, span, None, output, &contexts, None,
             );
-            if accepted {
+            if admitted {
                 assert!(admission.is_ok(), "{body}: {admission:?}");
-                assert!(projection.is_ok(), "{body}: {projection:?}");
             } else {
                 assert!(
                     matches!(&admission, Err(super::super::MacroParseFailure::Invalid)),
                     "{body}: {admission:?}"
                 );
+            }
+            if projected {
+                assert!(projection.is_ok(), "{body}: {projection:?}");
+            } else {
                 assert!(
                     matches!(&projection, Err(super::super::MacroParseFailure::Invalid)),
                     "{body}: {projection:?}"
@@ -15795,23 +15891,40 @@ mod tests {
                     &mut budget,
                     None,
                 );
-                if has_clause {
-                    assert!(matches!(
-                        result,
-                        Err(DeclarationExpansionFailure::Projection(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
-                        ))
-                    ));
-                    assert_eq!(budget.consumed(), before);
-                    assert!(owners.is_empty());
-                } else {
-                    let module = result.expect("an ordinary captured declaration is accepted");
-                    assert_eq!(module.definitions.len(), 1);
-                    assert_eq!(owners.len(), 1);
-                    assert!(budget.consumed() > before);
-                }
+                let module = result.expect("the sink discards its captured declaration");
+                assert_eq!(module.definitions.len(), 1);
+                assert_eq!(output_definition_name(&module.definitions[0]).text, "main");
+                assert_eq!(owners.len(), 1);
+                assert!(budget.consumed() > before);
             }
         }
+        let surviving = SourceFile::new(
+            "surviving.ash",
+            "type Subject = Subject\nderiving (first)\n",
+        )
+        .unwrap();
+        let (tree, mut budget) = d5_source_tree(&surviving, &selected);
+        let before = budget.consumed();
+        let mut owners = Vec::new();
+        let failure = project_declaration_expansions(
+            &surviving,
+            &tree,
+            &selected,
+            &[],
+            &mut owners,
+            &mut budget,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(failure, DeclarationExpansionFailure::Syntax { diagnostics, resource: None }
+            if diagnostics.len() == 1
+                && diagnostics[0].reason == ParseReason::UnexpectedToken
+                && diagnostics[0].expected.as_deref() == Some("derive syntax")
+                && diagnostics[0].found.as_deref() == Some("first"))
+        );
+        assert!(budget.consumed() > before);
+        assert!(owners.is_empty());
     }
 
     fn d5_source_tree(

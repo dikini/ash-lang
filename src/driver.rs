@@ -2715,77 +2715,7 @@ where
             linked_type_work.limit(),
             true,
         );
-        let registry = Arc::clone(validated_interfaces.registry());
-        let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
-        let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
-            crate::compiler_work::CompilationPhase::FinalElaboration,
-            &sources,
-        )
-        .map_err(|()| {
-            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-            )))
-        })?;
-        let final_limit = final_budget.limit();
-        let rewrite_budget =
-            TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                )))
-            })?);
-        let mut elaborator = Elaborator::for_module_program_with_budgets(
-            &validated_interfaces,
-            final_budget,
-            TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                )))
-            })?),
-            rewrite_budget,
-        )
-        .map_err(|(failure, used)| {
-            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                .with_phase_work(
-                    crate::compiler_work::CompilationPhase::FinalElaboration
-                        .assess_with_allowance(used, final_limit)
-                        .incomplete(),
-                )
-        })?;
-        let typed = if select_effect_core {
-            elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
-        } else {
-            elaborator.synthesize_module_program(&validated_interfaces)
-        }
-        .map_err(|failure| {
-            FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
-                crate::compiler_work::CompilationPhase::FinalElaboration
-                    .assess_with_allowance(elaborator.measured_type_work(), final_limit)
-                    .incomplete(),
-            )
-        })?;
-        let ty = IterativeTypeOwner::new(typed.ty);
-        let type_display = registry.display_type(&ty);
-        let (unchecked, final_work) =
-            elaborator
-                .finish_with_work(typed.node)
-                .map_err(|(failure, used)| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                        .with_phase_work(
-                            crate::compiler_work::CompilationPhase::FinalElaboration
-                                .assess_with_allowance(used, final_limit)
-                                .incomplete(),
-                        )
-                })?;
-        crate::calibration::work(
-            "final-elaboration",
-            final_work,
-            final_normal_limit,
-            final_limit,
-            true,
-        );
-        ::std::mem::drop(validated_interfaces);
-        elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
-        (ty, type_display, unchecked, final_work, final_limit)
+        elaborate_legacy_module_phase(validated_interfaces, &sources, select_effect_core)?
     };
     compilation_work.final_elaboration = Some(
         crate::compiler_work::CompilationPhase::FinalElaboration
@@ -2804,6 +2734,85 @@ where
         compiled.provenance = provenance;
         compiled
     })
+}
+
+// Legacy final elaboration starts after module resolution and checking return.
+#[inline(never)]
+fn elaborate_legacy_module_phase(
+    validated_interfaces: ValidatedInterfaceProgram,
+    sources: &[&SourceFile],
+    select_effect_core: bool,
+) -> Result<(IterativeTypeOwner, String, UnvalidatedProgram, usize, usize), FileFailure> {
+    let registry = Arc::clone(validated_interfaces.registry());
+    let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
+    let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
+        crate::compiler_work::CompilationPhase::FinalElaboration,
+        sources,
+    )
+    .map_err(|()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    })?;
+    let final_limit = final_budget.limit();
+    let rewrite_budget =
+        TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?);
+    let mut elaborator = Elaborator::for_module_program_with_budgets(
+        &validated_interfaces,
+        final_budget,
+        TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?),
+        rewrite_budget,
+    )
+    .map_err(|(failure, used)| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure))).with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess_with_allowance(used, final_limit)
+                .incomplete(),
+        )
+    })?;
+    let typed = if select_effect_core {
+        elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
+    } else {
+        elaborator.synthesize_module_program(&validated_interfaces)
+    }
+    .map_err(|failure| {
+        FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess_with_allowance(elaborator.measured_type_work(), final_limit)
+                .incomplete(),
+        )
+    })?;
+    let ty = IterativeTypeOwner::new(typed.ty);
+    let type_display = registry.display_type(&ty);
+    let (unchecked, final_work) =
+        elaborator
+            .finish_with_work(typed.node)
+            .map_err(|(failure, used)| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                    .with_phase_work(
+                        crate::compiler_work::CompilationPhase::FinalElaboration
+                            .assess_with_allowance(used, final_limit)
+                            .incomplete(),
+                    )
+            })?;
+    crate::calibration::work(
+        "final-elaboration",
+        final_work,
+        final_normal_limit,
+        final_limit,
+        true,
+    );
+    ::std::mem::drop(validated_interfaces);
+    elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
+    Ok((ty, type_display, unchecked, final_work, final_limit))
 }
 
 fn retain_source_provenance(

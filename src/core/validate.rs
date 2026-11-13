@@ -35950,7 +35950,10 @@ mod tests {
         const SOURCE_PAIR_COUNT: usize = 4;
         const FOREIGN_SOURCE_BYTES: usize = 216;
         const RESERVED_SOURCE_SCAN_WORK: usize = SOURCE_PAIR_COUNT + FOREIGN_SOURCE_BYTES;
-        const CANONICAL_REGISTRY_RECORDS: usize = RESERVED_SOURCE_SCAN_WORK + R;
+        // The first canonical parameter also grows the per-module span map.
+        const CANONICAL_PARAMETER_MAP_GROWTH: usize = 1;
+        const CANONICAL_REGISTRY_RECORDS: usize =
+            RESERVED_SOURCE_SCAN_WORK + R + CANONICAL_PARAMETER_MAP_GROWTH;
         const ROW_STRUCTURE: usize = 2 * S + 2 * R;
         // The seven stored envelopes contain 42 Type/binder-Kind cells:
         // 3 + 7 + 12 for the resolved value/function/scheme, 1 + 3 + 8 for
@@ -36049,7 +36052,7 @@ mod tests {
         let exact_work = EXPECTED.total();
         assert_eq!(
             exact_work,
-            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1
+            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1 + CANONICAL_PARAMETER_MAP_GROWTH
         );
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact module/source relation is canonical");
@@ -41027,12 +41030,26 @@ mod tests {
     fn registry_canonical_binder_kind_authentication_is_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
         const KIND_NODES: usize = 2 * DEPTH + 1;
-        // The canonical registry scan visits one binder record. Authenticating
-        // it against its ordered nominal record visits a second record plus
-        // every pair of Kind nodes. The reserved-source scan also visits
-        // the one materialized nominal before binder authentication.
+        // Both paths scan one source, retain the full nominal and constructor
+        // spans, and authenticate one canonical binder against the ordered
+        // record and every pair of Kind nodes.
         const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        const EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK + KIND_NODES + 2;
+        const NOMINAL_SPAN_WORK: usize = 2;
+        const CONSTRUCTOR_SPAN_WORK: usize = 2;
+        const BINDER_RECORDS_AND_KIND_WORK: usize = KIND_NODES + 2;
+        const SINGLE_SOURCE_EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK
+            + NOMINAL_SPAN_WORK
+            + CONSTRUCTOR_SPAN_WORK
+            + BINDER_RECORDS_AND_KIND_WORK;
+        // The module path also grows one initially empty map for each span
+        // and one for the first canonical parameter of this module.
+        const MODULE_NOMINAL_MAP_GROWTH: usize = 1;
+        const MODULE_CONSTRUCTOR_MAP_GROWTH: usize = 1;
+        const MODULE_PARAMETER_MAP_GROWTH: usize = 1;
+        const MODULE_EXACT_WORK: usize = SINGLE_SOURCE_EXACT_WORK
+            + MODULE_NOMINAL_MAP_GROWTH
+            + MODULE_CONSTRUCTOR_MAP_GROWTH
+            + MODULE_PARAMETER_MAP_GROWTH;
 
         fn deep_kind() -> crate::types::Kind {
             let mut kind = crate::types::Kind::Type;
@@ -41119,7 +41136,7 @@ mod tests {
                 assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - SINGLE_SOURCE_EXACT_WORK)
                     .expect("the exact fixture precharge should fit");
                 exact
                     .validate_registry()
@@ -41129,13 +41146,28 @@ mod tests {
                 let short_program = registry_program(&file, None, None);
                 let short = Validator::new(&short_program, &[&file]);
                 short
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(
+                        CORE_VALIDATION_TYPE_WORK_LIMIT - (SINGLE_SOURCE_EXACT_WORK - 1),
+                    )
                     .expect("the one-short fixture precharge should fit");
                 let error = short
                     .validate_registry()
+                    .expect_err("one missing constructor-span cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                // The two-cell constructor-span charge refuses atomically.
+                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT - 1);
+
+                let kind_short_program = registry_program(&file, None, None);
+                let kind_short = Validator::new(&kind_short_program, &[&file]);
+                let kind_allowance = SINGLE_SOURCE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - 1;
+                kind_short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short Kind fixture precharge should fit");
+                let error = kind_short
+                    .validate_registry()
                     .expect_err("one missing Kind-pair visit must reject validation");
                 assert_eq!(error.reason(), ValidationReason::Resource);
-                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                assert_eq!(kind_short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let mismatched_program =
                     registry_program(&file, None, Some(crate::types::Kind::Type));
@@ -41151,7 +41183,7 @@ mod tests {
                     Validator::new_modules(&module_program, &[&file], &[(module, file.id())])
                         .expect("the module/source relation should be valid");
                 module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - MODULE_EXACT_WORK)
                     .expect("the module fixture precharge should fit");
                 module_validator
                     .validate_registry()
@@ -41166,14 +41198,35 @@ mod tests {
                     Validator::new_modules(&short_module_program, &[&file], &[(module, file.id())])
                         .expect("the one-short module/source relation should be valid");
                 short_module_validator
-                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (MODULE_EXACT_WORK - 1))
                     .expect("the one-short module fixture precharge should fit");
-                let error = short_module_validator.validate_registry().expect_err(
+                let error = short_module_validator
+                    .validate_registry()
+                    .expect_err("one missing module constructor-map cell must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(
+                    short_module_validator.type_work.get(),
+                    CORE_VALIDATION_TYPE_WORK_LIMIT
+                );
+
+                let kind_short_module_program = registry_program(&file, Some(module), None);
+                let kind_short_module = Validator::new_modules(
+                    &kind_short_module_program,
+                    &[&file],
+                    &[(module, file.id())],
+                )
+                .expect("the one-short module/source relation should be valid");
+                let kind_allowance =
+                    MODULE_EXACT_WORK - CONSTRUCTOR_SPAN_WORK - MODULE_CONSTRUCTOR_MAP_GROWTH - 1;
+                kind_short_module
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - kind_allowance)
+                    .expect("the one-short module Kind precharge should fit");
+                let error = kind_short_module.validate_registry().expect_err(
                     "one missing module-registry Kind-pair visit must reject validation",
                 );
                 assert_eq!(error.reason(), ValidationReason::Resource);
                 assert_eq!(
-                    short_module_validator.type_work.get(),
+                    kind_short_module.type_work.get(),
                     CORE_VALIDATION_TYPE_WORK_LIMIT
                 );
             })

@@ -9074,6 +9074,31 @@ mod tests {
         assert_eq!(Arc::strong_count(&nested), before + 1);
         drop(pattern_host);
         assert_eq!(Arc::strong_count(&nested), before);
+        {
+            let packet: Arc<[MacroOutputNode]> =
+                Arc::from([MacroOutputNode::Expression(expression.clone(), span.into())]);
+            let captures = [SurfaceSyntaxCapture::Declaration(
+                SurfaceDeclarationCapture {
+                    contents: Arc::clone(&packet),
+                },
+            )];
+            let retained = Arc::strong_count(&packet);
+            let mut budget = SyntaxBudget::default();
+            let host = fixture
+                .host(&captures, &mut budget)
+                .expect("an unbridged nested expression is retained");
+            assert_eq!(Arc::strong_count(&packet), retained + 1);
+            assert_eq!(Arc::strong_count(&nested), before + 1);
+            drop(host);
+            assert_eq!(Arc::strong_count(&packet), retained);
+            assert_eq!(Arc::strong_count(&nested), before + 1);
+        }
+        assert_eq!(Arc::strong_count(&nested), before);
+        let mut expression = expression;
+        expression.expression.kind = SurfaceExprKind::SyntaxInvocation {
+            name: fixture.caller.clone(),
+            captures: Vec::new(),
+        };
         let nested_packet: Arc<[MacroOutputNode]> =
             Arc::from([MacroOutputNode::Expression(expression, span.into())]);
         let invalid = [SurfaceSyntaxCapture::Declaration(

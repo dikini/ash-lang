@@ -2453,15 +2453,17 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
                     panic!("expected a graph refusal: {failure:?}");
                 };
                 if path.contains("expression-host/") {
-                    assert!(matches!(
-                        diagnostic.failure(),
-                        LoadGraphError::Projection {
-                            error: crate::parser::ProjectionError::ResourceLimit(
-                                ResourceFailure::SyntaxWork { limit }
-                            ),
-                            ..
-                        } if *limit == total - 1
-                    ));
+                    let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                        panic!("expected a syntax resource refusal: {diagnostic:?}");
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+                    );
+                    assert!(failure.lexical.is_empty());
+                    assert!(failure.parser.is_empty());
+                    assert!(failure.import_span.is_none());
+                    assert_eq!(short.syntax_budget.test_remaining(), 5);
                 } else {
                     let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
                         panic!("expected a syntax resource refusal: {diagnostic:?}");

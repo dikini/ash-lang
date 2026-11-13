@@ -4816,21 +4816,25 @@ mod tests {
 
     #[test]
     fn r1_source_header_and_clause_share_the_exact_syntax_allowance() {
-        for text in [
-            "pub syntax derive: (marker) $target:ident => {\ntype Item = Item\n}\n",
-            "type Item = Item\nderiving (first, second, first,)\n",
-            "newtype Item = Item(Int)\nderiving (first,)\n",
+        for (text, scout_work) in [
+            (
+                "pub syntax derive: (marker) $target:ident => {\ntype Item = Item\n}\n",
+                17,
+            ),
+            ("type Item = Item\nderiving (first, second, first,)\n", 0),
+            ("newtype Item = Item(Int)\nderiving (first,)\n", 0),
         ] {
             let source = SourceFile::new("derive-work.ash", text).unwrap();
             let baseline = super::super::parse(lex(&source).unwrap());
             assert!(baseline.parse_diagnostics().is_empty(), "{text:?}");
-            let exact_work = baseline.tokens().len() + baseline.events().len();
+            let exact_work = baseline.tokens().len() + baseline.events().len() + scout_work;
             let parse_at = |limit| {
                 let mut budget = SyntaxBudget::with_limit(limit);
                 let lexed = lex_with_budget(&source, &mut budget).unwrap();
-                parse_with_budget(lexed, &mut budget)
+                let tree = parse_with_budget(lexed, &mut budget);
+                (tree, budget.consumed())
             };
-            let short = parse_at(exact_work - 1);
+            let (short, short_used) = parse_at(exact_work - 1);
             assert_eq!(
                 short.resource_failure(),
                 Some(ResourceFailure::SyntaxWork {
@@ -4839,11 +4843,13 @@ mod tests {
                 "{text:?}"
             );
             assert!(short.root().is_none());
+            assert!(short_used < exact_work);
             for _ in 0..2 {
-                let exact = parse_at(exact_work);
+                let (exact, exact_used) = parse_at(exact_work);
                 assert_eq!(exact.resource_failure(), None);
                 assert_eq!(exact.tokens(), baseline.tokens());
                 assert_eq!(exact.events(), baseline.events());
+                assert_eq!(exact_used, exact_work);
             }
         }
     }
@@ -4978,7 +4984,9 @@ mod tests {
         let tree = parse_with_budget(lexed, &mut budget);
         assert_eq!(tree.resource_failure(), None);
         assert!(tree.parse_diagnostics().is_empty());
-        assert_eq!(budget.consumed(), tree.tokens().len() + tree.events().len());
+        // The file-level Pub/Syntax header scout pays two visits.
+        let exact_work = tree.tokens().len() + tree.events().len() + 2;
+        assert_eq!(budget.consumed(), exact_work);
         assert!(!tree.events().iter().any(|event| matches!(
             event,
             Event::Start(
@@ -4989,6 +4997,28 @@ mod tests {
                     | NodeKind::QuoteHole
             )
         )));
+        let parse_at = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            let lexed = lex_with_budget(&source, &mut budget).unwrap();
+            let parsed = parse_with_budget(lexed, &mut budget);
+            (parsed, budget.consumed())
+        };
+        let (short, short_used) = parse_at(exact_work - 1);
+        assert_eq!(
+            short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork {
+                limit: exact_work - 1
+            })
+        );
+        assert!(short.root().is_none());
+        assert!(short_used < exact_work);
+        for _ in 0..2 {
+            let (exact, consumed) = parse_at(exact_work);
+            assert_eq!(exact.resource_failure(), None);
+            assert_eq!(exact.tokens(), tree.tokens());
+            assert_eq!(exact.events(), tree.events());
+            assert_eq!(consumed, exact_work);
+        }
     }
 
     #[test]
