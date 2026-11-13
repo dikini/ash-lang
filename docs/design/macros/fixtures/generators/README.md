@@ -1,18 +1,19 @@
 # Generator fixture
 
-This is a proposed I17 source graph for
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md). It
-uses unimplemented macro syntax. `forms.ash` defines the subtemplate variant;
-`procedural_forms.ash` uses ordinary functions and the syntax service to
-select protected fragments. Both use the agreed fragment-returning steps.
-The expected outputs and failures below are acceptance requirements, not
-passing product tests.
+This is a fixed I17 source graph for historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+`forms.ash` defines the subtemplate variant; `procedural_forms.ash` uses
+ordinary functions and the syntax service to select protected fragments. Both
+use the agreed fragment-returning steps. The expected outputs and failures
+below are acceptance requirements.
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 ## Construction details needed for transcription
 
-The proposal selects both construction paths and requires ordinary state-only
-steps. CP-0034 now proposes a
-[subtemplate and escape spelling](../../../../proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
+The proposal selected both construction paths and required ordinary state-only
+steps. CP-0034 describes a
+[subtemplate and escape spelling](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
 and describes construction by the macro subsystem. The subtemplate source
 graph and unused malformed-subtemplate cases are written below.
 
@@ -37,7 +38,7 @@ a concrete limitation:
 This limitation is not an alternative design or an added API requirement.
 Fallible syntax operations are handled by ordinary function code under the
 existing rules; they require no generator-specific error protocol. C3
-independently reviewed this coverage; the proposed macro graphs have not run.
+independently reviewed this coverage before the later delivery evidence.
 
 ## Fixed generator behavior
 

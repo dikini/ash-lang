@@ -1,11 +1,17 @@
 # Derive authoring and grammar: working design
 
+> This design records the transition as it was developed. References below to
+> proposed work, current behavior, implementation and evidence describe that
+> historical stage. The [specification](../../../spec/syntax-expansion.md)
+> describes the language; [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
+> records delivery and remaining verification.
+
 This companion develops derive-specific syntax for
-[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). The
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+The
 derive-authoring forms and derive-specific grammar below were approved as the
 working design, along with a `deriving` clause on top-level types and newtypes
-and Rust-like additive derivation. CP-0034 is accepted but unimplemented;
-these choices are not current Ash. They reuse the
+and Rust-like additive derivation. These choices reuse the
 declaration-template and syntax-service proposals in the
 [declaration design](declaration-slice.md).
 

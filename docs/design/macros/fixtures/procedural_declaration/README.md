@@ -1,9 +1,10 @@
 # Supplemental procedural declaration fixture
 
 This focused source graph supplements I16 in the
-[integration corpus](../README.md). It uses accepted but unimplemented
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md)
-syntax. Its existence does not claim a passing macro test.
+[integration corpus](../README.md). It uses syntax from historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 `main.ash` captures one complete declaration. Its checked Ash transformer
 reads that fragment, returns its structured syntax through the existing host,

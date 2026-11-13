@@ -13,10 +13,9 @@ Semantics](static-semantics.md) defines its type requirements.
 ## Grammar
 
 The following grammar describes the core Ash surface grammar and expression
-syntax. The implemented declaration-template subset is described in
-[syntax expansion](syntax-expansion.md); the accepted CP-0034 extensions are
-not yet complete. Each `;` terminates an EBNF production; it is not Ash source
-punctuation.
+syntax. [Syntax expansion](syntax-expansion.md) describes the supported
+expression and declaration forms and their boundaries. Each `;` terminates an
+EBNF production; it is not Ash source punctuation.
 
 ```ebnf
 module ::= { import_declaration line_end } { module_declaration line_end } ;
@@ -325,12 +324,20 @@ import restrictions are specified in
 
 A declaration matcher can use the five capture kinds, balanced groups and
 repetitions described in [declaration syntax](syntax-expansion.md#imported-declaration-syntax).
-Its expanded output is a sequence of ordinary module declarations. A
-generator seed is an Ash expression with available expression-capture splices.
-Generator clauses apply to declaration templates and their repetitions;
-clauses on derive templates remain under development. The
-[declaration syntax specification](syntax-expansion.md#imported-declaration-syntax)
-describes generator scope and the current quotation boundary.
+Its expanded output is a sequence of ordinary module declarations. A reserved
+word can be a declaration capture metaname and a read of that capture; this
+does not make it an ordinary identifier, an expression-matcher capture name,
+a generator name, or an ordinary quotation variable.
+
+A generator seed is an Ash expression with available expression-capture
+splices. Generator clauses apply to declaration templates and their
+repetitions; clauses on derive templates remain under development. An escape
+in a declaration template or quotation contains an ordinary block when a
+logical line end follows its opening brace; otherwise it contains exactly one
+result expression and closes before a logical line end at its own level. Nested
+groups follow their ordinary line rules. This inline escape does not change the
+`block` production. The [syntax expansion specification](syntax-expansion.md)
+describes generator scope, quotation and escapes.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

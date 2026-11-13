@@ -13,12 +13,8 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
   the capacity repair for [issue #196](https://github.com/dikini/ash-lang/issues/196).
 - [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks
   the correction for [issue #195](https://github.com/dikini/ash-lang/issues/195).
-
-## Planned deliveries
-
 - [TASK-0068: Top-Level Declaration and Derive Macros](TASK-0068-top-level-declaration-macros.md)
-  owns the accepted CP-0034 delivery. Its branch and role assignments remain
-  to be selected; implementation has not started.
+  tracks the declaration and derive transition and its remaining gates.
 
 ## Retained delivery evidence
 

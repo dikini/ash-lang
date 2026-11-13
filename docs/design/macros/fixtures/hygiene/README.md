@@ -1,8 +1,9 @@
 # Module hygiene fixture
 
-This proposed I12/I13/I16 graph exercises declaration and derive macros under
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md). It
-uses unimplemented syntax and is not a passing product test.
+This fixed I12/I13/I16 graph exercises declaration and derive macros under
+historical [CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 `early_terms.ash` is a supplemental focused case using the same `make_value`
 definition in `early_terms_forms.ash`, isolated from the derive and

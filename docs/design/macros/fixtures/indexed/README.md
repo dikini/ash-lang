@@ -1,10 +1,9 @@
 # Procedural indexed derive fixture
 
-This proposed I10/I11 source graph belongs to
-[CP-0034](../../../../proposals/CP-0034-top-level-declaration-macros.md). It
-uses the unimplemented declaration and derive syntax service and is not a
-passing product test. The source may be copied into the eventual owning test
-suite after the proposal is accepted; its assertions are fixed here first.
+This fixed I10/I11 source graph belongs to historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+[TASK-0068](../../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates.
 
 - `api.ash` defines the interface. `derives.ash` imports its interface and
   method and defines the proposed procedural derive.

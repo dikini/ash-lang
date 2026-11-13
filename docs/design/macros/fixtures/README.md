@@ -1,10 +1,11 @@
 # Initial declaration and derive integration corpus
 
-These source graphs define the proposed initial corpus for
-[CP-0034](../../../proposals/CP-0034-top-level-declaration-macros.md). The
-macro programs use unimplemented syntax and are not passing product tests.
-Handwritten controls and the limited stand-in checks are identified by each
-fixture README. Each entry file is compiled independently from its directory;
+These source graphs define the fixed initial corpus for historical
+[CP-0034](https://github.com/dikini/ash-lang/blob/79c2d0723baa218a127640903f522694580bfc1e/docs/proposals/CP-0034-top-level-declaration-macros.md).
+[TASK-0068](../../../tasks/TASK-0068-top-level-declaration-macros.md) records
+the delivery evidence and remaining gates. Handwritten controls and earlier
+stand-in checks are identified by each fixture README. Each entry file is
+compiled independently from its directory;
 the named module files form its fixed import graph. Negative variants described
 as a single edit start from a fresh copy of that graph.
 
@@ -26,7 +27,7 @@ as a single edit start from a fresh copy of that graph.
 | I14 | [Diagnostics](diagnostics/README.md): `unused_bad.ash`, `unused_bad_derive.ash`, `forbidden_import.ash`, and `category.ash` reject with definition, forbidden-output and category causes, respectively, and publish no partial result. |
 | I15 | Diagnostics: `type_error.ash`, `missing.ash`, `invoked_free.ash`, and `recursive.ash` reject with ordinary type, matcher, ordinary unresolved-name and expansion-bound causes. `unused_free.ash` and `unused_free_derive.ash` return 42; `invoked_free_derive.ash` rejects through ordinary resolution. Check human and JSON source roles; indexed `payload.ash` supplies an authored rejection. |
 | I16 | Hygiene `main.ash` returns 252 through the public driver; indexed `integrated.ash` returns 42 after a checked procedural derive's host root closes. Exercise both interpreter and supported build/image execution, independent Core validation and the mutations specified below. A [supplemental procedural declaration graph](procedural_declaration/README.md) supplies the earlier S4 host/driver gate without replacing I16. |
-| I17 | [Generators](generators/README.md): subtemplate and quote-backed procedural graphs use fragment-returning steps. Inline and imported seeds return 310; global, reset and mixed-depth cases return 3210, 1010 and 546210. Caller-global seed, wrong type, invalid fragment and duplicate binding reject. These reviewed proposed graphs await implementation and connected evidence. |
+| I17 | [Generators](generators/README.md): subtemplate and quote-backed procedural graphs use fragment-returning steps. Inline and imported seeds return 310; global, reset and mixed-depth cases return 3210, 1010 and 546210. Caller-global seed, wrong type, invalid fragment and duplicate binding reject. |
 | I18 | [Migration](migration/README.md): the old expression macro returns 42 under CP-0033 and fails exhaustive coverage against the extended sum; the explicit migration and appropriate fallback return 42 under CP-0034. |
 | I19 | [Captures](captures/README.md): `main.ash` returns 128; `counts.ash` and `binder.ash` return 42. `empty_plus.ash`, `mismatched.ash`, `trailing_separator.ash`, `ambiguous_definition.ash` and `missing_driver_definition.ash` reject for their specified syntax causes. Generator graphs exercise nested repetitions and shared iteration values. |
 | I20 | [Nested declaration syntax](nested/README.md): `main.ash` returns 42 using definition-context lookup despite the caller's same-named syntax. `forward.ash` returns 42 with generated mutually recursive functions. Diagnostics `recursive.ash` exercises caller-context recursion and its bound. `derive_first.ash` and `declaration_first.ash` report their first authored expansion failure in source order. |
