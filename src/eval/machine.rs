@@ -3113,6 +3113,110 @@ impl<'runtime> Machine<'runtime> {
         self.return_from_preflighted(frame, value, false)
     }
 
+    #[inline(never)]
+    fn return_from_generator_advance(
+        &mut self,
+        frames: Box<[AdvanceFrame]>,
+        value: Value,
+        preflighted: bool,
+    ) -> Result<(), RuntimeFailure> {
+        let mut frames = frames.into_vec();
+        if frames.len() != 1 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        match frames.pop().ok_or(RuntimeFailure::InvalidControlState)? {
+            AdvanceFrame::Match {
+                arms,
+                environment,
+                guard,
+            } => {
+                let result = (|| {
+                    self.syntax_host
+                        .as_mut()
+                        .ok_or(RuntimeFailure::InvalidControlState)?
+                        .verify_advance_guard(&guard)?;
+                    return_match(arms, environment, value, &self.heap)
+                })();
+                if result.is_err()
+                    && let Some(host) = &mut self.syntax_host
+                {
+                    host.snapshot_advance_guard(&guard);
+                }
+                drop(guard);
+                self.apply(result?);
+            }
+            AdvanceFrame::ApplyFunction {
+                argument,
+                caller_environment,
+                observation,
+            } => {
+                self.syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .verify_advance(&observation)?;
+                let function = if matches!(value, Value::RegionFunction(_) | Value::Location(_)) {
+                    Value::Function(self.read_callable(&value)?)
+                } else {
+                    value
+                };
+                let mut transition =
+                    return_application_function(argument, caller_environment, function)?;
+                let Some(Frame::ApplyArgument { function }) = transition.frame.take() else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                self.syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .pay_advance_box()?;
+                transition.frame = Some(Frame::GeneratorAdvance(boxed_advance_frame(
+                    AdvanceFrame::ApplyArgument {
+                        function,
+                        observation,
+                    },
+                )?));
+                self.apply(transition);
+            }
+            AdvanceFrame::ApplyArgument {
+                function,
+                observation,
+            } => {
+                #[cfg(test)]
+                if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
+                    let direct = self
+                        .frames
+                        .iter()
+                        .filter(|frame| {
+                            matches!(frame,
+                                Frame::GeneratorAdvance(advance)
+                                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
+                            )
+                        })
+                        .count();
+                    observe("call", experiment_advance_guards(&self.frames), direct, 0);
+                }
+                let host = self
+                    .syntax_host
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                host.verify_advance(&observation)?;
+                if let Value::Function(closure) = &function {
+                    #[cfg(test)]
+                    if let Some(observe) = machine_test_hooks::ADVANCE_CALLABLE_OBSERVER.get() {
+                        observe(&closure.origin);
+                    }
+                    host.observe_advance(&observation, &closure.origin)?;
+                }
+                // The ordinary dispatch owns every callable case and unchanged reason.
+                self.return_from_preflighted(
+                    Frame::ApplyArgument { function },
+                    value,
+                    preflighted,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn return_from_preflighted(
         &mut self,
         frame: Frame,
@@ -3130,98 +3234,7 @@ impl<'runtime> Machine<'runtime> {
         }
         match frame {
             Frame::GeneratorAdvance(frames) => {
-                let mut frames = frames.into_vec();
-                if frames.len() != 1 {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-                match frames.pop().ok_or(RuntimeFailure::InvalidControlState)? {
-                    AdvanceFrame::Match {
-                        arms,
-                        environment,
-                        guard,
-                    } => {
-                        let result = (|| {
-                            self.syntax_host
-                                .as_mut()
-                                .ok_or(RuntimeFailure::InvalidControlState)?
-                                .verify_advance_guard(&guard)?;
-                            return_match(arms, environment, value, &self.heap)
-                        })();
-                        if result.is_err()
-                            && let Some(host) = &mut self.syntax_host
-                        {
-                            host.snapshot_advance_guard(&guard);
-                        }
-                        drop(guard);
-                        self.apply(result?);
-                    }
-                    AdvanceFrame::ApplyFunction {
-                        argument,
-                        caller_environment,
-                        observation,
-                    } => {
-                        self.syntax_host
-                            .as_mut()
-                            .ok_or(RuntimeFailure::InvalidControlState)?
-                            .verify_advance(&observation)?;
-                        let function =
-                            if matches!(value, Value::RegionFunction(_) | Value::Location(_)) {
-                                Value::Function(self.read_callable(&value)?)
-                            } else {
-                                value
-                            };
-                        let mut transition =
-                            return_application_function(argument, caller_environment, function)?;
-                        let Some(Frame::ApplyArgument { function }) = transition.frame.take()
-                        else {
-                            return Err(RuntimeFailure::InvalidControlState);
-                        };
-                        self.syntax_host
-                            .as_mut()
-                            .ok_or(RuntimeFailure::InvalidControlState)?
-                            .pay_advance_box()?;
-                        transition.frame = Some(Frame::GeneratorAdvance(boxed_advance_frame(
-                            AdvanceFrame::ApplyArgument {
-                                function,
-                                observation,
-                            },
-                        )?));
-                        self.apply(transition);
-                    }
-                    AdvanceFrame::ApplyArgument {
-                        function,
-                        observation,
-                    } => {
-                        #[cfg(test)]
-                        if let Some(observe) = machine_test_hooks::ADVANCE_TRACE_OBSERVER.get() {
-                            let direct = self.frames.iter().filter(|frame| matches!(frame,
-                                Frame::GeneratorAdvance(advance)
-                                    if matches!(advance.as_ref(), [AdvanceFrame::Match { .. }])
-                            )).count();
-                            observe("call", experiment_advance_guards(&self.frames), direct, 0);
-                        }
-                        let host = self
-                            .syntax_host
-                            .as_mut()
-                            .ok_or(RuntimeFailure::InvalidControlState)?;
-                        host.verify_advance(&observation)?;
-                        if let Value::Function(closure) = &function {
-                            #[cfg(test)]
-                            if let Some(observe) =
-                                machine_test_hooks::ADVANCE_CALLABLE_OBSERVER.get()
-                            {
-                                observe(&closure.origin);
-                            }
-                            host.observe_advance(&observation, &closure.origin)?;
-                        }
-                        // The ordinary dispatch owns every callable case and unchanged reason.
-                        self.return_from_preflighted(
-                            Frame::ApplyArgument { function },
-                            value,
-                            preflighted,
-                        )?;
-                    }
-                }
+                self.return_from_generator_advance(frames, value, preflighted)?;
             }
             Frame::NetworkCapacity { node, environment } => {
                 let capacity = read_integer(&value, &self.heap, &mut self.instantiation_work)?
